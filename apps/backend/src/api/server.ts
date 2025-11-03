@@ -8,6 +8,7 @@ import { config } from '../shared/config';
 import { logger } from '../shared/utils/logger';
 import { authRoutes } from './routes/auth.routes';
 import { roomsRoutes } from './routes/rooms.routes';
+import { healthRoutes } from './routes/health.routes';
 import { AppError } from '../shared/utils/errors';
 
 export async function createServer() {
@@ -50,12 +51,8 @@ export async function createServer() {
     routePrefix: '/docs',
   });
 
-  // Health check
-  fastify.get('/health', async () => ({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-  }));
+  // Health check routes (before API routes for quick checks)
+  await fastify.register(healthRoutes);
 
   // API routes
   await fastify.register(authRoutes, { prefix: '/api/auth' });

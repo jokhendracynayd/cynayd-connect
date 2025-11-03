@@ -6,6 +6,9 @@ import { ConsumerManager } from '../../media/Consumer';
 import { TransportManager } from '../../media/Transport';
 import { logger } from '../../shared/utils/logger';
 import redis from '../../shared/database/redis';
+import { RedisStateService } from '../../shared/services/state.redis';
+import { RoomRoutingService } from '../../shared/services/room-routing.service';
+import { config } from '../../shared/config';
 
 interface JoinRoomData {
   roomCode: string;
@@ -17,8 +20,10 @@ interface JoinRoomData {
 export function roomHandler(io: SocketIOServer, socket: Socket) {
   
   socket.on('joinRoom', async (data: JoinRoomData, callback) => {
+    // Get userId outside try block so it's available in catch block
+    const userId = socket.data.userId;
+    
     try {
-      const userId = socket.data.userId;
       const { roomCode, name, email, picture } = data;
 
       // Validation
@@ -45,7 +50,18 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       // Get or create room in database
       const room = await RoomService.joinRoom(userId, normalizedRoomCode);
 
+      // Check/assign room to server (sticky session routing)
+      const assignedServer = await RoomRoutingService.getOrAssignServer(room.id);
+      const currentServer = config.server.instanceId;
+      
+      if (assignedServer !== currentServer) {
+        logger.warn(`Room ${normalizedRoomCode} assigned to server ${assignedServer}, but client connected to ${currentServer}`);
+        // In production with load balancer, this shouldn't happen if sticky sessions are configured
+        // For now, we'll still allow it but log a warning
+      }
+
       // Create Mediasoup router for this room
+      // RouterManager will check if this server should handle the room
       const router = await RouterManager.createRouter(room.id);
 
       // Join Socket.io room (use normalized code)
@@ -162,8 +178,9 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       logger.error('Error joining room:', {
         error: error.message,
         stack: error.stack,
-        userId,
-        roomCode: data.roomCode,
+        userId: userId || socket.data.userId || 'unknown',
+        roomCode: data?.roomCode || 'unknown',
+        socketId: socket.id,
       });
       
       // Provide more helpful error messages
@@ -188,10 +205,19 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       if (roomCode) {
         logger.info(`User ${userId} leaving room: ${roomCode}`);
 
-        // Cleanup media
-        ProducerManager.closeAllProducers(socket.id);
-        ConsumerManager.closeAllConsumers(socket.id);
-        TransportManager.closeAllTransports(socket.id);
+        // Cleanup media (async)
+        await Promise.all([
+          ProducerManager.closeAllProducers(socket.id),
+          ConsumerManager.closeAllConsumers(socket.id),
+          TransportManager.closeAllTransports(socket.id),
+        ]);
+
+        // Cleanup Redis state
+        try {
+          await RedisStateService.cleanupSocketState(socket.id);
+        } catch (error) {
+          logger.error(`Failed to cleanup Redis state for socket ${socket.id}:`, error);
+        }
 
         // Leave database room
         await RoomService.leaveRoom(userId, roomCode);

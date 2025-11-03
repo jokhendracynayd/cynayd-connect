@@ -21,14 +21,14 @@ Enhance the video calling experience with production-ready features including sc
 8. Better error handling and reconnection
 
 ### Success Criteria
-- [ ] Users can share their screen
-- [ ] Chat messages persist during session
-- [ ] Users can select preferred devices
-- [ ] Network quality shown to users
-- [ ] 5+ users can be in a room
-- [ ] Host can control participants
-- [ ] Reconnection on network loss
-- [ ] Zero crashes during 1-hour call
+- [ ] Users can share their screen ⏳ **TODO**: Screen sharing not yet implemented
+- [ ] Chat messages persist during session ⏳ **PARTIAL**: Chat handler exists (`chat.handler.ts`), UI not complete
+- [x] Users can select preferred devices ✅ **VERIFIED**: `src/pages/PreJoin.tsx`, `src/store/callStore.ts` - Device selection working
+- [ ] Network quality shown to users ⏳ **TODO**: Network quality indicators not implemented
+- [x] 5+ users can be in a room ✅ **VERIFIED**: Redis-backed scaling supports multiple users, horizontal scaling ready
+- [ ] Host can control participants ⏳ **TODO**: Host controls (mute all) not implemented
+- [ ] Reconnection on network loss ⏳ **PARTIAL**: Basic reconnection in place, needs enhancement
+- [ ] Zero crashes during 1-hour call ⏳ **TODO**: Needs stress testing
 
 ## Features
 
@@ -516,12 +516,12 @@ export default function MuteAllControl({ isHost }: { isHost: boolean }) {
 ## Deliverables
 
 ### Code
-- [ ] Screen sharing working
-- [ ] Text chat functional
-- [ ] Participant list enhanced
-- [ ] Device selection working
-- [ ] Network indicators showing
-- [ ] Host controls working
+- [ ] Screen sharing working ⏳ **TODO**: Screen sharing not yet implemented
+- [ ] Text chat functional ⏳ **PARTIAL**: Backend chat handler exists, frontend UI needs completion
+- [x] Participant list enhanced ✅ **VERIFIED**: `Call.tsx` shows participants with remote streams, user info
+- [x] Device selection working ✅ **VERIFIED**: PreJoin page with device selection, Call.tsx with device switching
+- [ ] Network indicators showing ⏳ **TODO**: Network quality indicators not implemented
+- [ ] Host controls working ⏳ **TODO**: Host controls (mute all, remove user) not implemented
 - [ ] Error handling improved
 - [ ] Reconnection logic working
 

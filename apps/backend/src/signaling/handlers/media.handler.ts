@@ -24,13 +24,23 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
       const validatedData = createTransportSchema.parse(data);
       
       const { roomId } = socket.data;
+
+      if (!roomId) {
+        return callback({ error: 'Room ID not found. Please join a room first.' });
+      }
+
       const router = RouterManager.getRouter(roomId);
 
       if (!router) {
         return callback({ error: 'Router not found' });
       }
 
-      const transport = await TransportManager.createTransport(router, socket.id);
+      const transport = await TransportManager.createTransport(
+        router,
+        socket.id,
+        roomId,
+        validatedData.isProducer
+      );
 
       // Get ICE candidates (they may be gathered asynchronously)
       const iceCandidates = transport.iceCandidates || [];
@@ -109,8 +119,13 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
         appData: validatedData.appData,
       });
 
-      // Store producer
-      ProducerManager.addProducer(socket.id, producer);
+      // Store producer with metadata
+      const { roomId, userId } = socket.data;
+      if (!roomId || !userId) {
+        return callback({ error: 'Room ID or User ID not found' });
+      }
+      
+      await ProducerManager.addProducer(socket.id, producer, roomId, userId);
 
       // Notify other participants
       socket.to(socket.data.roomCode).emit('new-producer', {
@@ -162,8 +177,8 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
         paused: false,
       });
 
-      // Store consumer
-      ConsumerManager.addConsumer(socket.id, consumer);
+      // Store consumer with metadata
+      await ConsumerManager.addConsumer(socket.id, consumer, validatedData.producerId);
 
       // Get producer info
       const producerInfo = ProducerManager.getProducerById(validatedData.producerId);
@@ -193,7 +208,7 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
       // Validate input
       const validatedData = closeProducerSchema.parse(data);
       
-      ProducerManager.closeProducer(socket.id, validatedData.producerId);
+      await ProducerManager.closeProducer(socket.id, validatedData.producerId);
       
       socket.to(socket.data.roomCode).emit('producer-closed', {
         producerId: validatedData.producerId,

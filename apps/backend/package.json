@@ -20,26 +20,28 @@
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "fastify": "^5.1.0",
     "@fastify/cors": "^10.0.1",
     "@fastify/helmet": "^12.0.1",
     "@fastify/rate-limit": "^10.1.1",
     "@fastify/swagger": "^9.1.0",
     "@fastify/swagger-ui": "^5.0.1",
-    "mediasoup": "^3.14.15",
-    "socket.io": "^4.8.1",
     "@prisma/client": "^6.0.0",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.1.0",
     "ioredis": "^5.4.2",
     "jsonwebtoken": "^9.0.2",
-    "bcrypt": "^5.1.1",
-    "zod": "^3.24.1",
+    "mediasoup": "^3.14.15",
+    "prom-client": "^15.1.3",
+    "socket.io": "^4.8.1",
     "winston": "^3.17.0",
-    "dotenv": "^16.4.7"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
     "@types/bcrypt": "^5.0.2",
     "@types/jsonwebtoken": "^9.0.8",
+    "@types/node": "^22.10.2",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "@vitest/ui": "^2.1.8",
@@ -53,4 +55,3 @@
     "node": ">=22.11.0"
   }
 }
-

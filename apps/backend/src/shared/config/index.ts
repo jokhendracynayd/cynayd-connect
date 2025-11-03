@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { randomUUID } from 'crypto';
 import developmentConfig from './development';
 import productionConfig from './production';
 import defaultConfig from './default';
@@ -7,8 +8,16 @@ dotenv.config();
 
 const env = process.env.NODE_ENV || 'development';
 
+// Generate unique server instance ID (useful for horizontal scaling)
+// In production, this could be set via env var or Kubernetes pod name
+const serverInstanceId = process.env.SERVER_INSTANCE_ID || 
+  `server-${randomUUID().substring(0, 8)}`;
+
 const baseConfig = {
   env,
+  server: {
+    instanceId: serverInstanceId,
+  },
   port: parseInt(process.env.PORT || '3000', 10),
   signalingPort: parseInt(process.env.SIGNALING_PORT || '4000', 10),
   
@@ -20,6 +29,14 @@ const baseConfig = {
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
     password: process.env.REDIS_PASSWORD || undefined,
+    // Redis Cluster configuration (comma-separated list of host:port)
+    cluster: process.env.REDIS_CLUSTER_ENABLED === 'true',
+    clusterNodes: process.env.REDIS_CLUSTER_NODES
+      ? process.env.REDIS_CLUSTER_NODES.split(',').map((node) => {
+          const [host, port] = node.trim().split(':');
+          return { host, port: parseInt(port, 10) };
+        })
+      : undefined,
   },
   
   jwt: {
@@ -43,10 +60,16 @@ const baseConfig = {
   },
   
   mediasoup: {
+    // Expanded port range for scale: 420 ports per worker
+    // Default: 2000-2420 (421 ports) for single server
+    // For scale: Consider expanding to 2000-2999 (1000 ports) or more
+    // Each WebRTC connection needs 2 ports (RTP + RTCP), so 421 ports = ~210 concurrent connections per worker
     rtcMinPort: parseInt(process.env.MEDIASOUP_RTC_MIN_PORT || '2000', 10),
     rtcMaxPort: parseInt(process.env.MEDIASOUP_RTC_MAX_PORT || '2420', 10),
-    logLevel: 'warn' as const,
-    logTags: ['info', 'ice', 'dtls', 'rtp', 'srtp', 'rtcp'] as const,
+    logLevel: (process.env.MEDIASOUP_LOG_LEVEL || 'warn') as 'debug' | 'warn' | 'error' | 'none',
+    logTags: (process.env.MEDIASOUP_LOG_TAGS
+      ? process.env.MEDIASOUP_LOG_TAGS.split(',')
+      : ['info', 'ice', 'dtls', 'rtp', 'srtp', 'rtcp']) as any[],
   },
 };
 

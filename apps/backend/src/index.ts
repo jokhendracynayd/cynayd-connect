@@ -5,6 +5,8 @@ import { logger } from './shared/utils/logger';
 import prisma from './shared/database/prisma';
 import redis from './shared/database/redis';
 import { WorkerManager } from './media/Worker';
+import { RoomRoutingService } from './shared/services/room-routing.service';
+import { metrics } from './shared/metrics/prometheus';
 
 async function start() {
   try {
@@ -14,6 +16,14 @@ async function start() {
 
     await redis.ping();
     logger.info('Redis connected');
+
+    // Start room routing heartbeat (for server health tracking)
+    RoomRoutingService.startHeartbeat();
+    logger.info(`Room routing service started for server instance: ${config.server.instanceId}`);
+
+    // Start Prometheus metrics collection
+    metrics.startCollection();
+    logger.info('Prometheus metrics collection started');
 
     // Start Mediasoup workers
     await WorkerManager.createWorkers();
@@ -32,10 +42,23 @@ async function start() {
     // Graceful shutdown
     const shutdown = async () => {
       logger.info('Shutting down gracefully...');
+      
+      // Stop heartbeat
+      RoomRoutingService.stopHeartbeat();
+      
+      // Stop metrics collection
+      metrics.stopCollection();
+      
+      // Close Mediasoup workers
       await WorkerManager.close();
+      
+      // Close API server
       await fastify.close();
+      
+      // Disconnect databases
       await prisma.$disconnect();
       await redis.quit();
+      
       process.exit(0);
     };
 
