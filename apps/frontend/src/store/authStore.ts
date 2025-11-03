@@ -68,16 +68,60 @@ export const useAuthStore = create<AuthState>((set) => ({
   
   checkAuth: async () => {
     const token = storage.getToken();
-    set({ hasCheckedAuth: true });
     
-    if (!token) return;
+    // Set hasCheckedAuth immediately so ProtectedRoute knows we're checking
+    set({ hasCheckedAuth: false });
+    
+    if (!token) {
+      set({ hasCheckedAuth: true, isAuthenticated: false, user: null, token: null });
+      return;
+    }
+    
+    // Set token in store immediately so components can use it
+    set({ token, isAuthenticated: true, hasCheckedAuth: false });
     
     try {
       const response = await api.get('/api/auth/me');
-      set({ user: response.data.user, isAuthenticated: true });
-    } catch (error) {
+      // Update store with user and token
+      set({ 
+        user: response.data.user, 
+        token, 
+        isAuthenticated: true, 
+        hasCheckedAuth: true 
+      });
+    } catch (error: any) {
+      // If 401, try to refresh token
+      if (error.response?.status === 401) {
+        const refreshToken = storage.getRefreshToken();
+        if (refreshToken) {
+          try {
+            const refreshResponse = await api.post('/api/auth/refresh', { refreshToken });
+            const { accessToken, refreshToken: newRefreshToken } = refreshResponse.data;
+            
+            storage.setToken(accessToken);
+            if (newRefreshToken) storage.setRefreshToken(newRefreshToken);
+            
+            // Retry getting user with new token
+            const userResponse = await api.get('/api/auth/me');
+            set({ 
+              user: userResponse.data.user,
+              token: accessToken,
+              isAuthenticated: true,
+              hasCheckedAuth: true 
+            });
+            return;
+          } catch (refreshError) {
+            // Refresh failed, clear tokens
+            storage.removeToken();
+            storage.removeRefreshToken();
+          }
+        }
+      }
+      
+      // Auth failed, clear everything
       storage.removeToken();
-      set({ user: null, token: null, isAuthenticated: false });
+      storage.removeRefreshToken();
+      set({ user: null, token: null, isAuthenticated: false, hasCheckedAuth: true });
     }
   },
 }));

@@ -1,4 +1,4 @@
-import redis from '../database/redis';
+import { redisWithCircuitBreaker as redis } from '../database/redis';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { createHash } from 'crypto';

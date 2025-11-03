@@ -9,6 +9,7 @@ import redis from '../../shared/database/redis';
 import { RedisStateService } from '../../shared/services/state.redis';
 import { RoomRoutingService } from '../../shared/services/room-routing.service';
 import { config } from '../../shared/config';
+import prisma from '../../shared/database/prisma';
 
 interface JoinRoomData {
   roomCode: string;
@@ -47,8 +48,186 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       const normalizedRoomCode = roomCode.trim().toLowerCase();
       logger.info(`User ${userId} joining room: ${normalizedRoomCode} (original: ${roomCode})`);
 
-      // Get or create room in database
-      const room = await RoomService.joinRoom(userId, normalizedRoomCode);
+      // First get room info to check privacy
+      const room = await RoomService.getRoomByCode(normalizedRoomCode);
+
+      // Check if room is private and user is not admin
+      if (!room.isPublic && room.adminId !== userId) {
+        // Check if user has an approved request (use findUnique for exact match)
+        const existingRequest = await prisma.roomJoinRequest.findUnique({
+          where: {
+            roomId_userId: {
+              roomId: room.id,
+              userId,
+            },
+          },
+        });
+
+        // If no request exists OR request is not approved, check for pending/rejected
+        if (!existingRequest || existingRequest.status !== 'approved') {
+          // Check if there's a pending request
+          if (existingRequest && existingRequest.status === 'pending') {
+            // Request is pending, notify admin (in case they weren't notified before) and return waiting status
+            // Notify admin - use Socket.io room emission for reliability
+            const userInfo = await prisma.user.findUnique({
+              where: { id: userId },
+              select: { id: true, name: true, email: true, picture: true },
+            });
+
+            if (userInfo) {
+              const requestData = {
+                requestId: existingRequest.id,
+                userId: userInfo.id,
+                name: userInfo.name,
+                email: userInfo.email,
+                picture: userInfo.picture,
+                requestedAt: existingRequest.requestedAt,
+              };
+              
+              // Find admin sockets
+              const adminSockets = Array.from(io.sockets.sockets.values()).filter(s => 
+                s.data.userId === room.adminId
+              );
+              
+              // If admin is in the room, emit to room only (avoids duplicates)
+              const adminInRoom = adminSockets.some(s => s.rooms.has(normalizedRoomCode));
+              
+              if (adminInRoom) {
+                // Admin is in room, emit to room only
+                io.to(normalizedRoomCode).emit('join-request', requestData);
+              } else {
+                // Admin not in room, emit directly to their sockets
+                adminSockets.forEach(adminSocket => {
+                  adminSocket.emit('join-request', requestData);
+                });
+              }
+              
+              logger.info(`Notified admin ${room.adminId} about pending join request from ${userInfo.name} (room: ${normalizedRoomCode})`);
+            }
+
+            return callback({
+              success: false,
+              error: 'Room is private. Waiting for admin approval.',
+              waitingApproval: true,
+              requestId: existingRequest.id,
+            });
+          } else {
+            // No request exists or was rejected, automatically create a request for the user
+            try {
+              // Create the request automatically (this will return existing if already pending)
+              const request = await RoomService.requestRoomJoin(userId, normalizedRoomCode);
+              
+              // Notify admin - use Socket.io room emission OR direct socket (not both to avoid duplicates)
+              if (request.user) {
+                const requestData = {
+                  requestId: request.id,
+                  userId: request.user.id,
+                  name: request.user.name,
+                  email: request.user.email,
+                  picture: request.user.picture,
+                  requestedAt: request.requestedAt,
+                };
+                
+                // Find admin sockets
+                const adminSockets = Array.from(io.sockets.sockets.values()).filter(s => 
+                  s.data.userId === room.adminId
+                );
+                
+                // If admin is in the room, emit to room only (avoids duplicates)
+                const adminInRoom = adminSockets.some(s => s.rooms.has(normalizedRoomCode));
+                
+                if (adminInRoom) {
+                  // Admin is in room, emit to room only
+                  io.to(normalizedRoomCode).emit('join-request', requestData);
+                } else {
+                  // Admin not in room, emit directly to their sockets
+                  adminSockets.forEach(adminSocket => {
+                    adminSocket.emit('join-request', requestData);
+                  });
+                }
+                
+                logger.info(`Notified admin ${room.adminId} about join request from ${request.user.name} (room: ${normalizedRoomCode})`);
+              }
+
+              // Return waiting status so user sees waiting screen
+              return callback({
+                success: false,
+                error: 'Room is private. Join request sent. Waiting for admin approval.',
+                waitingApproval: true,
+                requestId: request.id,
+              });
+            } catch (requestError: any) {
+              // If request creation fails (e.g., already exists), check for existing request
+              if (requestError.message?.includes('already pending') || requestError.message?.includes('Unique constraint')) {
+                // Request already exists, get it and return waiting status
+                const existingReq = await prisma.roomJoinRequest.findFirst({
+                  where: {
+                    roomId: room.id,
+                    userId,
+                    status: 'pending',
+                  },
+                  include: {
+                    user: {
+                      select: { id: true, name: true, email: true, picture: true },
+                    },
+                  },
+                });
+
+                if (existingReq && existingReq.user) {
+                  // Notify admin - use Socket.io room emission for reliability
+                  const requestData = {
+                    requestId: existingReq.id,
+                    userId: existingReq.user.id,
+                    name: existingReq.user.name,
+                    email: existingReq.user.email,
+                    picture: existingReq.user.picture,
+                    requestedAt: existingReq.requestedAt,
+                  };
+                  
+                  // Find admin sockets
+                  const adminSockets = Array.from(io.sockets.sockets.values()).filter(s => 
+                    s.data.userId === room.adminId
+                  );
+                  
+                  // If admin is in the room, emit to room only (avoids duplicates)
+                  const adminInRoom = adminSockets.some(s => s.rooms.has(normalizedRoomCode));
+                  
+                  if (adminInRoom) {
+                    // Admin is in room, emit to room only
+                    io.to(normalizedRoomCode).emit('join-request', requestData);
+                  } else {
+                    // Admin not in room, emit directly to their sockets
+                    adminSockets.forEach(adminSocket => {
+                      adminSocket.emit('join-request', requestData);
+                    });
+                  }
+                  
+                  logger.info(`Notified admin ${room.adminId} about existing join request from ${existingReq.user.name} (room: ${normalizedRoomCode})`);
+                  
+                  return callback({
+                    success: false,
+                    error: 'Room is private. Waiting for admin approval.',
+                    waitingApproval: true,
+                    requestId: existingReq.id,
+                  });
+                }
+              }
+
+              // If we get here, it's a real error
+              return callback({
+                success: false,
+                error: requestError.message || 'Failed to request room access',
+                requiresRequest: true,
+              });
+            }
+          }
+        }
+        // If approved request exists, continue to join
+      }
+
+      // User can join (public room, admin, or has approved request)
+      // Now actually join the room
+      await RoomService.joinRoom(userId, normalizedRoomCode);
 
       // Check/assign room to server (sticky session routing)
       const assignedServer = await RoomRoutingService.getOrAssignServer(room.id);
@@ -168,11 +347,46 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
 
       logger.info(`User ${userId} joined room ${normalizedRoomCode}`);
 
+      // If user is admin, check for pending requests and notify them
+      if (room.adminId === userId) {
+        try {
+          const pendingRequests = await RoomService.getPendingRequests(userId, normalizedRoomCode);
+          if (pendingRequests.length > 0) {
+            logger.info(`Admin ${userId} joining room ${normalizedRoomCode} - found ${pendingRequests.length} pending requests`);
+            
+            // Notify admin about pending requests via socket
+            // Use a small delay to ensure socket listeners are set up on frontend
+            setTimeout(() => {
+              const requestData = {
+                requests: pendingRequests.map(req => ({
+                  id: req.id,
+                  userId: req.user.id,
+                  name: req.user.name,
+                  email: req.user.email,
+                  picture: req.user.picture,
+                  requestedAt: req.requestedAt,
+                })),
+              };
+              
+              // Only send pending-requests-loaded event (no individual join-request events)
+              // This prevents duplicate notifications
+              socket.emit('pending-requests-loaded', requestData);
+              logger.info(`Sent pending-requests-loaded event to admin ${userId} with ${pendingRequests.length} requests`);
+            }, 200);
+          }
+        } catch (error) {
+          logger.error('Failed to load pending requests for admin:', error);
+          // Continue anyway, admin can still manually check
+        }
+      }
+
       callback({
         success: true,
         rtpCapabilities: router.rtpCapabilities,
         otherProducers: producerInfoList,
         existingParticipants, // Send user info for existing participants
+        isAdmin: room.adminId === userId, // Include admin status in response
+        isPublic: room.isPublic, // Include room privacy status
       });
     } catch (error: any) {
       logger.error('Error joining room:', {
@@ -241,6 +455,187 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       }
     } catch (error: any) {
       logger.error('Error leaving room:', error);
+    }
+  });
+
+  socket.on('requestRoomJoin', async (data: { roomCode: string }, callback) => {
+    const userId = socket.data.userId;
+    
+    try {
+      if (!userId) {
+        return callback({
+          success: false,
+          error: 'Authentication required',
+        });
+      }
+
+      const normalizedRoomCode = data.roomCode.trim().toLowerCase();
+      const request = await RoomService.requestRoomJoin(userId, normalizedRoomCode);
+
+      // Notify admin - use room OR direct socket (not both to avoid duplicates)
+      const room = await RoomService.getRoomByCode(normalizedRoomCode);
+      const adminSockets = Array.from(io.sockets.sockets.values()).filter(s => 
+        s.data.userId === room.adminId
+      );
+
+      if (adminSockets.length > 0 && request.user) {
+        const requestData = {
+          requestId: request.id,
+          userId: request.user.id,
+          name: request.user.name,
+          email: request.user.email,
+          picture: request.user.picture,
+          requestedAt: request.requestedAt,
+        };
+        
+        // If admin is in the room, emit to room only (avoids duplicates)
+        const adminInRoom = adminSockets.some(s => s.rooms.has(normalizedRoomCode));
+        
+        if (adminInRoom) {
+          // Admin is in room, emit to room only
+          io.to(normalizedRoomCode).emit('join-request', requestData);
+        } else {
+          // Admin not in room, emit directly to their sockets
+          adminSockets.forEach(adminSocket => {
+            adminSocket.emit('join-request', requestData);
+          });
+        }
+      }
+
+      callback({
+        success: true,
+        requestId: request.id,
+        message: 'Join request sent. Waiting for admin approval.',
+      });
+    } catch (error: any) {
+      logger.error('Error requesting room join:', error);
+      callback({
+        success: false,
+        error: error.message || 'Failed to request room join',
+      });
+    }
+  });
+
+  socket.on('approveJoinRequest', async (data: { requestId: string }, callback) => {
+    const userId = socket.data.userId;
+    
+    try {
+      if (!userId) {
+        return callback({
+          success: false,
+          error: 'Authentication required',
+        });
+      }
+
+      const { roomCode } = socket.data;
+      if (!roomCode) {
+        return callback({
+          success: false,
+          error: 'Not in a room',
+        });
+      }
+
+      const normalizedRoomCode = roomCode.trim().toLowerCase();
+      const result = await RoomService.approveJoinRequest(userId, normalizedRoomCode, data.requestId);
+
+      // Notify the requesting user - try multiple ways to find their socket
+      const requestingUserId = result.request.user.id;
+      
+      // Method 1: Find by userId (user might not be in room yet)
+      const requestingUserSockets = Array.from(io.sockets.sockets.values()).filter(s => 
+        s.data.userId === requestingUserId
+      );
+
+      const approvedData = {
+        roomCode: normalizedRoomCode,
+        requestId: data.requestId,
+        message: 'Your join request has been approved',
+      };
+
+      if (requestingUserSockets.length > 0) {
+        // Emit to all sockets for this user (in case they have multiple tabs)
+        requestingUserSockets.forEach(sock => {
+          sock.emit('join-approved', approvedData);
+        });
+        logger.info(`Notified user ${requestingUserId} about approved join request (${requestingUserSockets.length} socket(s))`);
+      } else {
+        // Also emit to the room in case user joins later
+        io.to(normalizedRoomCode).emit('join-approved', approvedData);
+        logger.warn(`User ${requestingUserId} not connected, will receive notification when they connect`);
+      }
+
+      callback({
+        success: true,
+        message: 'Join request approved',
+      });
+    } catch (error: any) {
+      logger.error('Error approving join request:', error);
+      callback({
+        success: false,
+        error: error.message || 'Failed to approve join request',
+      });
+    }
+  });
+
+  socket.on('rejectJoinRequest', async (data: { requestId: string }, callback) => {
+    const userId = socket.data.userId;
+    
+    try {
+      if (!userId) {
+        return callback({
+          success: false,
+          error: 'Authentication required',
+        });
+      }
+
+      const { roomCode } = socket.data;
+      if (!roomCode) {
+        return callback({
+          success: false,
+          error: 'Not in a room',
+        });
+      }
+
+      const result = await RoomService.rejectJoinRequest(userId, roomCode, data.requestId);
+
+      // Get request with user info
+      const requestWithUser = await prisma.roomJoinRequest.findUnique({
+        where: { id: data.requestId },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              picture: true,
+            },
+          },
+        },
+      });
+
+      // Notify the requesting user
+      const requestingUserSocket = Array.from(io.sockets.sockets.values()).find(s => 
+        s.data.userId === requestWithUser?.userId
+      );
+
+      if (requestingUserSocket) {
+        requestingUserSocket.emit('join-rejected', {
+          roomCode,
+          requestId: data.requestId,
+          message: 'Your join request has been rejected',
+        });
+      }
+
+      callback({
+        success: true,
+        message: 'Join request rejected',
+      });
+    } catch (error: any) {
+      logger.error('Error rejecting join request:', error);
+      callback({
+        success: false,
+        error: error.message || 'Failed to reject join request',
+      });
     }
   });
 

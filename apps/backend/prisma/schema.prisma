@@ -16,8 +16,9 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  rooms         Room[]
-  participants  Participant[]
+  rooms            Room[]
+  participants     Participant[]
+  joinRequests     RoomJoinRequest[]
 
   @@index([email])
 }
@@ -28,14 +29,16 @@ model Room {
   name        String?
   adminId     String
   admin       User     @relation(fields: [adminId], references: [id])
+  isPublic    Boolean  @default(true)
   isActive    Boolean  @default(true)
   maxParticipants Int  @default(50)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   endedAt     DateTime?
 
-  participants Participant[]
-  metrics      CallMetrics[]
+  participants    Participant[]
+  metrics         CallMetrics[]
+  joinRequests    RoomJoinRequest[]
 
   @@index([roomCode])
   @@index([adminId])
@@ -71,5 +74,20 @@ model CallMetrics {
 
   @@index([roomId, timestamp])
   @@index([userId, timestamp])
+}
+
+model RoomJoinRequest {
+  id          String   @id @default(uuid())
+  roomId      String
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  requestedAt DateTime @default(now())
+  status      String   @default("pending") // "pending" | "approved" | "rejected"
+  respondedAt DateTime?
+
+  @@unique([roomId, userId])
+  @@index([roomId, status])
+  @@index([userId])
 }
 

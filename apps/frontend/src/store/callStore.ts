@@ -1,5 +1,15 @@
 import { create } from 'zustand';
 
+export interface RoomJoinRequest {
+  id: string;
+  userId: string;
+  name: string;
+  email: string;
+  picture?: string;
+  requestedAt: Date | string;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
 interface Participant {
   userId: string;
   name: string;
@@ -8,6 +18,8 @@ interface Participant {
   isAudioMuted: boolean;
   isVideoMuted: boolean;
   isSpeaking: boolean;
+  isAdmin: boolean;
+  hasRaisedHand: boolean;
 }
 
 interface CallState {
@@ -17,6 +29,11 @@ interface CallState {
   localStream: MediaStream | null;
   isAudioMuted: boolean;
   isVideoMuted: boolean;
+  isAdmin: boolean;
+  roomIsPublic: boolean;
+  pendingRequests: RoomJoinRequest[];
+  activeSpeakerId: string | null;
+  raisedHands: Set<string>;
   selectedDevices: {
     audioInput: string;
     videoInput: string;
@@ -35,6 +52,14 @@ interface CallState {
   updateParticipant: (userId: string, updates: Partial<Participant>) => void;
   toggleAudio: () => void;
   toggleVideo: () => void;
+  setIsAdmin: (isAdmin: boolean) => void;
+  setRoomIsPublic: (isPublic: boolean) => void;
+  setPendingRequests: (requests: RoomJoinRequest[]) => void;
+  addPendingRequest: (request: RoomJoinRequest) => void;
+  removePendingRequest: (requestId: string) => void;
+  setActiveSpeaker: (userId: string | null) => void;
+  toggleRaiseHand: () => void;
+  setRaiseHand: (userId: string, isRaised: boolean) => void;
   setSelectedDevices: (devices: Partial<CallState['selectedDevices']>) => void;
   setSettings: (settings: Partial<CallState['settings']>) => void;
 }
@@ -46,6 +71,11 @@ export const useCallStore = create<CallState>((set) => ({
   localStream: null,
   isAudioMuted: false,
   isVideoMuted: false,
+  isAdmin: false,
+  roomIsPublic: true,
+  pendingRequests: [],
+  activeSpeakerId: null,
+  raisedHands: new Set<string>(),
   selectedDevices: {
     audioInput: '',
     videoInput: '',
@@ -71,8 +101,14 @@ export const useCallStore = create<CallState>((set) => ({
         ),
       };
     }
+    // Ensure default values for new fields
+    const newParticipant: Participant = {
+      ...participant,
+      isAdmin: participant.isAdmin ?? false,
+      hasRaisedHand: participant.hasRaisedHand ?? false,
+    };
     return {
-      participants: [...state.participants, participant],
+      participants: [...state.participants, newParticipant],
     };
   }),
   removeParticipant: (userId) => set((state) => ({
@@ -85,6 +121,47 @@ export const useCallStore = create<CallState>((set) => ({
   })),
   toggleAudio: () => set((state) => ({ isAudioMuted: !state.isAudioMuted })),
   toggleVideo: () => set((state) => ({ isVideoMuted: !state.isVideoMuted })),
+  setIsAdmin: (isAdmin) => set({ isAdmin }),
+  setRoomIsPublic: (isPublic) => set({ roomIsPublic: isPublic }),
+  setPendingRequests: (requests) => set({ pendingRequests: requests }),
+  addPendingRequest: (request) => set((state) => {
+    // Check if request already exists
+    const exists = state.pendingRequests.some(r => r.id === request.id);
+    if (exists) {
+      return {
+        pendingRequests: state.pendingRequests.map(r =>
+          r.id === request.id ? request : r
+        ),
+      };
+    }
+    return {
+      pendingRequests: [...state.pendingRequests, request],
+    };
+  }),
+  removePendingRequest: (requestId) => set((state) => ({
+    pendingRequests: state.pendingRequests.filter(r => r.id !== requestId),
+  })),
+  setActiveSpeaker: (userId) => set({ activeSpeakerId: userId }),
+  toggleRaiseHand: () => set((state) => {
+    // This will be called by local user to toggle their own raised hand
+    // The actual state is managed via setRaiseHand
+    return state;
+  }),
+  setRaiseHand: (userId, isRaised) => set((state) => {
+    const newRaisedHands = new Set(state.raisedHands);
+    if (isRaised) {
+      newRaisedHands.add(userId);
+    } else {
+      newRaisedHands.delete(userId);
+    }
+    // Also update participant state
+    return {
+      raisedHands: newRaisedHands,
+      participants: state.participants.map(p =>
+        p.userId === userId ? { ...p, hasRaisedHand: isRaised } : p
+      ),
+    };
+  }),
   setSelectedDevices: (devices) => set((state) => ({
     selectedDevices: { ...state.selectedDevices, ...devices },
   })),

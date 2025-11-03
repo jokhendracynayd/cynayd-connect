@@ -6,10 +6,18 @@ import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
 import { webrtcManager } from '../lib/webrtc';
 import { toast } from 'react-hot-toast';
+import ParticipantTile from '../components/call/ParticipantTile';
+import ParticipantList from '../components/call/ParticipantList';
+import PendingRequestsPanel from '../components/call/PendingRequestsPanel';
+import RoomSettings from '../components/call/RoomSettings';
+import WaitingRoom from '../components/call/WaitingRoom';
+import { getPendingRequests, requestRoomJoin } from '../lib/api';
+import api from '../lib/api';
+import { storage } from '../lib/storage';
 
 export default function Call() {
   const { roomCode } = useParams<{ roomCode: string }>();
-  const { user, token, logout } = useAuthStore();
+  const { user, token, logout, hasCheckedAuth } = useAuthStore();
   const { 
     settings, 
     localStream, 
@@ -24,6 +32,17 @@ export default function Call() {
     removeParticipant,
     updateParticipant,
     selectedDevices,
+    isAdmin,
+    roomIsPublic,
+    pendingRequests,
+    activeSpeakerId,
+    setIsAdmin,
+    setRoomIsPublic,
+    setPendingRequests,
+    addPendingRequest,
+    removePendingRequest,
+    setActiveSpeaker,
+    setRaiseHand,
   } = useCallStore();
   
   const navigate = useNavigate();
@@ -34,9 +53,23 @@ export default function Call() {
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   const hasConnectedRef = useRef(false); // Prevent duplicate connections in React StrictMode
   const consumingProducersRef = useRef<Set<string>>(new Set()); // Track which producers we're consuming
+  const [showParticipantList, setShowParticipantList] = useState(false);
+  const [showPendingRequests, setShowPendingRequests] = useState(false);
+  const [showRoomSettings, setShowRoomSettings] = useState(false);
+  const [showWaitingRoom, setShowWaitingRoom] = useState(false);
 
   useEffect(() => {
-    if (!user || !token) {
+    // Wait for auth check to complete
+    if (!hasCheckedAuth) {
+      return; // Wait for auth check
+    }
+
+    // Get token from store or localStorage (fallback)
+    const currentToken = token || storage.getToken();
+    const currentUser = user;
+
+    if (!currentUser || !currentToken) {
+      // Only redirect if we've checked auth and still no user/token
       toast.error('Please login first');
       navigate('/login');
       return;
@@ -68,7 +101,7 @@ export default function Call() {
       eventListenersRef.current = {};
       leaveRoom();
     };
-  }, [roomCode, user, token]);
+  }, [roomCode, user, token, hasCheckedAuth]);
 
   useEffect(() => {
     if (localVideoRef.current && localStream) {
@@ -109,7 +142,15 @@ export default function Call() {
   }, [remoteStreams]);
 
   const connectToRoom = async () => {
-    if (!roomCode || !user || !token) return;
+    if (!roomCode || !user) return;
+    
+    // Get token from store or localStorage (fallback for page refresh)
+    const currentToken = token || storage.getToken();
+    if (!currentToken) {
+      toast.error('Authentication token not found');
+      navigate('/login');
+      return;
+    }
     
     setIsConnecting(true);
     setError(null);
@@ -119,8 +160,8 @@ export default function Call() {
     setRemoteStreams(new Map());
 
     try {
-      // Connect Socket.io
-      socketManager.connect(token);
+      // Connect Socket.io with token (from store or localStorage)
+      socketManager.connect(currentToken);
 
       // Join room via Socket.io
       const response = await socketManager.joinRoom({
@@ -131,6 +172,66 @@ export default function Call() {
       });
 
       console.log('Joined room:', response);
+
+      // Handle private room cases
+      if (!response || !response.success) {
+        // Check if this is a private room that requires approval
+        if (response?.waitingApproval) {
+          // User already has a pending request, show waiting room
+          setShowWaitingRoom(true);
+          setIsConnecting(false);
+          toast.success('Waiting for admin approval...');
+          return; // Exit early, don't proceed with connection
+        }
+        
+        if (response?.requiresRequest) {
+          // This should rarely happen now since backend auto-creates requests
+          // But handle it just in case
+          try {
+            // Try via socket first
+            await socketManager.requestRoomJoin(roomCode);
+            // If successful, show waiting room
+            setShowWaitingRoom(true);
+            setIsConnecting(false);
+            toast.success('Join request sent. Waiting for admin approval...');
+            return; // Exit early
+          } catch (requestError: any) {
+            // Check if it's just "already pending" - if so, show waiting room anyway
+            if (requestError.message?.includes('already pending') || requestError.message?.includes('already exists')) {
+              setShowWaitingRoom(true);
+              setIsConnecting(false);
+              toast.success('Join request already pending. Waiting for admin approval...');
+              return;
+            }
+            
+            // If socket fails, try API
+            try {
+              const result = await requestRoomJoin(roomCode);
+              if (result.success) {
+                setShowWaitingRoom(true);
+                setIsConnecting(false);
+                toast.success('Join request sent. Waiting for admin approval...');
+                return; // Exit early
+              }
+            } catch (apiError: any) {
+              // Check if API also says "already pending"
+              if (apiError.response?.data?.message?.includes('already pending') || 
+                  apiError.response?.data?.message?.includes('already exists') ||
+                  apiError.message?.includes('already pending')) {
+                setShowWaitingRoom(true);
+                setIsConnecting(false);
+                toast.success('Join request already pending. Waiting for admin approval...');
+                return;
+              }
+              // Both failed with real error, show error
+              throw new Error(requestError?.message || apiError?.message || 'Failed to request room access');
+            }
+          }
+        }
+        
+        // If we get here, it's a real error
+        throw new Error(response?.error || 'Failed to join room');
+      }
 
       // Initialize Mediasoup device
       await webrtcManager.initialize(response.rtpCapabilities);
@@ -252,7 +353,46 @@ export default function Call() {
         }
       }
 
-      // Set up event listeners
+      // Check if user is admin (by checking if they created the room)
+      // We need to determine this from the room data or API
+      // For now, check if user is in the admin field of existing participants
+      // or make an API call to get room info
+      // TODO: Backend should return admin status in joinRoom response
+      
+      // Try to determine admin status - check response first, then API
+      // Backend now includes isAdmin and isPublic in the response
+      if (response?.isAdmin !== undefined) {
+        setIsAdmin(response.isAdmin);
+        if (response?.isPublic !== undefined) {
+          setRoomIsPublic(response.isPublic);
+        }
+        // Load pending requests if admin - do this BEFORE setting up listeners
+        // so we can receive notifications immediately
+        if (response.isAdmin) {
+          await loadPendingRequests();
+        }
+      } else {
+        // Fallback: check via API if response doesn't include admin status
+        try {
+          const roomInfoResponse = await api.get(`/api/rooms/${roomCode}`);
+          if (roomInfoResponse.data.success && roomInfoResponse.data.data) {
+            const room = roomInfoResponse.data.data;
+            const userIsAdmin = room.admin?.id === user.id || room.adminId === user.id;
+            setIsAdmin(userIsAdmin);
+            setRoomIsPublic(room.isPublic ?? true);
+            
+            // Load pending requests if admin
+            if (userIsAdmin) {
+              await loadPendingRequests();
+            }
+          }
+        } catch (apiError) {
+          console.error('Failed to fetch room info:', apiError);
+          // Continue anyway, just won't have admin status
+        }
+      }
+      
+      // Set up event listeners AFTER loading pending requests (so notifications work)
       setupEventListeners();
 
       setIsConnecting(false);
@@ -348,6 +488,120 @@ export default function Call() {
     };
     socketManager.on('chat', handleChat);
     eventListenersRef.current['chat'] = handleChat;
+
+    // Audio mute event
+    const handleAudioMute = (data: { userId: string; isAudioMuted: boolean }) => {
+      updateParticipant(data.userId, { isAudioMuted: data.isAudioMuted });
+    };
+    socketManager.on('audio-mute', handleAudioMute);
+    eventListenersRef.current['audio-mute'] = handleAudioMute;
+
+    // Video mute event
+    const handleVideoMute = (data: { userId: string; isVideoMuted: boolean }) => {
+      updateParticipant(data.userId, { isVideoMuted: data.isVideoMuted });
+    };
+    socketManager.on('video-mute', handleVideoMute);
+    eventListenersRef.current['video-mute'] = handleVideoMute;
+
+    // Active speaker event
+    const handleActiveSpeaker = (data: { userId: string; isActiveSpeaker: boolean }) => {
+      if (data.isActiveSpeaker) {
+        setActiveSpeaker(data.userId);
+        updateParticipant(data.userId, { isSpeaking: true });
+      } else {
+        // Clear active speaker if this user stopped speaking
+        if (activeSpeakerId === data.userId) {
+          setActiveSpeaker(null);
+        }
+        updateParticipant(data.userId, { isSpeaking: false });
+      }
+    };
+    socketManager.on('active-speaker', handleActiveSpeaker);
+    eventListenersRef.current['active-speaker'] = handleActiveSpeaker;
+
+    // Raised hand event
+    const handleRaisedHand = (data: { userId: string; isRaised: boolean }) => {
+      setRaiseHand(data.userId, data.isRaised);
+    };
+    socketManager.on('raised-hand', handleRaisedHand);
+    eventListenersRef.current['raised-hand'] = handleRaisedHand;
+
+    // Join request event (admin only)
+    const handleJoinRequest = (data: {
+      requestId: string;
+      userId: string;
+      name: string;
+      email: string;
+      picture?: string;
+      requestedAt: string;
+    }) => {
+      console.log('Received join-request event:', data);
+      
+      // Check if request already exists (avoid duplicates)
+      const existingRequest = pendingRequests.find(r => r.id === data.requestId);
+      if (!existingRequest) {
+        addPendingRequest({
+          id: data.requestId,
+          userId: data.userId,
+          name: data.name,
+          email: data.email,
+          picture: data.picture,
+          requestedAt: data.requestedAt,
+          status: 'pending',
+        });
+        toast.success(`Join request from ${data.name}`, { duration: 5000 });
+      } else {
+        console.log('Join request already exists, skipping:', data.requestId);
+      }
+      
+      // Show notification badge
+      if (!showPendingRequests) {
+        // Could trigger a notification here
+      }
+    };
+    socketManager.on('join-request', handleJoinRequest);
+    eventListenersRef.current['join-request'] = handleJoinRequest;
+
+    // Pending requests loaded event (when admin joins and requests are loaded)
+    const handlePendingRequestsLoaded = (data: {
+      requests: Array<{
+        id: string;
+        userId: string;
+        name: string;
+        email: string;
+        picture?: string;
+        requestedAt: string;
+      }>;
+    }) => {
+      console.log('Received pending-requests-loaded event:', data);
+      
+      // Add all requests to the store (avoid duplicates)
+      let addedCount = 0;
+      data.requests.forEach(req => {
+        const existingRequest = pendingRequests.find(r => r.id === req.id);
+        if (!existingRequest) {
+          addPendingRequest({
+            id: req.id,
+            userId: req.userId,
+            name: req.name,
+            email: req.email,
+            picture: req.picture,
+            requestedAt: req.requestedAt,
+            status: 'pending',
+          });
+          addedCount++;
+        }
+      });
+      
+      // Only show one toast notification for all loaded requests (not individual ones)
+      if (addedCount > 0) {
+        toast.success(`${addedCount} pending join request${addedCount > 1 ? 's' : ''}`, {
+          duration: 5000,
+        });
+      }
+    };
+    socketManager.on('pending-requests-loaded', handlePendingRequestsLoaded);
+    eventListenersRef.current['pending-requests-loaded'] = handlePendingRequestsLoaded;
   };
 
   const consumeProducer = async (producerId: string, userId?: string, kind?: 'audio' | 'video') => {
@@ -509,9 +763,47 @@ export default function Call() {
     }
   };
 
+  const loadPendingRequests = async () => {
+    if (!roomCode || !isAdmin) return;
+    try {
+      const result = await getPendingRequests(roomCode);
+      if (result.success && result.data) {
+        const requests = result.data.map((req: any) => ({
+          id: req.id,
+          userId: req.user.id,
+          name: req.user.name,
+          email: req.user.email,
+          picture: req.user.picture,
+          requestedAt: req.requestedAt,
+          status: req.status,
+        }));
+        setPendingRequests(requests);
+        
+        // Show notification if there are pending requests
+        if (requests.length > 0) {
+          toast.success(`${requests.length} pending join request${requests.length > 1 ? 's' : ''}`, {
+            duration: 5000,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load pending requests:', error);
+    }
+  };
+
   const handleToggleAudio = async () => {
     const wasMuted = isAudioMuted; // Store BEFORE toggle
+    const newMuted = !isAudioMuted;
     toggleAudio();
+    
+    // Emit mute event to other participants
+    const socket = (socketManager as any).socket;
+    if (socket && roomCode) {
+      socket.emit('audio-mute', {
+        isAudioMuted: newMuted,
+        uid: user?.id || '',
+      });
+    }
     
     const audioProducer = webrtcManager.getProducer('audio');
     const audioTrack = localStream?.getAudioTracks()[0];
@@ -568,6 +860,15 @@ export default function Call() {
           localStream.removeTrack(videoTrack);
           setLocalStream(new MediaStream(localStream));
         }
+        
+        // Emit video mute event
+        const socket = (socketManager as any).socket;
+        if (socket && roomCode) {
+          socket.emit('video-mute', {
+            isVideoMuted: true,
+            uid: user?.id || '',
+          });
+        }
       }
     } else {
       // Turning ON - Get new video track and replace in producer
@@ -599,6 +900,15 @@ export default function Call() {
         }
         
         console.log('Camera restarted');
+        
+        // Emit video mute event
+        const socket = (socketManager as any).socket;
+        if (socket && roomCode) {
+          socket.emit('video-mute', {
+            isVideoMuted: false,
+            uid: user?.id || '',
+          });
+        }
       } catch (error: any) {
         console.error('Error turning video on:', error);
         // Revert toggle on error
@@ -616,6 +926,27 @@ export default function Call() {
       }
     }
   };
+
+  // Show waiting room if user is waiting for approval
+  if (showWaitingRoom && roomCode) {
+    return (
+      <WaitingRoom
+        roomCode={roomCode}
+        onCancel={() => {
+          setShowWaitingRoom(false);
+          navigate('/');
+        }}
+        onApproved={() => {
+          // Hide waiting room and retry connection
+          setShowWaitingRoom(false);
+          setIsConnecting(true);
+          // Reset connection flag to allow retry
+          hasConnectedRef.current = false;
+          connectToRoom();
+        }}
+      />
+    );
+  }
 
   if (isConnecting) {
     return (
@@ -850,6 +1181,49 @@ export default function Call() {
             )}
           </button>
 
+          {/* Participant List Toggle */}
+          <button
+            onClick={() => setShowParticipantList(!showParticipantList)}
+            className="p-4 rounded-full bg-gray-700 hover:bg-gray-600 text-white transition-colors"
+            title="Participants"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+          </button>
+
+          {/* Room Settings (Admin only) */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowRoomSettings(true)}
+              className="p-4 rounded-full bg-gray-700 hover:bg-gray-600 text-white transition-colors"
+              title="Room Settings"
+            >
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+          )}
+
+          {/* Pending Requests (Admin only) */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowPendingRequests(!showPendingRequests)}
+              className="relative p-4 rounded-full bg-gray-700 hover:bg-gray-600 text-white transition-colors"
+              title="Join Requests"
+            >
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+              </svg>
+              {pendingRequests.length > 0 && (
+                <span className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center">
+                  {pendingRequests.length}
+                </span>
+              )}
+            </button>
+          )}
+
           {/* Leave */}
           <button
             onClick={leaveRoom}
@@ -868,6 +1242,28 @@ export default function Call() {
           </p>
         </div>
       </div>
+
+      {/* Components */}
+      <ParticipantList
+        isOpen={showParticipantList}
+        onClose={() => setShowParticipantList(false)}
+      />
+      {roomCode && (
+        <>
+          <PendingRequestsPanel
+            isOpen={showPendingRequests}
+            onClose={() => setShowPendingRequests(false)}
+            roomCode={roomCode}
+          />
+          <RoomSettings
+            isOpen={showRoomSettings}
+            onClose={() => setShowRoomSettings(false)}
+            roomCode={roomCode}
+            currentIsPublic={roomIsPublic}
+            participantCount={participants.length + 1}
+          />
+        </>
+      )}
     </div>
   );
 }

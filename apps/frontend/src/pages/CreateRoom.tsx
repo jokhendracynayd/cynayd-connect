@@ -6,6 +6,7 @@ import { useCallStore } from '../store/callStore';
 
 export default function CreateRoom() {
   const [roomName, setRoomName] = useState('');
+  const [isPublic, setIsPublic] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
   const setRoomCodeStore = useCallStore(state => state.setRoomCode);
@@ -15,7 +16,7 @@ export default function CreateRoom() {
     setIsLoading(true);
     
     try {
-      const response = await api.post('/api/rooms/', { name: roomName });
+      const response = await api.post('/api/rooms/', { name: roomName, isPublic });
       const room = response.data.data;
       toast.success(`Room created: ${room.roomCode}`);
       setRoomCodeStore(room.roomCode);
@@ -53,6 +54,39 @@ export default function CreateRoom() {
               className="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
               placeholder="Enter room name"
             />
+          </div>
+
+          {/* Privacy Toggle */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-3">Room Privacy</label>
+            <div className="space-y-3">
+              <label className="flex items-center space-x-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="privacy"
+                  checked={isPublic}
+                  onChange={() => setIsPublic(true)}
+                  className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
+                />
+                <div>
+                  <div className="font-medium text-gray-900">Public</div>
+                  <div className="text-sm text-gray-500">Anyone with the room code can join immediately</div>
+                </div>
+              </label>
+              <label className="flex items-center space-x-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="privacy"
+                  checked={!isPublic}
+                  onChange={() => setIsPublic(false)}
+                  className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
+                />
+                <div>
+                  <div className="font-medium text-gray-900">Private</div>
+                  <div className="text-sm text-gray-500">You must approve join requests</div>
+                </div>
+              </label>
+            </div>
           </div>
 
           <div>

@@ -1,4 +1,4 @@
-import redis from '../database/redis';
+import { redisWithCircuitBreaker as redis } from '../database/redis';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 
@@ -249,14 +249,12 @@ export class RedisStateService {
 
       // Remove all metadata
       if (producerIds.length > 0) {
-        const pipeline = redis.pipeline();
         for (const producerId of producerIds) {
           const metadata = await this.getProducerMetadata(producerId);
           if (metadata) {
             await this.removeProducerMetadata(producerId, socketId, metadata.roomId);
           }
         }
-        await pipeline.exec();
       }
 
       if (consumerIds.length > 0) {
