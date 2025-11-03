@@ -1,0 +1,12 @@
+# Note: Using existing Docker containers
+# PostgreSQL: my-postgres (User: nothing, Password: nothing)
+# Redis: my-redis
+#
+# To start existing containers:
+#   docker start my-postgres my-redis
+#
+# Database connection: postgresql://nothing:nothing@localhost:5432/connect_sdk
+# Redis connection: localhost:6379
+
+# No services defined - using external containers
+

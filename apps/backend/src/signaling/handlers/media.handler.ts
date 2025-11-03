@@ -1,0 +1,311 @@
+import { Server as SocketIOServer, Socket } from 'socket.io';
+import { RouterManager } from '../../media/Router';
+import { TransportManager } from '../../media/Transport';
+import { ProducerManager } from '../../media/Producer';
+import { ConsumerManager } from '../../media/Consumer';
+import { logger } from '../../shared/utils/logger';
+import {
+  createTransportSchema,
+  connectTransportSchema,
+  produceSchema,
+  consumeSchema,
+  closeProducerSchema,
+  pauseProducerSchema,
+  resumeProducerSchema,
+  replaceTrackSchema,
+} from '../../api/schemas/media.schema';
+
+export function mediaHandler(_io: SocketIOServer, socket: Socket) {
+  
+  // Create WebRTC Transport
+  socket.on('createTransport', async (data: unknown, callback) => {
+    try {
+      // Validate input
+      const validatedData = createTransportSchema.parse(data);
+      
+      const { roomId } = socket.data;
+      const router = RouterManager.getRouter(roomId);
+
+      if (!router) {
+        return callback({ error: 'Router not found' });
+      }
+
+      const transport = await TransportManager.createTransport(router, socket.id);
+
+      // Get ICE candidates (they may be gathered asynchronously)
+      const iceCandidates = transport.iceCandidates || [];
+
+      logger.debug(`Transport created for socket ${socket.id}`, {
+        transportId: transport.id,
+        iceCandidatesCount: iceCandidates.length,
+        iceCandidates: iceCandidates.map((c: any) => ({
+          foundation: c.foundation,
+          priority: c.priority,
+          ip: c.ip,
+          port: c.port,
+          type: c.type,
+          protocol: c.protocol,
+        })),
+      });
+
+      callback({
+        id: transport.id,
+        iceParameters: transport.iceParameters,
+        iceCandidates: iceCandidates,
+        dtlsParameters: transport.dtlsParameters,
+      });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error('Error creating transport:', error);
+        callback({ error: error.message });
+      } else {
+        logger.error('Error creating transport:', error);
+        callback({ error: 'Validation error: Invalid input data' });
+      }
+    }
+  });
+
+  // Connect Transport
+  socket.on('connectTransport', async (data: unknown, callback) => {
+    try {
+      // Validate input
+      const validatedData = connectTransportSchema.parse(data);
+      
+      const transport = TransportManager.getTransport(validatedData.transportId);
+
+      if (!transport) {
+        return callback({ error: 'Transport not found' });
+      }
+
+      await transport.connect({ dtlsParameters: validatedData.dtlsParameters });
+      logger.debug(`Transport ${validatedData.transportId} connected`);
+      callback({ success: true });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error('Error connecting transport:', error);
+        callback({ error: error.message });
+      } else {
+        logger.error('Error connecting transport:', error);
+        callback({ error: 'Validation error: Invalid input data' });
+      }
+    }
+  });
+
+  // Produce (publish audio/video)
+  socket.on('produce', async (data: unknown, callback) => {
+    try {
+      // Validate input
+      const validatedData = produceSchema.parse(data);
+      
+      const transport = TransportManager.getTransport(validatedData.transportId);
+
+      if (!transport) {
+        return callback({ error: 'Transport not found' });
+      }
+
+      const producer = await transport.produce({
+        kind: validatedData.kind,
+        rtpParameters: validatedData.rtpParameters,
+        appData: validatedData.appData,
+      });
+
+      // Store producer
+      ProducerManager.addProducer(socket.id, producer);
+
+      // Notify other participants
+      socket.to(socket.data.roomCode).emit('new-producer', {
+        producerId: producer.id,
+        userId: socket.data.userId,
+        kind: validatedData.kind,
+      });
+
+      logger.info(`Producer created: ${producer.id} (${validatedData.kind})`);
+
+      callback({ id: producer.id });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error('Error producing:', error);
+        callback({ error: error.message });
+      } else {
+        logger.error('Error producing:', error);
+        callback({ error: 'Validation error: Invalid input data' });
+      }
+    }
+  });
+
+  // Consume (subscribe to audio/video)
+  socket.on('consume', async (data: unknown, callback) => {
+    try {
+      // Validate input
+      const validatedData = consumeSchema.parse(data);
+      
+      const { roomId } = socket.data;
+      const router = RouterManager.getRouter(roomId);
+      const transport = TransportManager.getTransport(validatedData.transportId);
+
+      if (!router || !transport) {
+        return callback({ error: 'Router or transport not found' });
+      }
+
+      // Check if can consume
+      if (!router.canConsume({
+        producerId: validatedData.producerId,
+        rtpCapabilities: validatedData.rtpCapabilities,
+      })) {
+        return callback({ error: 'Cannot consume' });
+      }
+
+      // Create consumer
+      const consumer = await transport.consume({
+        producerId: validatedData.producerId,
+        rtpCapabilities: validatedData.rtpCapabilities,
+        paused: false,
+      });
+
+      // Store consumer
+      ConsumerManager.addConsumer(socket.id, consumer);
+
+      // Get producer info
+      const producerInfo = ProducerManager.getProducerById(validatedData.producerId);
+
+      callback({
+        id: consumer.id,
+        producerId: validatedData.producerId,
+        kind: consumer.kind,
+        rtpParameters: consumer.rtpParameters,
+      });
+
+      logger.info(`Consumer created: ${consumer.id}`);
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error('Error consuming:', error);
+        callback({ error: error.message });
+      } else {
+        logger.error('Error consuming:', error);
+        callback({ error: 'Validation error: Invalid input data' });
+      }
+    }
+  });
+
+  // Close producer
+  socket.on('closeProducer', async (data: unknown) => {
+    try {
+      // Validate input
+      const validatedData = closeProducerSchema.parse(data);
+      
+      ProducerManager.closeProducer(socket.id, validatedData.producerId);
+      
+      socket.to(socket.data.roomCode).emit('producer-closed', {
+        producerId: validatedData.producerId,
+        userId: socket.data.userId,
+      });
+
+      logger.info(`Producer closed: ${validatedData.producerId}`);
+    } catch (error: unknown) {
+      logger.error('Error closing producer:', error);
+    }
+  });
+
+  // Pause producer
+  socket.on('pauseProducer', async (data: unknown, callback) => {
+    try {
+      // Validate input
+      const validatedData = pauseProducerSchema.parse(data);
+      
+      const producerInfo = ProducerManager.getProducerById(validatedData.producerId);
+
+      if (!producerInfo || producerInfo.socketId !== socket.id) {
+        return callback({ error: 'Producer not found or unauthorized' });
+      }
+
+      producerInfo.producer.pause();
+
+      // Notify other participants
+      socket.to(socket.data.roomCode).emit('producer-paused', {
+        producerId: validatedData.producerId,
+        userId: socket.data.userId,
+        kind: producerInfo.producer.kind,
+      });
+
+      logger.info(`Producer paused: ${validatedData.producerId}`);
+      callback({ success: true });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error('Error pausing producer:', error);
+        callback({ error: error.message });
+      } else {
+        logger.error('Error pausing producer:', error);
+        callback({ error: 'Validation error: Invalid input data' });
+      }
+    }
+  });
+
+  // Resume producer
+  socket.on('resumeProducer', async (data: unknown, callback) => {
+    try {
+      // Validate input
+      const validatedData = resumeProducerSchema.parse(data);
+      
+      const producerInfo = ProducerManager.getProducerById(validatedData.producerId);
+
+      if (!producerInfo || producerInfo.socketId !== socket.id) {
+        return callback({ error: 'Producer not found or unauthorized' });
+      }
+
+      producerInfo.producer.resume();
+
+      // Notify other participants
+      socket.to(socket.data.roomCode).emit('producer-resumed', {
+        producerId: validatedData.producerId,
+        userId: socket.data.userId,
+        kind: producerInfo.producer.kind,
+      });
+
+      logger.info(`Producer resumed: ${validatedData.producerId}`);
+      callback({ success: true });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error('Error resuming producer:', error);
+        callback({ error: error.message });
+      } else {
+        logger.error('Error resuming producer:', error);
+        callback({ error: 'Validation error: Invalid input data' });
+      }
+    }
+  });
+
+  // Notify track replaced in producer (for video re-enable)
+  // Note: Actual track replacement happens client-side via producer.replaceTrack()
+  // This handler is just for server-side notification
+  socket.on('replaceTrack', async (data: unknown, callback) => {
+    try {
+      // Validate input
+      const validatedData = replaceTrackSchema.parse(data);
+      
+      const producerInfo = ProducerManager.getProducerById(validatedData.producerId);
+
+      if (!producerInfo || producerInfo.socketId !== socket.id) {
+        return callback({ error: 'Producer not found or unauthorized' });
+      }
+
+      // Notify other participants that track was replaced
+      socket.to(socket.data.roomCode).emit('producer-track-replaced', {
+        producerId: validatedData.producerId,
+        userId: socket.data.userId,
+        kind: producerInfo.producer.kind,
+      });
+
+      logger.info(`Producer track replaced: ${validatedData.producerId}`);
+      callback({ success: true });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error('Error replacing track:', error);
+        callback({ error: error.message });
+      } else {
+        logger.error('Error replacing track:', error);
+        callback({ error: 'Validation error: Invalid input data' });
+      }
+    }
+  });
+}
+

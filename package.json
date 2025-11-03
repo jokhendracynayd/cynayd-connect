@@ -1,0 +1,28 @@
+{
+  "name": "connect-sdk-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production-grade WebRTC SDK similar to Agora and Google Meet",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter @connect-sdk/backend dev\" \"pnpm --filter @connect-sdk/web dev\"",
+    "build": "pnpm --filter @connect-sdk/backend build && pnpm --filter @connect-sdk/web build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r clean",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=22.11.0",
+    "pnpm": ">=9.0.0"
+  }
+}
+

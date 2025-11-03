@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  password  String
+  picture   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rooms         Room[]
+  participants  Participant[]
+
+  @@index([email])
+}
+
+model Room {
+  id          String   @id @default(uuid())
+  roomCode    String   @unique
+  name        String?
+  adminId     String
+  admin       User     @relation(fields: [adminId], references: [id])
+  isActive    Boolean  @default(true)
+  maxParticipants Int  @default(50)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  endedAt     DateTime?
+
+  participants Participant[]
+  metrics      CallMetrics[]
+
+  @@index([roomCode])
+  @@index([adminId])
+}
+
+model Participant {
+  id        String   @id @default(uuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+  role      String   @default("participant") // "admin" | "participant"
+
+  @@unique([roomId, userId, joinedAt])
+  @@index([roomId])
+  @@index([userId])
+}
+
+model CallMetrics {
+  id              String   @id @default(uuid())
+  roomId          String
+  room            Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId          String
+  timestamp       DateTime @default(now())
+  bitrate         Int?
+  packetLoss      Float?
+  jitter          Float?
+  rtt             Int?
+  resolution      String?
+  fps             Int?
+
+  @@index([roomId, timestamp])
+  @@index([userId, timestamp])
+}
+
