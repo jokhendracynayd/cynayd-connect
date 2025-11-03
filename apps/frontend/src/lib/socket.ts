@@ -140,10 +140,28 @@ class SocketManager {
 
   leaveRoom(): Promise<any> {
     return new Promise((resolve, reject) => {
-      if (!this.socket) return reject(new Error('Not connected'));
+      if (!this.socket || !this.socket.connected) {
+        // If socket is not connected, resolve immediately (backend will cleanup on disconnect)
+        console.log('Socket not connected, skipping leaveRoom emit');
+        return resolve({ success: true, skipped: true });
+      }
+      
+      let resolved = false;
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          // Don't reject, just resolve - backend will cleanup on disconnect anyway
+          console.log('LeaveRoom timeout, resolving anyway');
+          resolve({ success: true, timeout: true });
+        }
+      }, 3000); // 3 second timeout
       
       this.socket.emit('leaveRoom', {}, (response: any) => {
-        resolve(response);
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          resolve(response);
+        }
       });
     });
   }

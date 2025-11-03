@@ -1,5 +1,6 @@
 import prisma from '../database/prisma';
 import { NotFoundError, ForbiddenError, ConflictError } from '../utils/errors';
+import { logger } from '../utils/logger';
 
 export class RoomService {
   static async createRoom(userId: string, data: { name?: string; isPublic?: boolean }) {
@@ -100,7 +101,7 @@ export class RoomService {
     const normalizedRoomCode = roomCode.trim().toLowerCase();
     const room = await this.getRoomByCode(normalizedRoomCode);
 
-    // Check if already joined
+    // Check if already joined (active participant)
     const existingParticipant = await prisma.participant.findFirst({
       where: {
         roomId: room.id,
@@ -109,7 +110,9 @@ export class RoomService {
       },
     });
 
+    // If already an active participant, just return the room
     if (existingParticipant) {
+      logger.debug(`User ${userId} already a participant in room ${normalizedRoomCode}`);
       return room;
     }
 
@@ -128,14 +131,108 @@ export class RoomService {
       }
     }
 
-    // Add participant
-    await prisma.participant.create({
-      data: {
-        roomId: room.id,
-        userId,
-        role: room.adminId === userId ? 'admin' : 'participant',
-      },
-    });
+    // Create or update participant record
+    // Since the unique constraint includes joinedAt (timestamp), we need to handle this carefully:
+    // - If user previously left (leftAt is set), create a NEW participant record with NEW joinedAt
+    // - If no previous record, create new one
+    // - Handle race conditions where multiple joins happen simultaneously
+    
+    try {
+      // Try to create a new participant record
+      // Use a small delay to ensure joinedAt timestamps are different (prevents unique constraint violation)
+      // This handles the case where user rejoins immediately after leaving
+      const now = new Date();
+      
+      await prisma.participant.create({
+        data: {
+          roomId: room.id,
+          userId,
+          role: room.adminId === userId ? 'admin' : 'participant',
+          joinedAt: now, // Explicitly set to current time
+        },
+      });
+      
+      logger.debug(`Created new participant record for user ${userId} in room ${normalizedRoomCode}`);
+    } catch (error: any) {
+      // Handle unique constraint violation (race condition or immediate rejoin)
+      if (error.code === 'P2002' || error.message?.includes('Unique constraint')) {
+        logger.warn(`Participant creation conflict for user ${userId} in room ${normalizedRoomCode} (likely race condition), checking existing records`);
+        
+        // Wait a tiny bit (1ms) to ensure different timestamp, then check again
+        await new Promise(resolve => setTimeout(resolve, 1));
+        
+        // Check again if an active participant exists now (race condition - another request created it)
+        const raceConditionParticipant = await prisma.participant.findFirst({
+          where: {
+            roomId: room.id,
+            userId,
+            leftAt: null,
+          },
+        });
+
+        if (raceConditionParticipant) {
+          logger.debug(`Participant created by concurrent request, using existing record`);
+          return room;
+        }
+        
+        // Check if there's a participant with the same joinedAt (very rare - exact same millisecond)
+        // If so, try creating again with a slightly different timestamp
+        const conflictingParticipant = await prisma.participant.findFirst({
+          where: {
+            roomId: room.id,
+            userId,
+          },
+          orderBy: {
+            joinedAt: 'desc',
+          },
+        });
+
+        if (conflictingParticipant) {
+          // Wait a bit more to ensure different timestamp
+          await new Promise(resolve => setTimeout(resolve, 10));
+          
+          // Try creating again with new timestamp
+          try {
+            await prisma.participant.create({
+              data: {
+                roomId: room.id,
+                userId,
+                role: room.adminId === userId ? 'admin' : 'participant',
+                joinedAt: new Date(), // New timestamp
+              },
+            });
+            logger.debug(`Created participant after timestamp delay for user ${userId} in room ${normalizedRoomCode}`);
+            return this.getRoomByCode(normalizedRoomCode);
+          } catch (retryError: any) {
+            // If still fails, check one more time if participant exists
+            const finalCheck = await prisma.participant.findFirst({
+              where: {
+                roomId: room.id,
+                userId,
+                leftAt: null,
+              },
+            });
+
+            if (finalCheck) {
+              logger.debug(`Participant exists after retry, using existing record`);
+              return room;
+            }
+
+            logger.error(`Failed to create participant after retry for user ${userId} in room ${normalizedRoomCode}: ${retryError.message}`);
+            throw new Error('Failed to join room due to database conflict. Please try again.');
+          }
+        } else {
+          // No conflicting participant found, but still got unique constraint error
+          // This shouldn't happen, but handle gracefully
+          logger.error(`Unique constraint error but no conflicting participant found for user ${userId} in room ${normalizedRoomCode}`);
+          throw new Error('Failed to join room. Please try again.');
+        }
+      } else {
+        // Re-throw other errors
+        logger.error(`Error creating participant for user ${userId} in room ${normalizedRoomCode}: ${error.message}`);
+        throw error;
+      }
+    }
 
     return this.getRoomByCode(normalizedRoomCode);
   }

@@ -31,6 +31,7 @@ export default function Call() {
     addParticipant,
     removeParticipant,
     updateParticipant,
+    setParticipants,
     selectedDevices,
     isAdmin,
     roomIsPublic,
@@ -43,6 +44,7 @@ export default function Call() {
     removePendingRequest,
     setActiveSpeaker,
     setRaiseHand,
+    resetCallState,
   } = useCallStore();
   
   const navigate = useNavigate();
@@ -57,6 +59,8 @@ export default function Call() {
   const [showPendingRequests, setShowPendingRequests] = useState(false);
   const [showRoomSettings, setShowRoomSettings] = useState(false);
   const [showWaitingRoom, setShowWaitingRoom] = useState(false);
+  const [isLeaving, setIsLeaving] = useState(false);
+  const isLeavingRef = useRef(false); // Prevent double cleanup
 
   useEffect(() => {
     // Wait for auth check to complete
@@ -90,6 +94,12 @@ export default function Call() {
     connectToRoom();
 
     return () => {
+      // Only cleanup if not already leaving (prevent double cleanup)
+      if (isLeavingRef.current) {
+        console.log('Already leaving, skipping useEffect cleanup');
+        return;
+      }
+      
       hasConnectedRef.current = false;
       consumingProducersRef.current.clear();
       // Clean up event listeners
@@ -99,7 +109,15 @@ export default function Call() {
         }
       });
       eventListenersRef.current = {};
-      leaveRoom();
+      
+      // Only call leaveRoom if user is actually leaving (not on initial mount issues)
+      // Check if we're actually connected before calling leaveRoom
+      const socket = (socketManager as any).socket;
+      if (socket && socket.connected) {
+        leaveRoom().catch(err => {
+          console.warn('Error in useEffect cleanup leaveRoom:', err);
+        });
+      }
     };
   }, [roomCode, user, token, hasCheckedAuth]);
 
@@ -140,6 +158,109 @@ export default function Call() {
       }
     });
   }, [remoteStreams]);
+
+  // Handle browser tab/window close - cleanup on beforeunload
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      // Attempt cleanup before page unloads
+      // Note: Modern browsers limit what can be done in beforeunload
+      console.log('Page unloading, attempting cleanup...');
+      
+      // Force synchronous cleanup operations
+      try {
+        webrtcManager.cleanup();
+        mediaManager.stopLocalMedia();
+        
+        // Clear all remote streams
+        remoteStreams.forEach((stream) => {
+          stream.getTracks().forEach(track => track.stop());
+        });
+        
+        // Clear video refs
+        remoteVideoRefs.current.forEach((videoEl) => {
+          if (videoEl) videoEl.srcObject = null;
+        });
+        if (localVideoRef.current) localVideoRef.current.srcObject = null;
+        
+        // Try to leave room via socket (may not complete due to browser limits)
+        socketManager.leaveRoom().catch(() => {});
+        socketManager.disconnect();
+      } catch (err) {
+        console.warn('Error during beforeunload cleanup:', err);
+      }
+    };
+    
+    // Use pagehide as well for better browser support
+    const handlePageHide = () => {
+      console.log('Page hiding, cleaning up...');
+      try {
+        webrtcManager.cleanup();
+        mediaManager.stopLocalMedia();
+        socketManager.disconnect();
+      } catch (err) {
+        console.warn('Error during pagehide cleanup:', err);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handlePageHide);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [remoteStreams]); // Include remoteStreams in deps to capture current state
+
+  // Handle socket disconnect event
+  useEffect(() => {
+    const handleDisconnect = () => {
+      console.log('Socket disconnected, cleaning up frontend resources...');
+      try {
+        // Clean up WebRTC resources
+        webrtcManager.cleanup();
+        
+        // Stop local media
+        mediaManager.stopLocalMedia();
+        
+        // Clear all remote streams
+        remoteStreams.forEach((stream) => {
+          stream.getTracks().forEach(track => track.stop());
+        });
+        setRemoteStreams(new Map());
+        
+        // Clear video refs
+        remoteVideoRefs.current.forEach((videoEl) => {
+          if (videoEl) videoEl.srcObject = null;
+        });
+        remoteVideoRefs.current.clear();
+        if (localVideoRef.current) localVideoRef.current.srcObject = null;
+        
+        // Reset state
+        resetCallState();
+        
+        // Clear consuming producers
+        consumingProducersRef.current.clear();
+        
+        // Show notification
+        toast.error('Connection lost. Returning to home.');
+        
+        // Navigate to home after a short delay
+        setTimeout(() => {
+          navigate('/');
+        }, 1000);
+      } catch (error) {
+        console.error('Error during disconnect cleanup:', error);
+        // Still navigate on error
+        navigate('/');
+      }
+    };
+    
+    socketManager.on('disconnect', handleDisconnect);
+    
+    return () => {
+      socketManager.off('disconnect', handleDisconnect);
+    };
+  }, [remoteStreams, navigate, resetCallState]);
 
   const connectToRoom = async () => {
     if (!roomCode || !user) return;
@@ -361,15 +482,12 @@ export default function Call() {
       
       // Try to determine admin status - check response first, then API
       // Backend now includes isAdmin and isPublic in the response
+      let userIsAdmin = false;
       if (response?.isAdmin !== undefined) {
+        userIsAdmin = response.isAdmin;
         setIsAdmin(response.isAdmin);
         if (response?.isPublic !== undefined) {
           setRoomIsPublic(response.isPublic);
-        }
-        // Load pending requests if admin - do this BEFORE setting up listeners
-        // so we can receive notifications immediately
-        if (response.isAdmin) {
-          await loadPendingRequests();
         }
       } else {
         // Fallback: check via API if response doesn't include admin status
@@ -377,14 +495,9 @@ export default function Call() {
           const roomInfoResponse = await api.get(`/api/rooms/${roomCode}`);
           if (roomInfoResponse.data.success && roomInfoResponse.data.data) {
             const room = roomInfoResponse.data.data;
-            const userIsAdmin = room.admin?.id === user.id || room.adminId === user.id;
+            userIsAdmin = room.admin?.id === user.id || room.adminId === user.id;
             setIsAdmin(userIsAdmin);
             setRoomIsPublic(room.isPublic ?? true);
-            
-            // Load pending requests if admin
-            if (userIsAdmin) {
-              await loadPendingRequests();
-            }
           }
         } catch (apiError) {
           console.error('Failed to fetch room info:', apiError);
@@ -392,8 +505,18 @@ export default function Call() {
         }
       }
       
-      // Set up event listeners AFTER loading pending requests (so notifications work)
+      // Set up event listeners BEFORE loading pending requests
+      // This ensures we can receive socket events immediately
       setupEventListeners();
+      
+      // HYBRID APPROACH: If admin, load pending requests via API (reliable)
+      // AND listen for socket events (real-time updates)
+      if (userIsAdmin) {
+        // Load pending requests via API (primary method - reliable)
+        await loadPendingRequests();
+        // Socket event will also be received via setupEventListeners for verification/updates
+        console.log('Admin joined - loaded pending requests via API and listening for socket updates');
+      }
 
       setIsConnecting(false);
       setIsConnected(true);
@@ -562,7 +685,8 @@ export default function Call() {
     socketManager.on('join-request', handleJoinRequest);
     eventListenersRef.current['join-request'] = handleJoinRequest;
 
-    // Pending requests loaded event (when admin joins and requests are loaded)
+    // Pending requests loaded event (verification/real-time updates from socket)
+    // This is a backup to the API call - provides real-time updates when new requests come in
     const handlePendingRequestsLoaded = (data: {
       requests: Array<{
         id: string;
@@ -573,13 +697,21 @@ export default function Call() {
         requestedAt: string;
       }>;
     }) => {
-      console.log('Received pending-requests-loaded event:', data);
+      console.log('Received pending-requests-loaded socket event (verification):', data);
       
-      // Add all requests to the store (avoid duplicates)
+      // Verify: Compare with current state and update if needed
+      // This ensures we have the latest data even if API call missed something
+      const currentRequestIds = new Set(pendingRequests.map(r => r.id));
+      const socketRequestIds = new Set(data.requests.map(r => r.id));
+      
+      // Check if socket has requests we don't have (shouldn't happen, but verify)
       let addedCount = 0;
+      let updatedCount = 0;
+      
       data.requests.forEach(req => {
         const existingRequest = pendingRequests.find(r => r.id === req.id);
         if (!existingRequest) {
+          // New request from socket (real-time update)
           addPendingRequest({
             id: req.id,
             userId: req.userId,
@@ -590,14 +722,30 @@ export default function Call() {
             status: 'pending',
           });
           addedCount++;
+          console.log('Added pending request from socket event:', req.id);
+        } else {
+          updatedCount++;
         }
       });
       
-      // Only show one toast notification for all loaded requests (not individual ones)
-      if (addedCount > 0) {
-        toast.success(`${addedCount} pending join request${addedCount > 1 ? 's' : ''}`, {
-          duration: 5000,
+      // Check if we have requests that socket doesn't (stale data) - refresh from API
+      const staleRequests = pendingRequests.filter(r => !socketRequestIds.has(r.id));
+      if (staleRequests.length > 0) {
+        console.log(`Found ${staleRequests.length} stale requests, refreshing from API...`);
+        // Refresh from API to get latest state
+        loadPendingRequests().catch(err => {
+          console.error('Failed to refresh pending requests:', err);
         });
+      }
+      
+      // Only show notification for newly added requests (not verification updates)
+      if (addedCount > 0) {
+        toast.success(`New join request${addedCount > 1 ? 's' : ''} received`, {
+          duration: 4000,
+        });
+      } else if (data.requests.length > 0 && updatedCount === data.requests.length) {
+        // All requests match - verification successful
+        console.log(`Verified ${data.requests.length} pending requests via socket event`);
       }
     };
     socketManager.on('pending-requests-loaded', handlePendingRequestsLoaded);
@@ -750,22 +898,148 @@ export default function Call() {
   };
 
   const leaveRoom = async () => {
+    // Prevent double execution
+    if (isLeavingRef.current) {
+      console.log('Leave already in progress, ignoring duplicate call');
+      return;
+    }
+    
+    isLeavingRef.current = true;
+    setIsLeaving(true);
+    
     try {
-      webrtcManager.cleanup();
-      await socketManager.leaveRoom();
+      console.log('Leaving room, starting cleanup...');
+      toast.loading('Leaving room...', { id: 'leaving' });
+      
+      // Step 1: Stop all local media tracks immediately (user experience)
       mediaManager.stopLocalMedia();
-      socketManager.disconnect();
-      setLocalStream(null);
-      setIsConnected(false);
-      navigate('/');
+      
+      // Step 2: Clear local video ref
+      if (localVideoRef.current) {
+        try {
+          localVideoRef.current.srcObject = null;
+          localVideoRef.current.pause();
+        } catch (err) {
+          console.warn('Error clearing local video ref:', err);
+        }
+      }
+      
+      // Step 3: Close all WebRTC resources (producers, consumers, transports)
+      try {
+        webrtcManager.cleanup();
+      } catch (err) {
+        console.warn('Error cleaning up WebRTC:', err);
+      }
+      
+      // Step 4: Clear all remote streams and stop their tracks
+      try {
+        remoteStreams.forEach((stream, userId) => {
+          try {
+            stream.getTracks().forEach(track => {
+              track.stop();
+              stream.removeTrack(track);
+            });
+          } catch (err) {
+            console.warn(`Error stopping tracks for user ${userId}:`, err);
+          }
+        });
+        setRemoteStreams(new Map());
+      } catch (err) {
+        console.warn('Error clearing remote streams:', err);
+      }
+      
+      // Step 5: Clear all remote video refs
+      try {
+        remoteVideoRefs.current.forEach((videoEl, userId) => {
+          if (videoEl) {
+            try {
+              videoEl.srcObject = null;
+              videoEl.pause();
+            } catch (err) {
+              console.warn(`Error clearing video ref for user ${userId}:`, err);
+            }
+          }
+        });
+        remoteVideoRefs.current.clear();
+      } catch (err) {
+        console.warn('Error clearing remote video refs:', err);
+      }
+      
+      // Step 6: Notify backend via socket (with timeout handling)
+      try {
+        const leaveResult = await socketManager.leaveRoom();
+        if (leaveResult.timeout) {
+          console.log('LeaveRoom call timed out, but continuing cleanup');
+        } else if (leaveResult.skipped) {
+          console.log('LeaveRoom skipped (socket not connected), backend will cleanup on disconnect');
+        } else {
+          console.log('Successfully notified backend of room leave');
+        }
+      } catch (err: any) {
+        // If socket is already disconnected or error, that's okay - backend will cleanup on disconnect
+        console.warn('Error calling leaveRoom on socket:', err);
+        // Continue with cleanup even if socket call fails
+      }
+      
+      // Step 7: Disconnect socket (this triggers backend cleanup)
+      try {
+        socketManager.disconnect();
+      } catch (err) {
+        console.warn('Error disconnecting socket:', err);
+      }
+      
+      // Step 8: Clear consuming producers ref
+      consumingProducersRef.current.clear();
+      
+      // Step 9: Reset all state in store
+      resetCallState();
+      
+      // Step 10: Show success and navigate
+      toast.success('Left room successfully', { id: 'leaving' });
+      
+      // Small delay to ensure toast is visible before navigation
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Navigate to home with replace to prevent back navigation
+      navigate('/', { replace: true });
+      
     } catch (error) {
       console.error('Error leaving room:', error);
+      toast.error('Error leaving room', { id: 'leaving' });
+      
+      // Even on error, try to reset state and navigate
+      try {
+        // Force cleanup
+        webrtcManager.cleanup();
+        mediaManager.stopLocalMedia();
+        resetCallState();
+        
+        // Navigate anyway after a short delay
+        setTimeout(() => {
+          navigate('/', { replace: true });
+        }, 1000);
+      } catch (navError) {
+        console.error('Error during error cleanup:', navError);
+        // Last resort: force reload
+        window.location.href = '/';
+      }
+    } finally {
+      // Reset leaving state (though we're navigating away)
+      setIsLeaving(false);
     }
   };
 
   const loadPendingRequests = async () => {
-    if (!roomCode || !isAdmin) return;
+    if (!roomCode) {
+      console.warn('loadPendingRequests: roomCode not available');
+      return;
+    }
+    
+    // Don't check isAdmin here - allow loading even if admin status not yet set
+    // The API will verify admin status server-side
+    
     try {
+      console.log('Loading pending requests via API for room:', roomCode);
       const result = await getPendingRequests(roomCode);
       if (result.success && result.data) {
         const requests = result.data.map((req: any) => ({
@@ -778,6 +1052,7 @@ export default function Call() {
           status: req.status,
         }));
         setPendingRequests(requests);
+        console.log(`Loaded ${requests.length} pending requests via API`);
         
         // Show notification if there are pending requests
         if (requests.length > 0) {
@@ -785,9 +1060,20 @@ export default function Call() {
             duration: 5000,
           });
         }
+      } else {
+        console.warn('getPendingRequests returned no data or unsuccessful:', result);
+        // Set empty array to clear any stale data
+        setPendingRequests([]);
       }
-    } catch (error) {
-      console.error('Failed to load pending requests:', error);
+    } catch (error: any) {
+      console.error('Failed to load pending requests via API:', error);
+      // If error is "not admin", that's okay - just means user isn't admin
+      if (error.response?.status === 403) {
+        console.log('User is not admin, skipping pending requests load');
+      } else {
+        // Other errors might be network issues, but don't block UI
+        toast.error('Failed to load pending requests', { duration: 3000 });
+      }
     }
   };
 
@@ -927,28 +1213,41 @@ export default function Call() {
     }
   };
 
-  // Show waiting room if user is waiting for approval
-  if (showWaitingRoom && roomCode) {
-    return (
-      <WaitingRoom
-        roomCode={roomCode}
-        onCancel={() => {
-          setShowWaitingRoom(false);
-          navigate('/');
-        }}
-        onApproved={() => {
-          // Hide waiting room and retry connection
-          setShowWaitingRoom(false);
-          setIsConnecting(true);
-          // Reset connection flag to allow retry
-          hasConnectedRef.current = false;
-          connectToRoom();
-        }}
-      />
-    );
-  }
+   // Show waiting room if user is waiting for approval
+   if (showWaitingRoom && roomCode) {
+     return (
+       <WaitingRoom
+         roomCode={roomCode}
+         onCancel={() => {
+           setShowWaitingRoom(false);
+           navigate('/', { replace: true });
+         }}
+         onApproved={() => {
+           // Hide waiting room and retry connection
+           setShowWaitingRoom(false);
+           setIsConnecting(true);
+           // Reset connection flag to allow retry
+           hasConnectedRef.current = false;
+           connectToRoom();
+         }}
+       />
+     );
+   }
 
-  if (isConnecting) {
+   // Show leaving state
+   if (isLeaving) {
+     return (
+       <div className="min-h-screen flex items-center justify-center bg-gray-900">
+         <div className="text-center text-white">
+           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto"></div>
+           <p className="mt-4">Leaving room...</p>
+           <p className="mt-2 text-gray-400 text-sm">Please wait while we clean up</p>
+         </div>
+       </div>
+     );
+   }
+
+   if (isConnecting) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900">
         <div className="text-center text-white">
@@ -1224,15 +1523,27 @@ export default function Call() {
             </button>
           )}
 
-          {/* Leave */}
-          <button
-            onClick={leaveRoom}
-            className="p-4 rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors"
-          >
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+           {/* Leave */}
+           <button
+             onClick={leaveRoom}
+             disabled={isLeaving}
+             className={`p-4 rounded-full transition-colors ${
+               isLeaving 
+                 ? 'bg-gray-500 cursor-not-allowed opacity-50' 
+                 : 'bg-red-600 hover:bg-red-700'
+             } text-white`}
+             title={isLeaving ? 'Leaving room...' : 'Leave room'}
+           >
+             {isLeaving ? (
+               <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+               </svg>
+             ) : (
+               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+               </svg>
+             )}
+           </button>
         </div>
 
         {/* Room Info */}

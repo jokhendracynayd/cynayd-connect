@@ -11,6 +11,88 @@ import { RoomRoutingService } from '../../shared/services/room-routing.service';
 import { config } from '../../shared/config';
 import prisma from '../../shared/database/prisma';
 
+/**
+ * Cleanup socket resources with retry logic
+ */
+async function cleanupSocketWithRetry(socketId: string, maxRetries: number = 3): Promise<void> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Clean up media resources
+      await Promise.all([
+        ProducerManager.closeAllProducers(socketId).catch(err => 
+          logger.error(`Error closing producers for ${socketId} (attempt ${attempt}):`, err)
+        ),
+        ConsumerManager.closeAllConsumers(socketId).catch(err => 
+          logger.error(`Error closing consumers for ${socketId} (attempt ${attempt}):`, err)
+        ),
+        TransportManager.closeAllTransports(socketId).catch(err => 
+          logger.error(`Error closing transports for ${socketId} (attempt ${attempt}):`, err)
+        ),
+      ]);
+
+      // Cleanup Redis state
+      await RedisStateService.cleanupSocketState(socketId);
+
+      // Verify cleanup was successful
+      await verifySocketCleanup(socketId);
+      
+      logger.info(`Successfully cleaned up socket ${socketId} (attempt ${attempt})`);
+      return; // Success, exit
+    } catch (error) {
+      const isLastAttempt = attempt === maxRetries;
+      logger.warn(
+        `Cleanup attempt ${attempt}/${maxRetries} failed for socket ${socketId}:`,
+        error
+      );
+
+      if (isLastAttempt) {
+        logger.error(`Failed to cleanup socket ${socketId} after ${maxRetries} attempts`);
+        // Still try to verify and log what remains
+        await verifySocketCleanup(socketId).catch(err =>
+          logger.error(`Failed to verify cleanup for ${socketId}:`, err)
+        );
+        throw error;
+      }
+
+      // Exponential backoff: wait before retrying
+      const delayMs = 1000 * attempt; // 1s, 2s, 3s...
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+/**
+ * Verify that all Redis state has been cleaned up for a socket
+ */
+async function verifySocketCleanup(socketId: string): Promise<void> {
+  try {
+    const producers = await RedisStateService.getSocketProducers(socketId);
+    const consumers = await RedisStateService.getSocketConsumers(socketId);
+    const transports = await RedisStateService.getSocketTransports(socketId);
+
+    if (producers.length > 0 || consumers.length > 0 || transports.length > 0) {
+      logger.warn(`Cleanup incomplete for socket ${socketId}:`, {
+        producers: producers.length,
+        consumers: consumers.length,
+        transports: transports.length,
+      });
+
+      // Retry cleanup for any remaining state
+      if (producers.length > 0 || consumers.length > 0 || transports.length > 0) {
+        logger.info(`Retrying cleanup for remaining resources in socket ${socketId}`);
+        await RedisStateService.cleanupSocketState(socketId).catch(err =>
+          logger.error(`Failed to retry cleanup for ${socketId}:`, err)
+        );
+      }
+    } else {
+      logger.debug(`Cleanup verified for socket ${socketId} - all resources cleared`);
+    }
+  } catch (error) {
+    logger.error(`Error verifying cleanup for socket ${socketId}:`, error);
+    // Don't throw - verification failure shouldn't break disconnect flow
+  }
+}
+
 interface JoinRoomData {
   roomCode: string;
   name: string;
@@ -226,11 +308,14 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       }
 
       // User can join (public room, admin, or has approved request)
-      // Now actually join the room
-      await RoomService.joinRoom(userId, normalizedRoomCode);
+      // Now actually join the room - get updated room object
+      const updatedRoom = await RoomService.joinRoom(userId, normalizedRoomCode);
+      
+      // Use the updated room from joinRoom (ensures we have latest data)
+      const roomId = updatedRoom.id;
 
       // Check/assign room to server (sticky session routing)
-      const assignedServer = await RoomRoutingService.getOrAssignServer(room.id);
+      const assignedServer = await RoomRoutingService.getOrAssignServer(roomId);
       const currentServer = config.server.instanceId;
       
       if (assignedServer !== currentServer) {
@@ -241,14 +326,14 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
 
       // Create Mediasoup router for this room
       // RouterManager will check if this server should handle the room
-      const router = await RouterManager.createRouter(room.id);
+      const router = await RouterManager.createRouter(roomId);
 
       // Join Socket.io room (use normalized code)
       await socket.join(normalizedRoomCode);
 
-      // Store socket data (use normalized room code)
+      // Store socket data (use normalized room code) - IMPORTANT: Set AFTER successful join
       socket.data.roomCode = normalizedRoomCode;
-      socket.data.roomId = room.id;
+      socket.data.roomId = roomId;
       socket.data.userName = name;
       socket.data.userEmail = email;
       socket.data.userPicture = picture;
@@ -348,35 +433,40 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       logger.info(`User ${userId} joined room ${normalizedRoomCode}`);
 
       // If user is admin, check for pending requests and notify them
-      if (room.adminId === userId) {
+      // HYBRID APPROACH: Frontend will call API to load requests (reliable)
+      // We also emit socket event for verification and real-time updates
+      if (updatedRoom.adminId === userId) {
         try {
           const pendingRequests = await RoomService.getPendingRequests(userId, normalizedRoomCode);
-          if (pendingRequests.length > 0) {
-            logger.info(`Admin ${userId} joining room ${normalizedRoomCode} - found ${pendingRequests.length} pending requests`);
+          logger.info(`Admin ${userId} joining room ${normalizedRoomCode} - found ${pendingRequests.length} pending requests`);
+          
+          // Emit socket event for verification and real-time updates
+          // Frontend will also call API directly for reliable initial load
+          // Use a delay to ensure frontend socket listeners are set up
+          setTimeout(() => {
+            const requestData = {
+              requests: pendingRequests.map((req: any) => ({
+                id: req.id,
+                userId: req.user.id,
+                name: req.user.name,
+                email: req.user.email,
+                picture: req.user.picture,
+                requestedAt: req.requestedAt,
+              })),
+            };
             
-            // Notify admin about pending requests via socket
-            // Use a small delay to ensure socket listeners are set up on frontend
-            setTimeout(() => {
-              const requestData = {
-                requests: pendingRequests.map(req => ({
-                  id: req.id,
-                  userId: req.user.id,
-                  name: req.user.name,
-                  email: req.user.email,
-                  picture: req.user.picture,
-                  requestedAt: req.requestedAt,
-                })),
-              };
-              
-              // Only send pending-requests-loaded event (no individual join-request events)
-              // This prevents duplicate notifications
-              socket.emit('pending-requests-loaded', requestData);
-              logger.info(`Sent pending-requests-loaded event to admin ${userId} with ${pendingRequests.length} requests`);
-            }, 200);
-          }
+            // Emit to socket for verification/backup
+            // This works as a backup if API call fails or for real-time verification
+            socket.emit('pending-requests-loaded', requestData);
+            
+            // Also emit to the room (redundancy - ensures delivery)
+            io.to(normalizedRoomCode).emit('pending-requests-loaded', requestData);
+            
+            logger.info(`Sent pending-requests-loaded event to admin ${userId} with ${pendingRequests.length} requests (hybrid: API + Socket)`);
+          }, 500); // Increased delay to ensure frontend listeners are ready
         } catch (error) {
           logger.error('Failed to load pending requests for admin:', error);
-          // Continue anyway, admin can still manually check
+          // Continue anyway - frontend will call API as primary method
         }
       }
 
@@ -385,8 +475,8 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         rtpCapabilities: router.rtpCapabilities,
         otherProducers: producerInfoList,
         existingParticipants, // Send user info for existing participants
-        isAdmin: room.adminId === userId, // Include admin status in response
-        isPublic: room.isPublic, // Include room privacy status
+        isAdmin: updatedRoom.adminId === userId, // Include admin status in response
+        isPublic: updatedRoom.isPublic, // Include room privacy status
       });
     } catch (error: any) {
       logger.error('Error joining room:', {
@@ -419,19 +509,8 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       if (roomCode) {
         logger.info(`User ${userId} leaving room: ${roomCode}`);
 
-        // Cleanup media (async)
-        await Promise.all([
-          ProducerManager.closeAllProducers(socket.id),
-          ConsumerManager.closeAllConsumers(socket.id),
-          TransportManager.closeAllTransports(socket.id),
-        ]);
-
-        // Cleanup Redis state
-        try {
-          await RedisStateService.cleanupSocketState(socket.id);
-        } catch (error) {
-          logger.error(`Failed to cleanup Redis state for socket ${socket.id}:`, error);
-        }
+        // Cleanup media with retry logic
+        await cleanupSocketWithRetry(socket.id);
 
         // Leave database room
         await RoomService.leaveRoom(userId, roomCode);
@@ -448,8 +527,8 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         }));
 
         // Clear socket data
-        delete socket.data.roomCode;
-        delete socket.data.roomId;
+        socket.data.roomCode = undefined;
+        socket.data.roomId = undefined;
 
         logger.info(`User ${userId} left room ${roomCode}`);
       }

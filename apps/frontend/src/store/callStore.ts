@@ -62,6 +62,7 @@ interface CallState {
   setRaiseHand: (userId: string, isRaised: boolean) => void;
   setSelectedDevices: (devices: Partial<CallState['selectedDevices']>) => void;
   setSettings: (settings: Partial<CallState['settings']>) => void;
+  resetCallState: () => void;
 }
 
 export const useCallStore = create<CallState>((set) => ({
@@ -168,5 +169,27 @@ export const useCallStore = create<CallState>((set) => ({
   setSettings: (settings) => set((state) => ({
     settings: { ...state.settings, ...settings },
   })),
+  resetCallState: () => set({
+    isConnected: false,
+    roomCode: null,
+    participants: [],
+    localStream: null,
+    isAudioMuted: false,
+    isVideoMuted: false,
+    isAdmin: false,
+    roomIsPublic: true,
+    pendingRequests: [],
+    activeSpeakerId: null,
+    raisedHands: new Set<string>(),
+    selectedDevices: {
+      audioInput: '',
+      videoInput: '',
+      audioOutput: '',
+    },
+    settings: {
+      joinWithAudio: true,
+      joinWithVideo: true,
+    },
+  }),
 }));
 
