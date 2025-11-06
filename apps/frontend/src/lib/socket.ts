@@ -188,11 +188,16 @@ class SocketManager {
     });
   }
 
-  produce(transportId: string, kind: 'audio' | 'video', rtpParameters: any): Promise<any> {
+  produce(
+    transportId: string,
+    kind: 'audio' | 'video',
+    rtpParameters: any,
+    appData?: Record<string, unknown>
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
       if (!this.socket) return reject(new Error('Not connected'));
       
-      this.socket.emit('produce', { transportId, kind, rtpParameters }, (response: any) => {
+      this.socket.emit('produce', { transportId, kind, rtpParameters, appData }, (response: any) => {
         if (response.error) reject(new Error(response.error));
         else resolve(response);
       });

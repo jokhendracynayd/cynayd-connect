@@ -113,11 +113,27 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
         return callback({ error: 'Transport not found' });
       }
 
+      const inferredSource = validatedData.appData?.source
+        ? String(validatedData.appData.source)
+        : validatedData.kind === 'audio'
+          ? 'microphone'
+          : 'camera';
+
+      const producerAppData = {
+        ...validatedData.appData,
+        source: inferredSource,
+        userId: socket.data.userId,
+        roomId: socket.data.roomId,
+      };
+
       const producer = await transport.produce({
         kind: validatedData.kind,
         rtpParameters: validatedData.rtpParameters,
-        appData: validatedData.appData,
+        appData: producerAppData,
       });
+
+      // Ensure producer app data includes the enriched metadata
+      producer.appData = producerAppData;
 
       // Store producer with metadata
       const { roomId, userId } = socket.data;
@@ -128,26 +144,29 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
       await ProducerManager.addProducer(socket.id, producer, roomId, userId);
 
       // Check if it's a screen share (from appData)
-      const isScreenShare = validatedData.appData?.source === 'screen';
+      const isScreenShare = producerAppData.source === 'screen';
+      const displayName = (socket.data as any).userName || (socket.data as any).name || 'Unknown';
+
+      // Notify all peers about the new producer with metadata
+      socket.to(socket.data.roomCode).emit('new-producer', {
+        producerId: producer.id,
+        userId: socket.data.userId,
+        kind: validatedData.kind,
+        appData: producerAppData,
+        name: displayName,
+      });
 
       if (isScreenShare) {
-        // Emit screen-share-started event
+        // Additional UX notification for screen share start
         socket.to(socket.data.roomCode).emit('screen-share-started', {
           userId: socket.data.userId,
           producerId: producer.id,
-          name: (socket.data as any).name || 'Unknown',
+          name: displayName,
           kind: 'video',
         });
 
         logger.info(`Screen share started: ${producer.id} by ${userId}`);
       } else {
-        // Regular new-producer event
-        socket.to(socket.data.roomCode).emit('new-producer', {
-          producerId: producer.id,
-          userId: socket.data.userId,
-          kind: validatedData.kind,
-        });
-
         logger.info(`Producer created: ${producer.id} (${validatedData.kind})`);
       }
 

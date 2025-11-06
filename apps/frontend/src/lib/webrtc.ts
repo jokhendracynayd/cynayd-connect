@@ -11,6 +11,7 @@ class WebRTCManager {
   private producersByKind: Map<'audio' | 'video', any> = new Map(); // kind -> producer
   private screenShareProducer: any = null; // Store separately from video producer
   private consumers: Map<string, any> = new Map();
+  private consumeLock: Promise<void> = Promise.resolve();
 
   async initialize(rtpCapabilities: RouterRtpCapabilities) {
     this.device = new Device();
@@ -64,7 +65,8 @@ class WebRTCManager {
         const response = await socketManager.produce(
           params.id,
           parameters.kind,
-          parameters.rtpParameters
+          parameters.rtpParameters,
+          parameters.appData
         );
         callback({ id: response.id });
       } catch (error) {
@@ -127,7 +129,12 @@ class WebRTCManager {
       throw new Error('Send transport not created');
     }
 
-    const producer = await this.sendTransport.produce({ track });
+    const producer = await this.sendTransport.produce({
+      track,
+      appData: {
+        source: 'microphone',
+      },
+    });
     this.producers.set(producer.id, producer);
     this.producersByKind.set('audio', producer);
     console.log('Audio producer created:', producer.id);
@@ -146,6 +153,9 @@ class WebRTCManager {
         { maxBitrate: 300000 },
         { maxBitrate: 900000 },
       ],
+      appData: {
+        source: 'camera',
+      },
     });
     this.producers.set(producer.id, producer);
     this.producersByKind.set('video', producer);
@@ -153,8 +163,26 @@ class WebRTCManager {
     return producer;
   }
 
-  async consumeProducer(producerId: string): Promise<MediaStreamTrack | null> {
+  private async runConsumeTask<T>(task: () => Promise<T>): Promise<T> {
+    let releaseLock: () => void = () => {};
+    const nextLock = new Promise<void>(resolve => {
+      releaseLock = resolve;
+    });
+
+    const previousLock = this.consumeLock;
+    this.consumeLock = previousLock.then(() => nextLock);
+
+    await previousLock;
     try {
+      return await task();
+    } finally {
+      releaseLock();
+    }
+  }
+
+  async consumeProducer(producerId: string): Promise<MediaStreamTrack | null> {
+    return this.runConsumeTask(async () => {
+      try {
       // Check if already consuming this producer
       if (this.consumers.has(producerId)) {
         const existingConsumer = this.consumers.get(producerId);
@@ -253,6 +281,7 @@ class WebRTCManager {
       console.error('Error consuming producer:', producerId, error);
       throw error;
     }
+    });
   }
 
   closeProducers() {
@@ -356,15 +385,24 @@ class WebRTCManager {
   }
 
   async produceScreenShare(track: MediaStreamTrack): Promise<any> {
+    console.log('produceScreenShare called', {
+      hasTransport: !!this.sendTransport,
+      hasExistingProducer: !!this.screenShareProducer,
+      trackState: track.readyState
+    });
+
     if (!this.sendTransport) {
       throw new Error('Send transport not created');
     }
 
     // Close existing screen share producer if any
     if (this.screenShareProducer) {
+      console.log('Closing existing screen share producer:', this.screenShareProducer.id);
       await this.closeScreenShareProducer();
+      console.log('Existing producer closed');
     }
 
+    console.log('Creating new screen share producer...');
     const producer = await this.sendTransport.produce({
       track,
       encodings: [
@@ -381,6 +419,7 @@ class WebRTCManager {
     });
 
     this.screenShareProducer = producer;
+    console.log('New screen share producer assigned to this.screenShareProducer:', producer.id);
 
     // Listen for track end
     producer.track.onended = () => {
@@ -392,16 +431,36 @@ class WebRTCManager {
     return producer;
   }
 
-  async closeScreenShareProducer(): Promise<void> {
+  async closeScreenShareProducer(): Promise<{ producerId: string | null }> {
+    console.log('closeScreenShareProducer called', {
+      hasProducer: !!this.screenShareProducer,
+      producerId: this.screenShareProducer?.id
+    });
+
+    const producerId = this.screenShareProducer?.id ?? null;
+
     if (this.screenShareProducer) {
       try {
+        console.log('Closing producer:', producerId);
         this.screenShareProducer.close();
-        await socketManager.closeProducer(this.screenShareProducer.id);
+        console.log('Notifying backend of producer close (fire-and-forget):', producerId);
+        void socketManager
+          .closeProducer(this.screenShareProducer.id)
+          .then(() => {
+            console.log('Backend acknowledged producer close:', producerId);
+          })
+          .catch(error => {
+            console.warn('closeProducer emit failed', { producerId, error });
+          });
       } catch (error) {
         console.error('Error closing screen share producer:', error);
       }
+
       this.screenShareProducer = null;
     }
+
+    console.log('closeScreenShareProducer complete, returning:', { producerId });
+    return { producerId };
   }
 
   getScreenShareProducer(): any {

@@ -1,5 +1,6 @@
-import axios, {  } from 'axios';
+import axios from 'axios';
 import { config } from '../config';
+import { storage } from './storage';
 
 const api = axios.create({
   baseURL: config.apiUrl,
@@ -10,7 +11,7 @@ const api = axios.create({
 
 // Add token to requests
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
+  const token = storage.getToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -59,15 +60,15 @@ api.interceptors.response.use(
       originalRequest._retry = true;
       isRefreshing = true;
 
-      const refreshToken = localStorage.getItem('refreshToken');
+      const refreshToken = storage.getRefreshToken();
       
       if (!refreshToken) {
         processQueue(error);
         isRefreshing = false;
         // Redirect to login if no refresh token
         if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('refreshToken');
+          storage.removeToken();
+          storage.removeRefreshToken();
           window.location.href = '/login';
         }
         return Promise.reject(error);
@@ -81,9 +82,9 @@ api.interceptors.response.use(
 
         const { accessToken, refreshToken: newRefreshToken } = response.data;
         
-        localStorage.setItem('token', accessToken);
+        storage.setToken(accessToken);
         if (newRefreshToken) {
-          localStorage.setItem('refreshToken', newRefreshToken);
+          storage.setRefreshToken(newRefreshToken);
         }
 
         // Update auth store if available (non-blocking)
@@ -106,8 +107,8 @@ api.interceptors.response.use(
         isRefreshing = false;
         
         // Clear tokens and redirect to login
-        localStorage.removeItem('token');
-        localStorage.removeItem('refreshToken');
+        storage.removeToken();
+        storage.removeRefreshToken();
         
         if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
           window.location.href = '/login';

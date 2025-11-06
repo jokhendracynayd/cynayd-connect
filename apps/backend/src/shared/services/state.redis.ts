@@ -21,6 +21,7 @@ export class RedisStateService {
     roomId: string,
     userId: string,
     kind: 'audio' | 'video',
+    source: 'microphone' | 'camera' | 'screen' | 'data' | 'unknown',
     serverInstanceId?: string
   ): Promise<void> {
     const key = `${this.KEY_PREFIX}:producer:${producerId}`;
@@ -30,6 +31,7 @@ export class RedisStateService {
       roomId,
       userId,
       kind,
+      source,
       serverInstanceId: serverInstanceId || config.server.instanceId,
       createdAt: Date.now(),
     };
@@ -51,6 +53,7 @@ export class RedisStateService {
     roomId: string;
     userId: string;
     kind: 'audio' | 'video';
+    source: 'microphone' | 'camera' | 'screen' | 'data' | 'unknown';
     serverInstanceId: string;
     createdAt: number;
   } | null> {

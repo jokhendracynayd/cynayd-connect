@@ -382,7 +382,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         name: string;
         email: string;
         picture?: string;
-        producers: Array<{ producerId: string; kind: 'audio' | 'video' }>;
+        producers: Array<{ producerId: string; kind: 'audio' | 'video'; source: string }>;
       }>();
 
       otherProducers.forEach(p => {
@@ -402,8 +402,9 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
             });
           }
           userMap.get(userId)!.producers.push({
-          producerId: p.id,
-          kind: p.kind,
+            producerId: p.id,
+            kind: p.kind,
+            source: (producerData?.producer.appData?.source as string) || (p.kind === 'audio' ? 'microphone' : 'camera'),
           });
         }
       });
@@ -416,6 +417,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
           producerId: p.producerId,
           userId: userInfo.userId,
           kind: p.kind,
+          source: p.source,
           name: userInfo.name,
           email: userInfo.email,
           picture: userInfo.picture,

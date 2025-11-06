@@ -2,10 +2,12 @@ import { Producer } from 'mediasoup/node/lib/types';
 import { logger } from '../shared/utils/logger';
 import { RedisStateService } from '../shared/services/state.redis';
 
+type ProducerSource = 'microphone' | 'camera' | 'screen' | 'data' | 'unknown';
+
 export class ProducerManager {
   private static producers: Map<string, Producer[]> = new Map();
-  // Store producer metadata (producerId -> { socketId, roomId, userId, kind })
-  private static producerMetadata: Map<string, { socketId: string; roomId: string; userId: string; kind: 'audio' | 'video' }> = new Map();
+  // Store producer metadata (producerId -> { socketId, roomId, userId, kind, source })
+  private static producerMetadata: Map<string, { socketId: string; roomId: string; userId: string; kind: 'audio' | 'video'; source: ProducerSource }> = new Map();
 
   static async addProducer(
     socketId: string,
@@ -18,7 +20,9 @@ export class ProducerManager {
     this.producers.set(socketId, socketProducers);
 
     // Store metadata locally and in Redis
-    const metadata = { socketId, roomId, userId, kind: producer.kind };
+    const source = (producer.appData?.source as ProducerSource | undefined) ?? (producer.kind === 'audio' ? 'microphone' : 'camera');
+
+    const metadata = { socketId, roomId, userId, kind: producer.kind, source };
     this.producerMetadata.set(producer.id, metadata);
     
     try {
@@ -27,7 +31,8 @@ export class ProducerManager {
         socketId,
         roomId,
         userId,
-        producer.kind
+        producer.kind,
+        source
       );
     } catch (error) {
       logger.error(`Failed to store producer metadata in Redis: ${producer.id}`, error);
@@ -75,7 +80,7 @@ export class ProducerManager {
     return null;
   }
 
-  static getProducerMetadata(producerId: string): { socketId: string; roomId: string; userId: string; kind: 'audio' | 'video' } | null {
+  static getProducerMetadata(producerId: string): { socketId: string; roomId: string; userId: string; kind: 'audio' | 'video'; source: ProducerSource } | null {
     return this.producerMetadata.get(producerId) || null;
   }
 

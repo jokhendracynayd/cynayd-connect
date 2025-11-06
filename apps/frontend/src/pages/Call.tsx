@@ -78,6 +78,131 @@ export default function Call() {
   const hasConnectedRef = useRef(false); // Prevent duplicate connections in React StrictMode
   const consumingProducersRef = useRef<Set<string>>(new Set()); // Track which producers we're consuming
   const screenShareProducersRef = useRef<Map<string, string>>(new Map()); // userId -> producerId for screen shares
+  const producerMetadataRef = useRef<Map<string, { source?: string; userId?: string; kind?: 'audio' | 'video' }>>(new Map());
+  const activeScreenShareProducersRef = useRef<Set<string>>(new Set());
+  const isStoppingScreenShareRef = useRef(false);
+  const cleanupScreenShare = (userId?: string, producerId?: string) => {
+    console.log('cleanupScreenShare called:', { userId, producerId, localUserId: user?.id });
+
+    if (!userId) {
+      if (producerId) {
+        const metadata = producerMetadataRef.current.get(producerId);
+        if (metadata?.userId) {
+          cleanupScreenShare(metadata.userId, producerId);
+        } else {
+          producerMetadataRef.current.delete(producerId);
+          activeScreenShareProducersRef.current.delete(producerId);
+        }
+      }
+      return;
+    }
+
+    const currentActiveId = screenShareProducersRef.current.get(userId);
+    const targetProducerId = producerId ?? null;
+
+    console.log('cleanupScreenShare - current state:', {
+      currentActiveId,
+      targetProducerId,
+      isLocalUser: user?.id === userId,
+      currentIsScreenSharing: isScreenSharing
+    });
+
+    // If a different screen share is currently active for this user, only clear metadata for the old producer
+    if (currentActiveId && targetProducerId && currentActiveId !== targetProducerId) {
+      console.log('Stale producer event detected, ignoring cleanup for active share');
+      activeScreenShareProducersRef.current.delete(targetProducerId);
+      producerMetadataRef.current.delete(targetProducerId);
+      return;
+    }
+
+    const producerIds = new Set<string>();
+    if (producerId) {
+      producerIds.add(producerId);
+    }
+
+    const mappedId = screenShareProducersRef.current.get(userId);
+    if (mappedId) {
+      producerIds.add(mappedId);
+    }
+
+    producerMetadataRef.current.forEach((meta, id) => {
+      if (meta.userId === userId && (meta.source === 'screen' || !meta.source)) {
+        producerIds.add(id);
+      }
+    });
+
+    console.log('Cleaning up producer IDs:', Array.from(producerIds));
+
+    setScreenShareStreams(prev => {
+      const next = new Map(prev);
+      const stream = next.get(userId);
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        next.delete(userId);
+      }
+      return next;
+    });
+
+    screenShareProducersRef.current.delete(userId);
+
+    producerIds.forEach(id => {
+      activeScreenShareProducersRef.current.delete(id);
+      producerMetadataRef.current.delete(id);
+    });
+
+    removeScreenShare(userId);
+
+    const { pinnedScreenShareUserId: currentPinned, screenShares: updatedShares } = useCallStore.getState();
+    if (currentPinned === userId) {
+      const nextShare = Array.from(updatedShares.values()).find(share => share.userId !== userId);
+      setPinnedScreenShare(nextShare?.userId || null);
+    }
+
+    // If cleaning up local user's screen share, update state
+    if (user?.id === userId) {
+      console.log('Setting isScreenSharing to false for local user');
+      setIsScreenSharing(false);
+    }
+
+    console.log('cleanupScreenShare complete');
+  };
+
+  const waitForScreenShareTeardown = async (context: string) => {
+    const timeoutMs = 5000;
+    const intervalMs = 100;
+    const startTime = Date.now();
+    let attempts = 0;
+
+    while (isStoppingScreenShareRef.current || webrtcManager.getScreenShareProducer()) {
+      if (Date.now() - startTime > timeoutMs) {
+        console.warn('Timeout waiting for screen share teardown', {
+          context,
+          isStopping: isStoppingScreenShareRef.current,
+          hasProducer: !!webrtcManager.getScreenShareProducer(),
+        });
+        break;
+      }
+
+      if (attempts % 10 === 0) {
+        console.log('Waiting for screen share teardown...', {
+          context,
+          attempt: attempts,
+          isStopping: isStoppingScreenShareRef.current,
+          hasProducer: !!webrtcManager.getScreenShareProducer(),
+        });
+      }
+
+      attempts += 1;
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+
+    console.log('Screen share teardown wait complete', {
+      context,
+      elapsed: Date.now() - startTime,
+      isStopping: isStoppingScreenShareRef.current,
+      hasProducer: !!webrtcManager.getScreenShareProducer(),
+    });
+  };
   const [showParticipantList, setShowParticipantList] = useState(false);
   const [showPendingRequests, setShowPendingRequests] = useState(false);
   const [showRoomSettings, setShowRoomSettings] = useState(false);
@@ -507,16 +632,42 @@ export default function Call() {
       // Note: Screen share producers are NOT included in otherProducers (backend emits screen-share-started separately)
       if (response.otherProducers && response.otherProducers.length > 0) {
         for (const producerInfo of response.otherProducers) {
-          // Handle both old format (string) and new format (object)
           const producerId = typeof producerInfo === 'string' ? producerInfo : producerInfo.producerId;
-          const userId = typeof producerInfo === 'object' ? producerInfo.userId : undefined;
-          const kind = typeof producerInfo === 'object' ? producerInfo.kind : undefined;
-          
-          // Skip if this is a screen share (shouldn't happen, but safety check)
-          const isScreenShare = typeof producerInfo === 'object' && producerInfo.appData?.source === 'screen';
-          if (!isScreenShare) {
-            await consumeProducer(producerId, userId, kind);
+          const userIdFromInfo = typeof producerInfo === 'object' ? producerInfo.userId : undefined;
+          const kindFromInfo = typeof producerInfo === 'object' ? producerInfo.kind : undefined;
+          const sourceFromInfo =
+            typeof producerInfo === 'object'
+              ? producerInfo.source || (producerInfo.kind === 'audio' ? 'microphone' : 'camera')
+              : undefined;
+
+          producerMetadataRef.current.set(producerId, {
+            userId: userIdFromInfo,
+            kind: kindFromInfo,
+            source: sourceFromInfo,
+          });
+
+          if (sourceFromInfo === 'screen' && userIdFromInfo) {
+            screenShareProducersRef.current.set(userIdFromInfo, producerId);
+            await consumeScreenShareProducer(producerId, userIdFromInfo);
+
+            // Ensure screen share metadata is reflected in state for existing participants
+            const shareName = producerInfo.name || participants.find(p => p.userId === userIdFromInfo)?.name;
+            if (!screenShares.has(userIdFromInfo)) {
+              addScreenShare({
+                userId: userIdFromInfo,
+                producerId,
+                name: shareName || 'Screen Share',
+              });
+
+              if (!pinnedScreenShareUserId) {
+                setPinnedScreenShare(userIdFromInfo);
+              }
+            }
+
+            continue;
           }
+
+          await consumeProducer(producerId, userIdFromInfo, kindFromInfo);
         }
       }
 
@@ -624,6 +775,7 @@ export default function Call() {
         }
         return newStreams;
       });
+      cleanupScreenShare(data.userId);
     };
     socketManager.on('user-left', handleUserLeft);
     eventListenersRef.current['user-left'] = handleUserLeft;
@@ -631,9 +783,27 @@ export default function Call() {
     // New producer (someone started sharing audio/video)
     const handleNewProducer = async (data: any) => {
       console.log('New producer:', data);
-      if (data.producerId) {
-        await consumeProducer(data.producerId, data.userId, data.kind);
+      if (!data?.producerId) {
+        return;
       }
+
+      const source = data.appData?.source || (data.kind === 'audio' ? 'microphone' : 'camera');
+      producerMetadataRef.current.set(data.producerId, {
+        userId: data.userId,
+        kind: data.kind,
+        source,
+      });
+
+      if (source === 'screen') {
+        if (data.userId) {
+          screenShareProducersRef.current.set(data.userId, data.producerId);
+        }
+
+        await consumeScreenShareProducer(data.producerId, data.userId);
+        return;
+      }
+
+      await consumeProducer(data.producerId, data.userId, data.kind);
     };
     socketManager.on('new-producer', handleNewProducer);
     eventListenersRef.current['new-producer'] = handleNewProducer;
@@ -641,6 +811,13 @@ export default function Call() {
     // Producer closed
     const handleProducerClosed = (data: any) => {
       console.log('Producer closed:', data);
+      const metadata = producerMetadataRef.current.get(data.producerId);
+      if (metadata?.source === 'screen') {
+        cleanupScreenShare(metadata.userId, data.producerId);
+      } else {
+        producerMetadataRef.current.delete(data.producerId);
+      }
+
       // Remote stream cleanup handled by user-left
     };
     socketManager.on('producer-closed', handleProducerClosed);
@@ -811,26 +988,34 @@ export default function Call() {
       name: string;
     }) => {
       console.log('Screen share started:', data);
-      
-      // Consume the producer
-      await consumeScreenShareProducer(data.producerId, data.userId);
-      
+
+      producerMetadataRef.current.set(data.producerId, {
+        userId: data.userId,
+        source: 'screen',
+        kind: 'video',
+      });
+
+      screenShareProducersRef.current.set(data.userId, data.producerId);
+
+      const alreadyActive = activeScreenShareProducersRef.current.has(data.producerId);
+
+      if (!alreadyActive) {
+        await consumeScreenShareProducer(data.producerId, data.userId);
+      }
+
       // Add to screen shares (don't add if it's our own)
-      if (data.userId !== user?.id) {
+      if (data.userId !== user?.id && !alreadyActive) {
         addScreenShare({
           userId: data.userId,
           producerId: data.producerId,
           name: data.name,
         });
-        
-        // Store producer mapping
-        screenShareProducersRef.current.set(data.userId, data.producerId);
-        
+
         // Auto-pin if none pinned (only for other users' screen shares)
         if (!pinnedScreenShareUserId) {
           setPinnedScreenShare(data.userId);
         }
-        
+
         toast.success(`${data.name} started sharing screen`);
       }
     };
@@ -840,27 +1025,8 @@ export default function Call() {
     // Screen share stopped event
     const handleScreenShareStopped = (data: { userId: string; producerId: string }) => {
       console.log('Screen share stopped:', data);
-      
-      removeScreenShare(data.userId);
-      screenShareProducersRef.current.delete(data.userId);
-      
-      // Clean up screen share stream
-      setScreenShareStreams(prev => {
-        const newStreams = new Map(prev);
-        const stream = newStreams.get(data.userId);
-        if (stream) {
-          stream.getTracks().forEach(track => track.stop());
-          newStreams.delete(data.userId);
-        }
-        return newStreams;
-      });
-      
-      // Handle pin if was pinned
-      if (pinnedScreenShareUserId === data.userId) {
-        const nextShare = Array.from(screenShares.values()).find(s => s.userId !== data.userId);
-        setPinnedScreenShare(nextShare?.userId || null);
-      }
-      
+      cleanupScreenShare(data.userId, data.producerId);
+
       if (data.userId !== user?.id) {
         toast('Screen sharing stopped');
       }
@@ -870,7 +1036,7 @@ export default function Call() {
   };
 
   // Consume screen share producer separately
-  const consumeScreenShareProducer = async (producerId: string, userId: string) => {
+  const consumeScreenShareProducer = async (producerId: string, userId?: string) => {
     try {
       // Prevent duplicate consumption
       if (consumingProducersRef.current.has(producerId)) {
@@ -897,13 +1063,16 @@ export default function Call() {
       }
 
       // Add to screen share streams (separate from participant video streams)
+      const ownerId = userId || producerMetadataRef.current.get(producerId)?.userId || producerId;
+
       setScreenShareStreams(prev => {
         const newStreams = new Map(prev);
         
         if (track.readyState === 'live') {
           const stream = new MediaStream([track]);
-          newStreams.set(userId, stream);
-          console.log('Created screen share stream for user:', userId);
+          newStreams.set(ownerId, stream);
+          activeScreenShareProducersRef.current.add(producerId);
+          console.log('Created screen share stream for user:', ownerId);
         }
         
         return newStreams;
@@ -923,15 +1092,17 @@ export default function Call() {
       }
       
       // Skip if this is a screen share producer (screen shares are handled separately)
-      const isScreenShare = Array.from(screenShareProducersRef.current.values()).includes(producerId);
-      if (isScreenShare) {
+      const metadata = producerMetadataRef.current.get(producerId);
+      if (metadata?.source === 'screen') {
         console.log('Skipping screen share producer in consumeProducer:', producerId);
         return;
       }
       
       consumingProducersRef.current.add(producerId);
       
-      console.log('Starting to consume producer:', { producerId, userId, kind });
+      const resolvedUserId = userId ?? metadata?.userId;
+
+      console.log('Starting to consume producer:', { producerId, userId: resolvedUserId, kind });
       
       const track = await webrtcManager.consumeProducer(producerId);
       
@@ -959,11 +1130,11 @@ export default function Call() {
         trackReadyState: track.readyState,
       });
 
-      if (userId) {
+      if (resolvedUserId) {
         // Merge tracks for the same user instead of overwriting
         setRemoteStreams(prev => {
           const newStreams = new Map(prev);
-          const existingStream = newStreams.get(userId);
+          const existingStream = newStreams.get(resolvedUserId);
           
           if (existingStream) {
             // Check if track of same kind already exists
@@ -1028,8 +1199,8 @@ export default function Call() {
               existingStream.addTrack(track);
               // Create new MediaStream reference to trigger React update
               const updatedStream = new MediaStream(existingStream.getTracks());
-              newStreams.set(userId, updatedStream);
-              console.log('Updated existing stream for user:', userId, 'tracks:', updatedStream.getTracks().length, 'track states:', updatedStream.getTracks().map(t => ({ kind: t.kind, id: t.id, state: t.readyState })));
+              newStreams.set(resolvedUserId, updatedStream);
+              console.log('Updated existing stream for user:', resolvedUserId, 'tracks:', updatedStream.getTracks().length, 'track states:', updatedStream.getTracks().map(t => ({ kind: t.kind, id: t.id, state: t.readyState })));
             } else {
               console.error('❌ Track became ended before adding to stream:', track.id, track.readyState);
               return prev; // Don't update if track is ended
@@ -1038,8 +1209,8 @@ export default function Call() {
             // Create new stream for this user - only if track is live
             if (track.readyState === 'live') {
               const stream = new MediaStream([track]);
-              newStreams.set(userId, stream);
-              console.log('Created new stream for user:', userId, 'track kind:', track.kind, 'track id:', track.id);
+              newStreams.set(resolvedUserId, stream);
+              console.log('Created new stream for user:', resolvedUserId, 'track kind:', track.kind, 'track id:', track.id);
             } else {
               console.error('❌ Track ended before creating stream:', track.id, track.readyState);
               return prev; // Don't create stream with ended track
@@ -1048,7 +1219,7 @@ export default function Call() {
           
           return newStreams;
         });
-        console.log('Remote stream added to state:', { producerId, userId, kind });
+        console.log('Remote stream added to state:', { producerId, userId: resolvedUserId, kind });
       } else {
         // Fallback if no userId (shouldn't happen with current backend)
         console.warn('No userId provided for producer:', producerId);
@@ -1133,6 +1304,10 @@ export default function Call() {
         
         // Clear screen share producers ref
         screenShareProducersRef.current.clear();
+        producerMetadataRef.current.clear();
+        activeScreenShareProducersRef.current.clear();
+        producerMetadataRef.current.clear();
+        activeScreenShareProducersRef.current.clear();
         
         // Stop local screen share if active
         if (isScreenSharing) {
@@ -1446,7 +1621,38 @@ export default function Call() {
   };
 
   const handleStartScreenShare = async () => {
+    console.log('handleStartScreenShare called, current state:', {
+      isScreenSharing,
+      userId: user?.id,
+      hasExistingProducer: !!webrtcManager.getScreenShareProducer(),
+      isStopping: isStoppingScreenShareRef.current,
+    });
+
+    if (isStoppingScreenShareRef.current) {
+      await waitForScreenShareTeardown('pre-start');
+    }
+
+    if (isScreenSharing) {
+      console.log('Screen share already active, stopping first...');
+      await handleStopScreenShare();
+      await waitForScreenShareTeardown('after-handleStop');
+    }
+
+    const lingeringProducer = webrtcManager.getScreenShareProducer();
+    if (lingeringProducer) {
+      console.log('Lingering screen share producer detected before starting new share, forcing cleanup', {
+        producerId: lingeringProducer.id,
+      });
+      const { producerId: forcedClosedId } = await webrtcManager.closeScreenShareProducer();
+      if (forcedClosedId && user?.id) {
+        cleanupScreenShare(user.id, forcedClosedId);
+      }
+      await waitForScreenShareTeardown('after-forced-close');
+    }
+
     try {
+      console.log('Starting screen share...');
+
       // 1. Get screen stream
       const screenStream = await mediaManager.startScreenShare();
       const screenTrack = screenStream.getVideoTracks()[0];
@@ -1455,25 +1661,56 @@ export default function Call() {
         throw new Error('Failed to get screen share track');
       }
 
+      console.log('Screen share stream obtained, track:', {
+        id: screenTrack.id,
+        kind: screenTrack.kind,
+        enabled: screenTrack.enabled,
+        readyState: screenTrack.readyState
+      });
+
+      if (!user?.id) {
+        throw new Error('User not found');
+      }
+
       // 2. Create producer
+      console.log('Creating screen share producer...');
       const producer = await webrtcManager.produceScreenShare(screenTrack);
 
+      console.log('Screen share producer created:', producer.id);
+
       // 3. Notify backend
+      console.log('Notifying backend of screen share start...');
       await socketManager.startScreenShare(producer.id);
+      console.log('Backend notified');
 
       // 4. Update state
       setIsScreenSharing(true);
+      console.log('Set isScreenSharing to true');
       
       // Store producer mapping FIRST (so consumeProducer can skip it)
-      screenShareProducersRef.current.set(user!.id, producer.id);
+      screenShareProducersRef.current.set(user.id, producer.id);
+      producerMetadataRef.current.set(producer.id, {
+        userId: user.id,
+        source: 'screen',
+        kind: 'video',
+      });
+      activeScreenShareProducersRef.current.add(producer.id);
+      
+      console.log('Producer metadata stored:', {
+        userId: user.id,
+        producerId: producer.id,
+        totalActiveProducers: activeScreenShareProducersRef.current.size
+      });
       
       // Add to screen shares (will be filtered out in UI for current user)
       addScreenShare({
-        userId: user!.id,
+        userId: user.id,
         producerId: producer.id,
-        name: user!.name,
+        name: user.name,
         stream: screenStream,
       });
+
+      console.log('Screen share state updated, isScreenSharing:', true);
 
       // Note: We don't auto-pin our own screen share (user won't see it anyway)
 
@@ -1481,10 +1718,12 @@ export default function Call() {
 
       // 6. Handle track end (user stops via browser)
       screenTrack.onended = async () => {
+        console.log('Screen track ended via browser');
         await handleStopScreenShare();
       };
     } catch (error: any) {
       console.error('Error starting screen share:', error);
+      setIsScreenSharing(false);
       if (error.name === 'NotAllowedError') {
         toast.error('Screen sharing permission denied');
       } else if (error.name === 'NotReadableError') {
@@ -1496,45 +1735,80 @@ export default function Call() {
   };
 
   const handleStopScreenShare = async () => {
-    try {
-      const producer = webrtcManager.getScreenShareProducer();
-      if (!producer) return;
+    if (!user?.id) {
+      return;
+    }
 
-      // 1. Close producer
-      await webrtcManager.closeScreenShareProducer();
+    console.log('handleStopScreenShare called, current isScreenSharing:', isScreenSharing, 'isStopping:', isStoppingScreenShareRef.current);
+
+    // Prevent double-calls (e.g., from track.onended + user click)
+    if (isStoppingScreenShareRef.current) {
+      console.log('Already stopping screen share, ignoring duplicate call');
+      return;
+    }
+
+    const producer = webrtcManager.getScreenShareProducer();
+    const fallbackProducerId = screenShareProducersRef.current.get(user.id);
+    const producerId = producer?.id ?? fallbackProducerId ?? null;
+
+    console.log('Stop screen share - producerId:', producerId, 'hasProducer:', !!producer);
+
+    // If no producer and no state, already stopped
+    if (!producer && !producerId && !isScreenSharing) {
+      console.log('Already stopped, nothing to do');
+      return;
+    }
+
+    // Set stopping flag to prevent duplicate calls
+    isStoppingScreenShareRef.current = true;
+    console.log('Set isStoppingScreenShareRef to true');
+
+    try {
+      // Set UI state immediately to prevent UI actions
+      setIsScreenSharing(false);
+      console.log('Set isScreenSharing to false immediately');
+
+      // 1. Close producer if still active
+      if (producer) {
+        const { producerId: closedId } = await webrtcManager.closeScreenShareProducer();
+        console.log('Closed producer:', closedId);
+        if (closedId) {
+          cleanupScreenShare(user.id, closedId);
+          toast.success('Screen sharing stopped');
+          return;
+        }
+      }
 
       // 2. Stop media
       mediaManager.stopScreenShare();
 
-      // 3. Notify backend
-      await socketManager.stopScreenShare(producer.id);
-
-      // 4. Update state
-      removeScreenShare(user!.id);
-      setIsScreenSharing(false);
-      screenShareProducersRef.current.delete(user!.id);
-
-      // Clean up screen share stream
-      setScreenShareStreams(prev => {
-        const newStreams = new Map(prev);
-        const stream = newStreams.get(user!.id);
-        if (stream) {
-          stream.getTracks().forEach(track => track.stop());
-          newStreams.delete(user!.id);
+      // 3. Notify backend (best-effort)
+      if (producerId) {
+        try {
+          await socketManager.stopScreenShare(producerId);
+          console.log('Notified backend - screen share stopped');
+        } catch (socketError) {
+          console.warn('stopScreenShare emit failed, attempting closeProducer fallback', socketError);
+          try {
+            await socketManager.closeProducer(producerId);
+          } catch (closeError) {
+            console.warn('closeProducer fallback failed', closeError);
+          }
         }
-        return newStreams;
-      });
-
-      // 5. Handle pin (unpin if was pinned, pin next if available)
-      if (pinnedScreenShareUserId === user!.id) {
-        const nextShare = Array.from(screenShares.values()).find(s => s.userId !== user!.id);
-        setPinnedScreenShare(nextShare?.userId || null);
       }
 
+      // 4. Update state
+      cleanupScreenShare(user.id, producerId ?? undefined);
+
+      console.log('Screen share stop complete, isScreenSharing should be false');
       toast.success('Screen sharing stopped');
     } catch (error) {
       console.error('Error stopping screen share:', error);
+      setIsScreenSharing(false);
       toast.error('Failed to stop screen sharing');
+    } finally {
+      isStoppingScreenShareRef.current = false;
+      console.log('Reset isStoppingScreenShareRef to false (finally)');
     }
   };
 
