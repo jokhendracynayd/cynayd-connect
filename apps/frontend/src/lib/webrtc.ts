@@ -7,6 +7,7 @@ class WebRTCManager {
   private recvTransport: any = null;
   private producers: Map<string, any> = new Map(); // producerId -> producer
   private producersByKind: Map<'audio' | 'video', any> = new Map(); // kind -> producer
+  private screenShareProducer: any = null; // Store separately from video producer
   private consumers: Map<string, any> = new Map();
 
   async initialize(rtpCapabilities: any) {
@@ -270,13 +271,6 @@ class WebRTCManager {
     this.recvTransport = null;
   }
 
-  cleanup() {
-    this.closeProducers();
-    this.closeConsumers();
-    this.closeTransports();
-    this.device = null;
-  }
-
   getDevice() {
     return this.device;
   }
@@ -357,6 +351,79 @@ class WebRTCManager {
       console.error('Error replacing audio track:', error);
       throw error;
     }
+  }
+
+  async produceScreenShare(track: MediaStreamTrack): Promise<any> {
+    if (!this.sendTransport) {
+      throw new Error('Send transport not created');
+    }
+
+    // Close existing screen share producer if any
+    if (this.screenShareProducer) {
+      await this.closeScreenShareProducer();
+    }
+
+    const producer = await this.sendTransport.produce({
+      track,
+      encodings: [
+        { maxBitrate: 2500000 }, // Higher bitrate for screen
+        { maxBitrate: 1000000 },
+        { maxBitrate: 500000 },
+      ],
+      codecOptions: {
+        videoGoogleStartBitrate: 1500,
+      },
+      appData: {
+        source: 'screen', // Metadata to identify screen share
+      },
+    });
+
+    this.screenShareProducer = producer;
+
+    // Listen for track end
+    producer.track.onended = () => {
+      console.log('Screen share producer track ended');
+      this.handleScreenShareEnded();
+    };
+
+    console.log('Screen share producer created:', producer.id);
+    return producer;
+  }
+
+  async closeScreenShareProducer(): Promise<void> {
+    if (this.screenShareProducer) {
+      try {
+        this.screenShareProducer.close();
+        await socketManager.closeProducer(this.screenShareProducer.id);
+      } catch (error) {
+        console.error('Error closing screen share producer:', error);
+      }
+      this.screenShareProducer = null;
+    }
+  }
+
+  getScreenShareProducer(): any {
+    return this.screenShareProducer;
+  }
+
+  // Handle screen share ended (track stopped by user)
+  private async handleScreenShareEnded() {
+    // Emit stop event
+    const socket = (socketManager as any).socket;
+    if (socket && socket.connected) {
+      socket.emit('screen-share-stopped', {
+        producerId: this.screenShareProducer?.id,
+      });
+    }
+    this.screenShareProducer = null;
+  }
+
+  cleanup() {
+    this.closeScreenShareProducer();
+    this.closeProducers();
+    this.closeConsumers();
+    this.closeTransports();
+    this.device = null;
   }
 }
 

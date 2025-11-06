@@ -127,14 +127,29 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
       
       await ProducerManager.addProducer(socket.id, producer, roomId, userId);
 
-      // Notify other participants
-      socket.to(socket.data.roomCode).emit('new-producer', {
-        producerId: producer.id,
-        userId: socket.data.userId,
-        kind: validatedData.kind,
-      });
+      // Check if it's a screen share (from appData)
+      const isScreenShare = validatedData.appData?.source === 'screen';
 
-      logger.info(`Producer created: ${producer.id} (${validatedData.kind})`);
+      if (isScreenShare) {
+        // Emit screen-share-started event
+        socket.to(socket.data.roomCode).emit('screen-share-started', {
+          userId: socket.data.userId,
+          producerId: producer.id,
+          name: (socket.data as any).name || 'Unknown',
+          kind: 'video',
+        });
+
+        logger.info(`Screen share started: ${producer.id} by ${userId}`);
+      } else {
+        // Regular new-producer event
+        socket.to(socket.data.roomCode).emit('new-producer', {
+          producerId: producer.id,
+          userId: socket.data.userId,
+          kind: validatedData.kind,
+        });
+
+        logger.info(`Producer created: ${producer.id} (${validatedData.kind})`);
+      }
 
       callback({ id: producer.id });
     } catch (error: unknown) {
@@ -208,17 +223,41 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
       // Validate input
       const validatedData = closeProducerSchema.parse(data);
       
+      // Check if it's a screen share before closing
+      const producerInfo = ProducerManager.getProducerById(validatedData.producerId);
+      const isScreenShare = producerInfo?.producer.appData?.source === 'screen';
+      
       await ProducerManager.closeProducer(socket.id, validatedData.producerId);
       
-      socket.to(socket.data.roomCode).emit('producer-closed', {
-        producerId: validatedData.producerId,
-        userId: socket.data.userId,
-      });
-
-      logger.info(`Producer closed: ${validatedData.producerId}`);
+      if (isScreenShare) {
+        socket.to(socket.data.roomCode).emit('screen-share-stopped', {
+          userId: socket.data.userId,
+          producerId: validatedData.producerId,
+        });
+        logger.info(`Screen share stopped: ${validatedData.producerId}`);
+      } else {
+        socket.to(socket.data.roomCode).emit('producer-closed', {
+          producerId: validatedData.producerId,
+          userId: socket.data.userId,
+        });
+        logger.info(`Producer closed: ${validatedData.producerId}`);
+      }
     } catch (error: unknown) {
       logger.error('Error closing producer:', error);
     }
+  });
+
+  // Screen share started (acknowledgment handler)
+  socket.on('screen-share-started', async (data: unknown, callback) => {
+    // This is mainly for acknowledgment
+    // The actual producer was created via 'produce' event
+    callback({ success: true });
+  });
+
+  // Screen share stopped (acknowledgment handler)
+  socket.on('screen-share-stopped', async (data: unknown, callback) => {
+    // Mainly for acknowledgment
+    callback({ success: true });
   });
 
   // Pause producer

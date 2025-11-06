@@ -297,6 +297,39 @@ class SocketManager {
     this.socket.emit('raised-hand', { uid, isRaised });
   }
 
+  startScreenShare(producerId: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) return reject(new Error('Not connected'));
+      
+      this.socket.emit('screen-share-started', { producerId }, (response: any) => {
+        if (response.error) reject(new Error(response.error));
+        else resolve(response);
+      });
+    });
+  }
+
+  stopScreenShare(producerId: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) return reject(new Error('Not connected'));
+      
+      this.socket.emit('screen-share-stopped', { producerId }, (response: any) => {
+        if (response.error) reject(new Error(response.error));
+        else resolve(response);
+      });
+    });
+  }
+
+  closeProducer(producerId: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) return reject(new Error('Not connected'));
+      
+      this.socket.emit('closeProducer', { producerId }, (response: any) => {
+        if (response.error) reject(new Error(response.error));
+        else resolve(response);
+      });
+    });
+  }
+
   updateRoomSettings(settings: { isPublic: boolean }): Promise<any> {
     return new Promise((resolve, reject) => {
       if (!this.socket) return reject(new Error('Not connected'));

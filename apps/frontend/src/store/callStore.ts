@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ScreenShare } from '../types/screenShare';
 
 export interface RoomJoinRequest {
   id: string;
@@ -34,6 +35,9 @@ interface CallState {
   pendingRequests: RoomJoinRequest[];
   activeSpeakerId: string | null;
   raisedHands: Set<string>;
+  screenShares: Map<string, ScreenShare>; // userId -> ScreenShare
+  pinnedScreenShareUserId: string | null; // User's local pin choice
+  isScreenSharing: boolean; // Local user's screen share state
   selectedDevices: {
     audioInput: string;
     videoInput: string;
@@ -60,6 +64,10 @@ interface CallState {
   setActiveSpeaker: (userId: string | null) => void;
   toggleRaiseHand: () => void;
   setRaiseHand: (userId: string, isRaised: boolean) => void;
+  addScreenShare: (share: ScreenShare) => void;
+  removeScreenShare: (userId: string) => void;
+  setPinnedScreenShare: (userId: string | null) => void;
+  setIsScreenSharing: (isSharing: boolean) => void;
   setSelectedDevices: (devices: Partial<CallState['selectedDevices']>) => void;
   setSettings: (settings: Partial<CallState['settings']>) => void;
   resetCallState: () => void;
@@ -77,6 +85,9 @@ export const useCallStore = create<CallState>((set) => ({
   pendingRequests: [],
   activeSpeakerId: null,
   raisedHands: new Set<string>(),
+  screenShares: new Map<string, ScreenShare>(),
+  pinnedScreenShareUserId: null,
+  isScreenSharing: false,
   selectedDevices: {
     audioInput: '',
     videoInput: '',
@@ -163,6 +174,18 @@ export const useCallStore = create<CallState>((set) => ({
       ),
     };
   }),
+  addScreenShare: (share) => set((state) => {
+    const newScreenShares = new Map(state.screenShares);
+    newScreenShares.set(share.userId, share);
+    return { screenShares: newScreenShares };
+  }),
+  removeScreenShare: (userId) => set((state) => {
+    const newScreenShares = new Map(state.screenShares);
+    newScreenShares.delete(userId);
+    return { screenShares: newScreenShares };
+  }),
+  setPinnedScreenShare: (userId) => set({ pinnedScreenShareUserId: userId }),
+  setIsScreenSharing: (isSharing) => set({ isScreenSharing: isSharing }),
   setSelectedDevices: (devices) => set((state) => ({
     selectedDevices: { ...state.selectedDevices, ...devices },
   })),
@@ -181,6 +204,9 @@ export const useCallStore = create<CallState>((set) => ({
     pendingRequests: [],
     activeSpeakerId: null,
     raisedHands: new Set<string>(),
+    screenShares: new Map<string, ScreenShare>(),
+    pinnedScreenShareUserId: null,
+    isScreenSharing: false,
     selectedDevices: {
       audioInput: '',
       videoInput: '',

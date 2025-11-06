@@ -46,7 +46,13 @@ const baseConfig = {
   },
   
   cors: {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    // Support multiple origins for development (comma-separated)
+    // Example: CORS_ORIGIN=http://localhost:5173,http://192.168.1.100:5173
+    origin: process.env.CORS_ORIGIN
+      ? (process.env.CORS_ORIGIN.includes(',')
+          ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
+          : [process.env.CORS_ORIGIN.trim()])
+      : ['http://localhost:5173', 'http://172.29.208.1:5173'],
     credentials: true,
   },
   

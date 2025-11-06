@@ -363,7 +363,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         // Exclude producers from current socket
         const isFromCurrentSocket = ProducerManager.getProducers(socket.id).some(sp => sp.id === p.id);
         if (isFromCurrentSocket) return false;
-        
+
         // Only include producers from the SAME room
         const producerData = ProducerManager.getProducerById(p.id);
         const otherSocket = io.sockets.sockets.get(producerData?.socketId || '');
@@ -402,8 +402,8 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
             });
           }
           userMap.get(userId)!.producers.push({
-            producerId: p.id,
-            kind: p.kind,
+          producerId: p.id,
+          kind: p.kind,
           });
         }
       });

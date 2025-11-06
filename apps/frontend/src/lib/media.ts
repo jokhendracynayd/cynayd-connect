@@ -4,6 +4,7 @@ import type { RtpCapabilities } from 'mediasoup-client/lib/RtpParameters';
 export class MediaManager {
   private device: Device | null = null;
   private localStream: MediaStream | null = null;
+  private screenShareStream: MediaStream | null = null;
 
   async initialize(rtpCapabilities: RtpCapabilities) {
     try {
@@ -19,6 +20,15 @@ export class MediaManager {
 
   async getLocalMedia(audio: boolean = true, video: boolean = true, audioDeviceId?: string, videoDeviceId?: string): Promise<MediaStream> {
     try {
+      // Check if mediaDevices API is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+        const errorMessage = isSecureContext
+          ? 'getUserMedia API not supported in this browser'
+          : 'getUserMedia requires HTTPS or localhost. Please use HTTPS or access from localhost.';
+        throw new Error(errorMessage);
+      }
+
       const constraints: MediaStreamConstraints = {
         audio: audio ? (audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true) : false,
         video: video ? (videoDeviceId ? { deviceId: { exact: videoDeviceId } } : true) : true,
@@ -61,6 +71,15 @@ export class MediaManager {
 
   async getSingleTrack(kind: 'audio' | 'video', deviceId?: string): Promise<MediaStreamTrack> {
     try {
+      // Check if mediaDevices API is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+        const errorMessage = isSecureContext
+          ? 'getUserMedia API not supported in this browser'
+          : 'getUserMedia requires HTTPS or localhost. Please use HTTPS or access from localhost.';
+        throw new Error(errorMessage);
+      }
+
       const constraints: MediaStreamConstraints = {
         audio: kind === 'audio' ? (deviceId ? { deviceId: { exact: deviceId } } : true) : false,
         video: kind === 'video' ? (deviceId ? { deviceId: { exact: deviceId } } : true) : false,
@@ -105,6 +124,61 @@ export class MediaManager {
     return this.localStream;
   }
 
+  async startScreenShare(): Promise<MediaStream> {
+    try {
+      // Check if mediaDevices API is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+        const errorMessage = isSecureContext
+          ? 'getDisplayMedia API not supported in this browser'
+          : 'Screen sharing requires HTTPS or localhost. Please use HTTPS or access from localhost.';
+        throw new Error(errorMessage);
+      }
+
+      // Capture screen with video (audio optional, disabled for now)
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: 'monitor', // Prefer full screen
+          cursor: 'always', // Show cursor
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false, // Set to true if capturing system audio is desired
+      });
+
+      this.screenShareStream = stream;
+
+      // Handle track end (user stops sharing via browser UI)
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          console.log('Screen share track ended');
+          this.screenShareStream = null;
+        };
+      }
+
+      console.log('Screen share stream started');
+      return stream;
+    } catch (error) {
+      console.error('Failed to start screen share:', error);
+      throw error;
+    }
+  }
+
+  stopScreenShare() {
+    if (this.screenShareStream) {
+      this.screenShareStream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Stopped screen share track:', track.kind);
+      });
+      this.screenShareStream = null;
+    }
+  }
+
+  getScreenShareStream(): MediaStream | null {
+    return this.screenShareStream;
+  }
+
   canProduce(kind: 'audio' | 'video'): boolean {
     if (!this.device) return false;
     return this.device.canProduce(kind);
@@ -112,6 +186,25 @@ export class MediaManager {
 
   async getDevices() {
     try {
+      // Check if mediaDevices API is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+        const errorMessage = isSecureContext
+          ? 'MediaDevices API not supported in this browser'
+          : 'MediaDevices API requires HTTPS or localhost. Please use HTTPS or access from localhost.';
+        
+        console.warn('⚠️ MediaDevices API not available:', errorMessage);
+        console.warn('Current URL:', window.location.href);
+        console.warn('Protocol:', window.location.protocol);
+        console.warn('Hostname:', window.location.hostname);
+        
+        return {
+          audioInput: [],
+          videoInput: [],
+          audioOutput: [],
+        };
+      }
+
       const devices = await navigator.mediaDevices.enumerateDevices();
       
       return {

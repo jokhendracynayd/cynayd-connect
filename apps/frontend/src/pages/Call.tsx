@@ -11,6 +11,7 @@ import ParticipantList from '../components/call/ParticipantList';
 import PendingRequestsPanel from '../components/call/PendingRequestsPanel';
 import RoomSettings from '../components/call/RoomSettings';
 import WaitingRoom from '../components/call/WaitingRoom';
+import ScreenShareSection from '../components/call/ScreenShareSection';
 import { getPendingRequests, requestRoomJoin } from '../lib/api';
 import api from '../lib/api';
 import { storage } from '../lib/storage';
@@ -37,6 +38,7 @@ export default function Call() {
     roomIsPublic,
     pendingRequests,
     activeSpeakerId,
+    raisedHands,
     setIsAdmin,
     setRoomIsPublic,
     setPendingRequests,
@@ -45,6 +47,13 @@ export default function Call() {
     setActiveSpeaker,
     setRaiseHand,
     resetCallState,
+    screenShares,
+    pinnedScreenShareUserId,
+    isScreenSharing,
+    addScreenShare,
+    removeScreenShare,
+    setPinnedScreenShare,
+    setIsScreenSharing,
   } = useCallStore();
   
   const navigate = useNavigate();
@@ -53,14 +62,17 @@ export default function Call() {
   const [isConnecting, setIsConnecting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [screenShareStreams, setScreenShareStreams] = useState<Map<string, MediaStream>>(new Map()); // Separate streams for screen shares
   const hasConnectedRef = useRef(false); // Prevent duplicate connections in React StrictMode
   const consumingProducersRef = useRef<Set<string>>(new Set()); // Track which producers we're consuming
+  const screenShareProducersRef = useRef<Map<string, string>>(new Map()); // userId -> producerId for screen shares
   const [showParticipantList, setShowParticipantList] = useState(false);
   const [showPendingRequests, setShowPendingRequests] = useState(false);
   const [showRoomSettings, setShowRoomSettings] = useState(false);
   const [showWaitingRoom, setShowWaitingRoom] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
   const isLeavingRef = useRef(false); // Prevent double cleanup
+  const isLoadingPendingRequestsRef = useRef(false); // Track API call in progress
 
   useEffect(() => {
     // Wait for auth check to complete
@@ -170,9 +182,15 @@ export default function Call() {
       try {
         webrtcManager.cleanup();
         mediaManager.stopLocalMedia();
+        mediaManager.stopScreenShare();
         
         // Clear all remote streams
         remoteStreams.forEach((stream) => {
+          stream.getTracks().forEach(track => track.stop());
+        });
+        
+        // Clear all screen share streams
+        screenShareStreams.forEach((stream) => {
           stream.getTracks().forEach(track => track.stop());
         });
         
@@ -196,6 +214,7 @@ export default function Call() {
       try {
         webrtcManager.cleanup();
         mediaManager.stopLocalMedia();
+        mediaManager.stopScreenShare();
         socketManager.disconnect();
       } catch (err) {
         console.warn('Error during pagehide cleanup:', err);
@@ -209,7 +228,7 @@ export default function Call() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handlePageHide);
     };
-  }, [remoteStreams]); // Include remoteStreams in deps to capture current state
+  }, [remoteStreams, screenShareStreams]); // Include streams in deps to capture current state
 
   // Handle socket disconnect event
   useEffect(() => {
@@ -221,12 +240,19 @@ export default function Call() {
         
         // Stop local media
         mediaManager.stopLocalMedia();
+        mediaManager.stopScreenShare();
         
         // Clear all remote streams
         remoteStreams.forEach((stream) => {
           stream.getTracks().forEach(track => track.stop());
         });
         setRemoteStreams(new Map());
+        
+        // Clear all screen share streams
+        screenShareStreams.forEach((stream) => {
+          stream.getTracks().forEach(track => track.stop());
+        });
+        setScreenShareStreams(new Map());
         
         // Clear video refs
         remoteVideoRefs.current.forEach((videoEl) => {
@@ -240,6 +266,7 @@ export default function Call() {
         
         // Clear consuming producers
         consumingProducersRef.current.clear();
+        screenShareProducersRef.current.clear();
         
         // Show notification
         toast.error('Connection lost. Returning to home.');
@@ -463,6 +490,7 @@ export default function Call() {
       }
       
       // Consume existing producers from other participants
+      // Note: Screen share producers are NOT included in otherProducers (backend emits screen-share-started separately)
       if (response.otherProducers && response.otherProducers.length > 0) {
         for (const producerInfo of response.otherProducers) {
           // Handle both old format (string) and new format (object)
@@ -470,7 +498,11 @@ export default function Call() {
           const userId = typeof producerInfo === 'object' ? producerInfo.userId : undefined;
           const kind = typeof producerInfo === 'object' ? producerInfo.kind : undefined;
           
-          await consumeProducer(producerId, userId, kind);
+          // Skip if this is a screen share (shouldn't happen, but safety check)
+          const isScreenShare = typeof producerInfo === 'object' && producerInfo.appData?.source === 'screen';
+          if (!isScreenShare) {
+            await consumeProducer(producerId, userId, kind);
+          }
         }
       }
 
@@ -699,6 +731,15 @@ export default function Call() {
     }) => {
       console.log('Received pending-requests-loaded socket event (verification):', data);
       
+      // If API call is in progress, don't process socket event yet (avoid race condition)
+      // The API call will set the correct state, and if socket has new requests, they'll be caught later
+      if (isLoadingPendingRequestsRef.current) {
+        console.log('API call in progress, deferring socket event processing');
+        // Store the socket data temporarily and process after API completes
+        // For now, just log - the API will handle the initial load
+        return;
+      }
+      
       // Verify: Compare with current state and update if needed
       // This ensures we have the latest data even if API call missed something
       const currentRequestIds = new Set(pendingRequests.map(r => r.id));
@@ -711,7 +752,7 @@ export default function Call() {
       data.requests.forEach(req => {
         const existingRequest = pendingRequests.find(r => r.id === req.id);
         if (!existingRequest) {
-          // New request from socket (real-time update)
+          // New request from socket (real-time update after API has loaded)
           addPendingRequest({
             id: req.id,
             userId: req.userId,
@@ -732,14 +773,17 @@ export default function Call() {
       const staleRequests = pendingRequests.filter(r => !socketRequestIds.has(r.id));
       if (staleRequests.length > 0) {
         console.log(`Found ${staleRequests.length} stale requests, refreshing from API...`);
-        // Refresh from API to get latest state
-        loadPendingRequests().catch(err => {
-          console.error('Failed to refresh pending requests:', err);
-        });
+        // Refresh from API to get latest state (only if not already loading)
+        if (!isLoadingPendingRequestsRef.current) {
+          loadPendingRequests().catch(err => {
+            console.error('Failed to refresh pending requests:', err);
+          });
+        }
       }
       
       // Only show notification for newly added requests (not verification updates)
-      if (addedCount > 0) {
+      // Don't show if we just loaded via API (to avoid duplicate toasts)
+      if (addedCount > 0 && !isLoadingPendingRequestsRef.current) {
         toast.success(`New join request${addedCount > 1 ? 's' : ''} received`, {
           duration: 4000,
         });
@@ -750,6 +794,115 @@ export default function Call() {
     };
     socketManager.on('pending-requests-loaded', handlePendingRequestsLoaded);
     eventListenersRef.current['pending-requests-loaded'] = handlePendingRequestsLoaded;
+
+    // Screen share started event
+    const handleScreenShareStarted = async (data: {
+      userId: string;
+      producerId: string;
+      name: string;
+    }) => {
+      console.log('Screen share started:', data);
+      
+      // Consume the producer
+      await consumeScreenShareProducer(data.producerId, data.userId);
+      
+      // Add to screen shares (don't add if it's our own)
+      if (data.userId !== user?.id) {
+        addScreenShare({
+          userId: data.userId,
+          producerId: data.producerId,
+          name: data.name,
+        });
+        
+        // Store producer mapping
+        screenShareProducersRef.current.set(data.userId, data.producerId);
+        
+        // Auto-pin if none pinned (only for other users' screen shares)
+        if (!pinnedScreenShareUserId) {
+          setPinnedScreenShare(data.userId);
+        }
+        
+        toast.success(`${data.name} started sharing screen`);
+      }
+    };
+    socketManager.on('screen-share-started', handleScreenShareStarted);
+    eventListenersRef.current['screen-share-started'] = handleScreenShareStarted;
+
+    // Screen share stopped event
+    const handleScreenShareStopped = (data: { userId: string; producerId: string }) => {
+      console.log('Screen share stopped:', data);
+      
+      removeScreenShare(data.userId);
+      screenShareProducersRef.current.delete(data.userId);
+      
+      // Clean up screen share stream
+      setScreenShareStreams(prev => {
+        const newStreams = new Map(prev);
+        const stream = newStreams.get(data.userId);
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+          newStreams.delete(data.userId);
+        }
+        return newStreams;
+      });
+      
+      // Handle pin if was pinned
+      if (pinnedScreenShareUserId === data.userId) {
+        const nextShare = Array.from(screenShares.values()).find(s => s.userId !== data.userId);
+        setPinnedScreenShare(nextShare?.userId || null);
+      }
+      
+      if (data.userId !== user?.id) {
+        toast.info('Screen sharing stopped');
+      }
+    };
+    socketManager.on('screen-share-stopped', handleScreenShareStopped);
+    eventListenersRef.current['screen-share-stopped'] = handleScreenShareStopped;
+  };
+
+  // Consume screen share producer separately
+  const consumeScreenShareProducer = async (producerId: string, userId: string) => {
+    try {
+      // Prevent duplicate consumption
+      if (consumingProducersRef.current.has(producerId)) {
+        console.log('Already processing screen share producer:', producerId);
+        return;
+      }
+      
+      consumingProducersRef.current.add(producerId);
+      
+      console.log('Starting to consume screen share producer:', { producerId, userId });
+      
+      const track = await webrtcManager.consumeProducer(producerId);
+      
+      consumingProducersRef.current.delete(producerId);
+      
+      if (!track) {
+        console.warn('No track received from screen share consumer:', producerId);
+        return;
+      }
+
+      if (track.readyState === 'ended') {
+        console.error('Screen share track already ended:', producerId);
+        return;
+      }
+
+      // Add to screen share streams (separate from participant video streams)
+      setScreenShareStreams(prev => {
+        const newStreams = new Map(prev);
+        
+        if (track.readyState === 'live') {
+          const stream = new MediaStream([track]);
+          newStreams.set(userId, stream);
+          console.log('Created screen share stream for user:', userId);
+        }
+        
+        return newStreams;
+      });
+    } catch (error) {
+      consumingProducersRef.current.delete(producerId);
+      console.error('Error consuming screen share producer:', error);
+    }
   };
 
   const consumeProducer = async (producerId: string, userId?: string, kind?: 'audio' | 'video') => {
@@ -757,6 +910,13 @@ export default function Call() {
       // Prevent duplicate consumption of the same producer
       if (consumingProducersRef.current.has(producerId)) {
         console.log('Already processing producer:', producerId, '- skipping duplicate consumption');
+        return;
+      }
+      
+      // Skip if this is a screen share producer (screen shares are handled separately)
+      const isScreenShare = Array.from(screenShareProducersRef.current.values()).includes(producerId);
+      if (isScreenShare) {
+        console.log('Skipping screen share producer in consumeProducer:', producerId);
         return;
       }
       
@@ -947,6 +1107,39 @@ export default function Call() {
       } catch (err) {
         console.warn('Error clearing remote streams:', err);
       }
+
+      // Step 4b: Clear all screen share streams and stop their tracks
+      try {
+        screenShareStreams.forEach((stream, userId) => {
+          try {
+            stream.getTracks().forEach(track => {
+              track.stop();
+              stream.removeTrack(track);
+            });
+          } catch (err) {
+            console.warn(`Error stopping screen share tracks for user ${userId}:`, err);
+          }
+        });
+        setScreenShareStreams(new Map());
+        
+        // Clear screen share producers ref
+        screenShareProducersRef.current.clear();
+        
+        // Stop local screen share if active
+        if (isScreenSharing) {
+          mediaManager.stopScreenShare();
+          const producer = webrtcManager.getScreenShareProducer();
+          if (producer) {
+            try {
+              await webrtcManager.closeScreenShareProducer();
+            } catch (err) {
+              console.warn('Error closing screen share producer during cleanup:', err);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error clearing screen share streams:', err);
+      }
       
       // Step 5: Clear all remote video refs
       try {
@@ -1035,9 +1228,16 @@ export default function Call() {
       return;
     }
     
+    // Prevent concurrent API calls
+    if (isLoadingPendingRequestsRef.current) {
+      console.log('Pending requests API call already in progress, skipping duplicate call');
+      return;
+    }
+    
     // Don't check isAdmin here - allow loading even if admin status not yet set
     // The API will verify admin status server-side
     
+    isLoadingPendingRequestsRef.current = true;
     try {
       console.log('Loading pending requests via API for room:', roomCode);
       const result = await getPendingRequests(roomCode);
@@ -1074,6 +1274,8 @@ export default function Call() {
         // Other errors might be network issues, but don't block UI
         toast.error('Failed to load pending requests', { duration: 3000 });
       }
+    } finally {
+      isLoadingPendingRequestsRef.current = false;
     }
   };
 
@@ -1116,6 +1318,27 @@ export default function Call() {
           }
         }
       }
+    }
+  };
+
+  const handleToggleRaiseHand = () => {
+    if (!user?.id) return;
+    
+    const userId = user.id;
+    const isCurrentlyRaised = raisedHands.has(userId);
+    const newRaisedState = !isCurrentlyRaised;
+    
+    // Emit socket event to notify others
+    socketManager.raiseHand(newRaisedState, userId);
+    
+    // Update local state immediately for better UX
+    setRaiseHand(userId, newRaisedState);
+    
+    // Show toast notification
+    if (newRaisedState) {
+      toast.success('Hand raised');
+    } else {
+      toast.info('Hand lowered');
     }
   };
 
@@ -1213,6 +1436,109 @@ export default function Call() {
     }
   };
 
+  const handleStartScreenShare = async () => {
+    try {
+      // 1. Get screen stream
+      const screenStream = await mediaManager.startScreenShare();
+      const screenTrack = screenStream.getVideoTracks()[0];
+
+      if (!screenTrack) {
+        throw new Error('Failed to get screen share track');
+      }
+
+      // 2. Create producer
+      const producer = await webrtcManager.produceScreenShare(screenTrack);
+
+      // 3. Notify backend
+      await socketManager.startScreenShare(producer.id);
+
+      // 4. Update state
+      setIsScreenSharing(true);
+      
+      // Store producer mapping FIRST (so consumeProducer can skip it)
+      screenShareProducersRef.current.set(user!.id, producer.id);
+      
+      // Add to screen shares (will be filtered out in UI for current user)
+      addScreenShare({
+        userId: user!.id,
+        producerId: producer.id,
+        name: user!.name,
+        stream: screenStream,
+      });
+
+      // Note: We don't auto-pin our own screen share (user won't see it anyway)
+
+      toast.success('Screen sharing started');
+
+      // 6. Handle track end (user stops via browser)
+      screenTrack.onended = async () => {
+        await handleStopScreenShare();
+      };
+    } catch (error: any) {
+      console.error('Error starting screen share:', error);
+      if (error.name === 'NotAllowedError') {
+        toast.error('Screen sharing permission denied');
+      } else if (error.name === 'NotReadableError') {
+        toast.error('Screen is not available');
+      } else {
+        toast.error('Failed to start screen sharing');
+      }
+    }
+  };
+
+  const handleStopScreenShare = async () => {
+    try {
+      const producer = webrtcManager.getScreenShareProducer();
+      if (!producer) return;
+
+      // 1. Close producer
+      await webrtcManager.closeScreenShareProducer();
+
+      // 2. Stop media
+      mediaManager.stopScreenShare();
+
+      // 3. Notify backend
+      await socketManager.stopScreenShare(producer.id);
+
+      // 4. Update state
+      removeScreenShare(user!.id);
+      setIsScreenSharing(false);
+      screenShareProducersRef.current.delete(user!.id);
+
+      // Clean up screen share stream
+      setScreenShareStreams(prev => {
+        const newStreams = new Map(prev);
+        const stream = newStreams.get(user!.id);
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+          newStreams.delete(user!.id);
+        }
+        return newStreams;
+      });
+
+      // 5. Handle pin (unpin if was pinned, pin next if available)
+      if (pinnedScreenShareUserId === user!.id) {
+        const nextShare = Array.from(screenShares.values()).find(s => s.userId !== user!.id);
+        setPinnedScreenShare(nextShare?.userId || null);
+      }
+
+      toast.success('Screen sharing stopped');
+    } catch (error) {
+      console.error('Error stopping screen share:', error);
+      toast.error('Failed to stop screen sharing');
+    }
+  };
+
+  const handlePinScreenShare = (userId: string) => {
+    if (pinnedScreenShareUserId === userId) {
+      // Unpin
+      setPinnedScreenShare(null);
+    } else {
+      // Pin this share
+      setPinnedScreenShare(userId);
+    }
+  };
+
    // Show waiting room if user is waiting for approval
    if (showWaitingRoom && roomCode) {
      return (
@@ -1277,9 +1603,46 @@ export default function Call() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900">
-      {/* Video Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 pb-24">
+    <div className="min-h-screen bg-gray-900 flex flex-col">
+      {/* Top Alert - You are sharing screen */}
+      {isScreenSharing && (
+        <div className="bg-yellow-600 text-white px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+              />
+            </svg>
+            <span className="font-medium">You are sharing your screen</span>
+          </div>
+          <button
+            onClick={handleStopScreenShare}
+            className="text-white hover:text-yellow-200 underline text-sm"
+          >
+            Stop sharing
+          </button>
+        </div>
+      )}
+
+      {/* Screen Share Section - Only show other users' screen shares */}
+      {screenShares.size > 0 && (
+        <div className="px-4 pt-4 pb-2 border-b border-gray-700">
+          <ScreenShareSection
+            screenShares={screenShares}
+            pinnedUserId={pinnedScreenShareUserId}
+            onPin={handlePinScreenShare}
+            remoteStreams={screenShareStreams}
+            currentUserId={user?.id}
+          />
+        </div>
+      )}
+
+      {/* Video Grid - Participant Videos Only */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4 pb-24">
         {/* Local Video */}
         <div className="bg-gray-800 rounded-lg overflow-hidden aspect-video relative">
           {localStream ? (
@@ -1438,6 +1801,7 @@ export default function Call() {
             </div>
           );
         })}
+        </div>
       </div>
 
       {/* Controls */}
@@ -1476,6 +1840,57 @@ export default function Call() {
             ) : (
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            )}
+          </button>
+
+          {/* Raise Hand Button */}
+          <button
+            onClick={handleToggleRaiseHand}
+            className={`p-4 rounded-full transition-colors ${
+              user?.id && raisedHands.has(user.id)
+                ? 'bg-yellow-600 hover:bg-yellow-700'
+                : 'bg-gray-700 hover:bg-gray-600'
+            } text-white`}
+            title={user?.id && raisedHands.has(user.id) ? 'Lower hand' : 'Raise hand'}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 0a1.5 1.5 0 00-3 0v2.5m6 0V11m0-5.5v-1a1.5 1.5 0 00-3 0v1m0 0V11m3-5.5a1.5 1.5 0 00-3 0v3m6 0V11"
+              />
+            </svg>
+          </button>
+
+          {/* Screen Share Button */}
+          <button
+            onClick={isScreenSharing ? handleStopScreenShare : handleStartScreenShare}
+            className={`p-4 rounded-full transition-colors ${
+              isScreenSharing
+                ? 'bg-red-600 hover:bg-red-700'
+                : 'bg-gray-700 hover:bg-gray-600'
+            } text-white`}
+            title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
+          >
+            {isScreenSharing ? (
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            ) : (
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                />
               </svg>
             )}
           </button>
