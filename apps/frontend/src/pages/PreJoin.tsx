@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useAuthStore } from '../store/authStore';
 import { useCallStore } from '../store/callStore';
 import { mediaManager } from '../lib/media';
 import { toast } from 'react-hot-toast';
@@ -13,7 +12,6 @@ interface MediaDeviceInfo {
 
 export default function PreJoin() {
   const { roomCode } = useParams<{ roomCode: string }>();
-  const { user } = useAuthStore();
   const navigate = useNavigate();
   const { settings, setSettings, selectedDevices, setSelectedDevices, localStream, setLocalStream } = useCallStore();
 
@@ -25,7 +23,6 @@ export default function PreJoin() {
   }>({ audioInput: [], videoInput: [], audioOutput: [] });
   const [isLoading, setIsLoading] = useState(false);
   const [hasDevices, setHasDevices] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     loadDevices();

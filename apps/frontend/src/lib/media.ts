@@ -1,12 +1,13 @@
 import { Device } from 'mediasoup-client';
-import type { RtpCapabilities } from 'mediasoup-client/lib/RtpParameters';
+
+type RouterRtpCapabilities = Parameters<Device['load']>[0]['routerRtpCapabilities'];
 
 export class MediaManager {
   private device: Device | null = null;
   private localStream: MediaStream | null = null;
   private screenShareStream: MediaStream | null = null;
 
-  async initialize(rtpCapabilities: RtpCapabilities) {
+  async initialize(rtpCapabilities: RouterRtpCapabilities) {
     try {
       this.device = new Device();
       await this.device.load({ routerRtpCapabilities: rtpCapabilities });
@@ -139,7 +140,6 @@ export class MediaManager {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           displaySurface: 'monitor', // Prefer full screen
-          cursor: 'always', // Show cursor
           width: { ideal: 1920 },
           height: { ideal: 1080 },
         },

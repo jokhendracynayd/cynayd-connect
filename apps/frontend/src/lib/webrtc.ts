@@ -1,6 +1,8 @@
 import { Device } from 'mediasoup-client';
 import { socketManager } from './socket';
 
+type RouterRtpCapabilities = Parameters<Device['load']>[0]['routerRtpCapabilities'];
+
 class WebRTCManager {
   private device: Device | null = null;
   private sendTransport: any = null;
@@ -10,7 +12,7 @@ class WebRTCManager {
   private screenShareProducer: any = null; // Store separately from video producer
   private consumers: Map<string, any> = new Map();
 
-  async initialize(rtpCapabilities: any) {
+  async initialize(rtpCapabilities: RouterRtpCapabilities) {
     this.device = new Device();
     await this.device.load({ routerRtpCapabilities: rtpCapabilities });
     console.log('Device initialized');
@@ -33,7 +35,7 @@ class WebRTCManager {
       }
     });
 
-    transport.on('icestatechange', (state) => {
+    (transport as any).on('icestatechange', (state: string) => {
       console.log('Send transport ICE state:', state);
       if (state === 'failed' || state === 'disconnected') {
         console.error('❌ Send transport ICE connection failed or disconnected!');
@@ -50,7 +52,7 @@ class WebRTCManager {
     });
 
     // Track DTLS state
-    transport.on('dtlsstatechange', (state) => {
+    (transport as any).on('dtlsstatechange', (state: string) => {
       console.log('Send transport DTLS state:', state);
       if (state === 'failed' || state === 'closed') {
         console.error('❌ Send transport DTLS failed!');
@@ -91,7 +93,7 @@ class WebRTCManager {
       }
     });
 
-    transport.on('icestatechange', (state) => {
+    (transport as any).on('icestatechange', (state: string) => {
       console.log('Recv transport ICE state:', state);
       if (state === 'failed' || state === 'disconnected') {
         console.error('❌ Recv transport ICE connection failed or disconnected!');
@@ -108,7 +110,7 @@ class WebRTCManager {
     });
 
     // Track DTLS state
-    transport.on('dtlsstatechange', (state) => {
+    (transport as any).on('dtlsstatechange', (state: string) => {
       console.log('Recv transport DTLS state:', state);
       if (state === 'failed' || state === 'closed') {
         console.error('❌ Recv transport DTLS failed!');

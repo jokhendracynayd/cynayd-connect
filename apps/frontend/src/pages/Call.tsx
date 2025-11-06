@@ -6,7 +6,6 @@ import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
 import { webrtcManager } from '../lib/webrtc';
 import { toast } from 'react-hot-toast';
-import ParticipantTile from '../components/call/ParticipantTile';
 import ParticipantList from '../components/call/ParticipantList';
 import PendingRequestsPanel from '../components/call/PendingRequestsPanel';
 import RoomSettings from '../components/call/RoomSettings';
@@ -16,9 +15,24 @@ import { getPendingRequests, requestRoomJoin } from '../lib/api';
 import api from '../lib/api';
 import { storage } from '../lib/storage';
 
+type SocketEventKey =
+  | 'user-joined'
+  | 'user-left'
+  | 'new-producer'
+  | 'producer-closed'
+  | 'chat'
+  | 'audio-mute'
+  | 'video-mute'
+  | 'active-speaker'
+  | 'raised-hand'
+  | 'join-request'
+  | 'pending-requests-loaded'
+  | 'screen-share-started'
+  | 'screen-share-stopped';
+
 export default function Call() {
   const { roomCode } = useParams<{ roomCode: string }>();
-  const { user, token, logout, hasCheckedAuth } = useAuthStore();
+  const { user, token, hasCheckedAuth } = useAuthStore();
   const { 
     settings, 
     localStream, 
@@ -32,7 +46,6 @@ export default function Call() {
     addParticipant,
     removeParticipant,
     updateParticipant,
-    setParticipants,
     selectedDevices,
     isAdmin,
     roomIsPublic,
@@ -43,7 +56,6 @@ export default function Call() {
     setRoomIsPublic,
     setPendingRequests,
     addPendingRequest,
-    removePendingRequest,
     setActiveSpeaker,
     setRaiseHand,
     resetCallState,
@@ -173,7 +185,7 @@ export default function Call() {
 
   // Handle browser tab/window close - cleanup on beforeunload
   useEffect(() => {
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+    const handleBeforeUnload = (_event: BeforeUnloadEvent) => {
       // Attempt cleanup before page unloads
       // Note: Modern browsers limit what can be done in beforeunload
       console.log('Page unloading, attempting cleanup...');
@@ -484,6 +496,8 @@ export default function Call() {
               isAudioMuted: false,
               isVideoMuted: false,
               isSpeaking: false,
+              isAdmin: participantInfo.isAdmin ?? false,
+              hasRaisedHand: participantInfo.hasRaisedHand ?? false,
             });
           }
         }
@@ -563,13 +577,7 @@ export default function Call() {
   };
 
   // Store event listener references for cleanup
-  const eventListenersRef = useRef<{
-    'user-joined'?: (data: any) => void;
-    'user-left'?: (data: any) => void;
-    'new-producer'?: (data: any) => void;
-    'producer-closed'?: (data: any) => void;
-    'chat'?: (data: any) => void;
-  }>({});
+  const eventListenersRef = useRef<Partial<Record<SocketEventKey, (data: any) => void>>>({});
 
   const setupEventListeners = () => {
     // Clean up old listeners first
@@ -593,6 +601,8 @@ export default function Call() {
           isAudioMuted: false,
           isVideoMuted: false,
           isSpeaking: false,
+          isAdmin: data.isAdmin ?? false,
+          hasRaisedHand: data.hasRaisedHand ?? false,
         });
       }
     };
@@ -742,7 +752,6 @@ export default function Call() {
       
       // Verify: Compare with current state and update if needed
       // This ensures we have the latest data even if API call missed something
-      const currentRequestIds = new Set(pendingRequests.map(r => r.id));
       const socketRequestIds = new Set(data.requests.map(r => r.id));
       
       // Check if socket has requests we don't have (shouldn't happen, but verify)
@@ -853,7 +862,7 @@ export default function Call() {
       }
       
       if (data.userId !== user?.id) {
-        toast.info('Screen sharing stopped');
+        toast('Screen sharing stopped');
       }
     };
     socketManager.on('screen-share-stopped', handleScreenShareStopped);
@@ -1338,7 +1347,7 @@ export default function Call() {
     if (newRaisedState) {
       toast.success('Hand raised');
     } else {
-      toast.info('Hand lowered');
+      toast('Hand lowered');
     }
   };
 
@@ -1753,7 +1762,7 @@ export default function Call() {
                         el.onwaiting = () => {
                           console.warn('⏳ Video waiting for user:', participant.userId);
                         };
-                        el.onerror = (e) => {
+                        el.onerror = () => {
                           console.error('❌ Video error for user:', participant.userId, 'error:', el.error);
                         };
                         

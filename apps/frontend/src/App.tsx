@@ -5,7 +5,7 @@ import { router } from './router';
 import { useAuthStore } from './store/authStore';
 
 function App() {
-  const { checkAuth, isAuthenticated } = useAuthStore();
+  const { checkAuth } = useAuthStore();
 
   useEffect(() => {
     checkAuth();
