@@ -23,6 +23,18 @@ interface Participant {
   hasRaisedHand: boolean;
 }
 
+type ParticipantInput = {
+  userId: string;
+  name?: string;
+  email?: string;
+  picture?: string;
+  isAudioMuted?: boolean;
+  isVideoMuted?: boolean;
+  isSpeaking?: boolean;
+  isAdmin?: boolean;
+  hasRaisedHand?: boolean;
+};
+
 interface CallState {
   isConnected: boolean;
   roomCode: string | null;
@@ -51,7 +63,7 @@ interface CallState {
   setIsConnected: (connected: boolean) => void;
   setLocalStream: (stream: MediaStream | null) => void;
   setParticipants: (participants: Participant[]) => void;
-  addParticipant: (participant: Participant) => void;
+  addParticipant: (participant: ParticipantInput) => void;
   removeParticipant: (userId: string) => void;
   updateParticipant: (userId: string, updates: Partial<Participant>) => void;
   toggleAudio: () => void;
@@ -72,6 +84,30 @@ interface CallState {
   setSettings: (settings: Partial<CallState['settings']>) => void;
   resetCallState: () => void;
 }
+
+const withParticipantDefaults = (participant: ParticipantInput): Participant => ({
+  userId: participant.userId,
+  name: participant.name ?? 'Unknown',
+  email: participant.email ?? '',
+  picture: participant.picture,
+  isAudioMuted: participant.isAudioMuted ?? true,
+  isVideoMuted: participant.isVideoMuted ?? true,
+  isSpeaking: participant.isSpeaking ?? false,
+  isAdmin: participant.isAdmin ?? false,
+  hasRaisedHand: participant.hasRaisedHand ?? false,
+});
+
+const mergeParticipantWithUpdates = (existing: Participant, updates: ParticipantInput): Participant => ({
+  userId: existing.userId,
+  name: updates.name ?? existing.name,
+  email: updates.email ?? existing.email,
+  picture: updates.picture ?? existing.picture,
+  isAudioMuted: updates.isAudioMuted ?? existing.isAudioMuted,
+  isVideoMuted: updates.isVideoMuted ?? existing.isVideoMuted,
+  isSpeaking: updates.isSpeaking ?? existing.isSpeaking,
+  isAdmin: updates.isAdmin ?? existing.isAdmin,
+  hasRaisedHand: updates.hasRaisedHand ?? existing.hasRaisedHand,
+});
 
 export const useCallStore = create<CallState>((set) => ({
   isConnected: false,
@@ -101,7 +137,9 @@ export const useCallStore = create<CallState>((set) => ({
   setRoomCode: (code) => set({ roomCode: code }),
   setIsConnected: (connected) => set({ isConnected: connected }),
   setLocalStream: (stream) => set({ localStream: stream }),
-  setParticipants: (participants) => set({ participants }),
+  setParticipants: (participants) => set({
+    participants: participants.map(withParticipantDefaults),
+  }),
   addParticipant: (participant) => set((state) => {
     // Check if participant already exists to prevent duplicates
     const exists = state.participants.some(p => p.userId === participant.userId);
@@ -109,16 +147,12 @@ export const useCallStore = create<CallState>((set) => ({
       // Update existing participant instead of adding duplicate
       return {
         participants: state.participants.map(p =>
-          p.userId === participant.userId ? { ...p, ...participant } : p
+          p.userId === participant.userId ? mergeParticipantWithUpdates(p, participant) : p
         ),
       };
     }
     // Ensure default values for new fields
-    const newParticipant: Participant = {
-      ...participant,
-      isAdmin: participant.isAdmin ?? false,
-      hasRaisedHand: participant.hasRaisedHand ?? false,
-    };
+    const newParticipant = withParticipantDefaults(participant);
     return {
       participants: [...state.participants, newParticipant],
     };

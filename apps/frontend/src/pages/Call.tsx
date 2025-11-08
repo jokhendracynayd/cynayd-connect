@@ -30,6 +30,19 @@ type SocketEventKey =
   | 'screen-share-started'
   | 'screen-share-stopped';
 
+type ServerParticipant = {
+  userId: string;
+  name: string;
+  email: string;
+  picture?: string | null;
+  isAdmin?: boolean;
+  isAudioMuted?: boolean;
+  isVideoMuted?: boolean;
+  isSpeaking?: boolean;
+  hasRaisedHand?: boolean;
+  joinedAt?: string;
+};
+
 export default function Call() {
   const { roomCode } = useParams<{ roomCode: string }>();
   const { user, token, hasCheckedAuth } = useAuthStore();
@@ -81,6 +94,47 @@ export default function Call() {
   const producerMetadataRef = useRef<Map<string, { source?: string; userId?: string; kind?: 'audio' | 'video' }>>(new Map());
   const activeScreenShareProducersRef = useRef<Set<string>>(new Set());
   const isStoppingScreenShareRef = useRef(false);
+  const pendingParticipantEventsRef = useRef<Map<string, Array<() => void>>>(new Map());
+
+  const runOrQueueParticipantUpdate = (targetUserId: string | undefined, action: () => void) => {
+    if (!targetUserId) {
+      return;
+    }
+
+    const { participants } = useCallStore.getState();
+    const participantExists = participants.some(p => p.userId === targetUserId);
+
+    if (participantExists) {
+      action();
+      return;
+    }
+
+    const queue = pendingParticipantEventsRef.current.get(targetUserId) ?? [];
+    queue.push(action);
+    pendingParticipantEventsRef.current.set(targetUserId, queue);
+  };
+
+  const flushPendingParticipantEvents = (targetUserId: string | undefined) => {
+    if (!targetUserId) {
+      return;
+    }
+
+    const queue = pendingParticipantEventsRef.current.get(targetUserId);
+    if (!queue?.length) {
+      pendingParticipantEventsRef.current.delete(targetUserId);
+      return;
+    }
+
+    pendingParticipantEventsRef.current.delete(targetUserId);
+
+    queue.forEach((fn) => {
+      try {
+        fn();
+      } catch (error) {
+        console.error('Error executing pending participant update', { userId: targetUserId, error });
+      }
+    });
+  };
   const cleanupScreenShare = (userId?: string, producerId?: string) => {
     console.log('cleanupScreenShare called:', { userId, producerId, localUserId: user?.id });
 
@@ -251,6 +305,8 @@ export default function Call() {
       
       hasConnectedRef.current = false;
       consumingProducersRef.current.clear();
+      screenShareProducersRef.current.clear();
+      pendingParticipantEventsRef.current.clear();
       // Clean up event listeners
       Object.entries(eventListenersRef.current).forEach(([event, handler]) => {
         if (handler) {
@@ -320,6 +376,9 @@ export default function Call() {
         webrtcManager.cleanup();
         mediaManager.stopLocalMedia();
         mediaManager.stopScreenShare();
+        consumingProducersRef.current.clear();
+        screenShareProducersRef.current.clear();
+        pendingParticipantEventsRef.current.clear();
         
         // Clear all remote streams
         remoteStreams.forEach((stream) => {
@@ -352,6 +411,9 @@ export default function Call() {
         webrtcManager.cleanup();
         mediaManager.stopLocalMedia();
         mediaManager.stopScreenShare();
+        consumingProducersRef.current.clear();
+        screenShareProducersRef.current.clear();
+        pendingParticipantEventsRef.current.clear();
         socketManager.disconnect();
       } catch (err) {
         console.warn('Error during pagehide cleanup:', err);
@@ -404,6 +466,7 @@ export default function Call() {
         // Clear consuming producers
         consumingProducersRef.current.clear();
         screenShareProducersRef.current.clear();
+        pendingParticipantEventsRef.current.clear();
         
         // Show notification
         toast.error('Connection lost. Returning to home.');
@@ -442,6 +505,7 @@ export default function Call() {
     
     // Clear existing participants and streams when connecting to new room
     participants.forEach(p => removeParticipant(p.userId));
+    pendingParticipantEventsRef.current.clear();
     setRemoteStreams(new Map());
 
     try {
@@ -607,24 +671,55 @@ export default function Call() {
         }
       }
       
-      // Add existing participants first (users who already have producers)
-      // Don't add self as participant
+      const rosterEntries: ServerParticipant[] = Array.isArray(response.participants)
+        ? response.participants
+        : [];
+
+      const seenRosterUserIds = new Set<string>();
+
+      rosterEntries.forEach((participantInfo) => {
+        if (!participantInfo?.userId || participantInfo.userId === user.id) {
+          return;
+        }
+
+        seenRosterUserIds.add(participantInfo.userId);
+        addParticipant({
+          userId: participantInfo.userId,
+          name: participantInfo.name,
+          email: participantInfo.email,
+          picture: participantInfo.picture ?? undefined,
+          isAdmin: participantInfo.isAdmin,
+          isAudioMuted: participantInfo.isAudioMuted,
+          isVideoMuted: participantInfo.isVideoMuted,
+          isSpeaking: participantInfo.isSpeaking,
+          hasRaisedHand: participantInfo.hasRaisedHand,
+        });
+        flushPendingParticipantEvents(participantInfo.userId);
+      });
+
+      // Backwards compatibility: ensure existingParticipants (from legacy payload) still adds anyone missing
       if (response.existingParticipants && Array.isArray(response.existingParticipants)) {
         for (const participantInfo of response.existingParticipants) {
-          // Skip self
-          if (participantInfo.userId !== user.id) {
-            addParticipant({
-              userId: participantInfo.userId,
-              name: participantInfo.name,
-              email: participantInfo.email,
-              picture: participantInfo.picture,
-              isAudioMuted: false,
-              isVideoMuted: false,
-              isSpeaking: false,
-              isAdmin: participantInfo.isAdmin ?? false,
-              hasRaisedHand: participantInfo.hasRaisedHand ?? false,
-            });
+          if (!participantInfo?.userId || participantInfo.userId === user.id) {
+            continue;
           }
+
+          if (seenRosterUserIds.has(participantInfo.userId)) {
+            continue;
+          }
+
+          addParticipant({
+            userId: participantInfo.userId,
+            name: participantInfo.name,
+            email: participantInfo.email,
+            picture: participantInfo.picture,
+            isAdmin: participantInfo.isAdmin ?? false,
+            isAudioMuted: true,
+            isVideoMuted: true,
+            isSpeaking: false,
+            hasRaisedHand: participantInfo.hasRaisedHand ?? false,
+          });
+          flushPendingParticipantEvents(participantInfo.userId);
         }
       }
       
@@ -740,22 +835,24 @@ export default function Call() {
     eventListenersRef.current = {};
 
     // User joined
-    const handleUserJoined = (data: any) => {
-      console.log('User joined:', data);
-      // Don't add self as participant
-      if (data.userId !== user?.id) {
-        addParticipant({
-          userId: data.userId,
-          name: data.name,
-          email: data.email,
-          picture: data.picture,
-          isAudioMuted: false,
-          isVideoMuted: false,
-          isSpeaking: false,
-          isAdmin: data.isAdmin ?? false,
-          hasRaisedHand: data.hasRaisedHand ?? false,
-        });
+    const handleUserJoined = (participant: ServerParticipant) => {
+      console.log('User joined:', participant);
+      if (!participant?.userId || participant.userId === user?.id) {
+        return;
       }
+
+      addParticipant({
+        userId: participant.userId,
+        name: participant.name,
+        email: participant.email,
+        picture: participant.picture ?? undefined,
+        isAdmin: participant.isAdmin,
+        isAudioMuted: participant.isAudioMuted,
+        isVideoMuted: participant.isVideoMuted,
+        isSpeaking: participant.isSpeaking,
+        hasRaisedHand: participant.hasRaisedHand,
+      });
+      flushPendingParticipantEvents(participant.userId);
     };
     socketManager.on('user-joined', handleUserJoined);
     eventListenersRef.current['user-joined'] = handleUserJoined;
@@ -763,6 +860,9 @@ export default function Call() {
     // User left
     const handleUserLeft = (data: any) => {
       console.log('User left:', data);
+      if (data?.userId) {
+        pendingParticipantEventsRef.current.delete(data.userId);
+      }
       removeParticipant(data.userId);
       
       // Close remote stream
@@ -818,7 +918,49 @@ export default function Call() {
         producerMetadataRef.current.delete(data.producerId);
       }
 
-      // Remote stream cleanup handled by user-left
+      const userIdForProducer = metadata?.userId || data.userId;
+      const kindForProducer = metadata?.kind || data.kind;
+
+      if (userIdForProducer && (kindForProducer === 'audio' || kindForProducer === 'video')) {
+        runOrQueueParticipantUpdate(userIdForProducer, () => {
+          if (kindForProducer === 'audio') {
+            updateParticipant(userIdForProducer, { isAudioMuted: true });
+          }
+          if (kindForProducer === 'video') {
+            updateParticipant(userIdForProducer, { isVideoMuted: true });
+          }
+        });
+
+        setRemoteStreams(prev => {
+          const next = new Map(prev);
+          const stream = next.get(userIdForProducer);
+          if (!stream) {
+            return prev;
+          }
+
+          const tracksToRemove = stream.getTracks().filter(track => track.kind === kindForProducer);
+          if (!tracksToRemove.length) {
+            return prev;
+          }
+
+          tracksToRemove.forEach(track => {
+            try {
+              track.stop();
+            } catch (error) {
+              console.warn('Error stopping track after producer closed', { userId: userIdForProducer, producerId: data.producerId, error });
+            }
+            stream.removeTrack(track);
+          });
+
+          if (stream.getTracks().length === 0) {
+            next.delete(userIdForProducer);
+          } else {
+            next.set(userIdForProducer, new MediaStream(stream.getTracks()));
+          }
+
+          return next;
+        });
+      }
     };
     socketManager.on('producer-closed', handleProducerClosed);
     eventListenersRef.current['producer-closed'] = handleProducerClosed;
@@ -833,14 +975,18 @@ export default function Call() {
 
     // Audio mute event
     const handleAudioMute = (data: { userId: string; isAudioMuted: boolean }) => {
-      updateParticipant(data.userId, { isAudioMuted: data.isAudioMuted });
+      runOrQueueParticipantUpdate(data.userId, () => {
+        updateParticipant(data.userId, { isAudioMuted: data.isAudioMuted });
+      });
     };
     socketManager.on('audio-mute', handleAudioMute);
     eventListenersRef.current['audio-mute'] = handleAudioMute;
 
     // Video mute event
     const handleVideoMute = (data: { userId: string; isVideoMuted: boolean }) => {
-      updateParticipant(data.userId, { isVideoMuted: data.isVideoMuted });
+      runOrQueueParticipantUpdate(data.userId, () => {
+        updateParticipant(data.userId, { isVideoMuted: data.isVideoMuted });
+      });
     };
     socketManager.on('video-mute', handleVideoMute);
     eventListenersRef.current['video-mute'] = handleVideoMute;
@@ -849,13 +995,17 @@ export default function Call() {
     const handleActiveSpeaker = (data: { userId: string; isActiveSpeaker: boolean }) => {
       if (data.isActiveSpeaker) {
         setActiveSpeaker(data.userId);
-        updateParticipant(data.userId, { isSpeaking: true });
+        runOrQueueParticipantUpdate(data.userId, () => {
+          updateParticipant(data.userId, { isSpeaking: true });
+        });
       } else {
         // Clear active speaker if this user stopped speaking
         if (activeSpeakerId === data.userId) {
           setActiveSpeaker(null);
         }
-        updateParticipant(data.userId, { isSpeaking: false });
+        runOrQueueParticipantUpdate(data.userId, () => {
+          updateParticipant(data.userId, { isSpeaking: false });
+        });
       }
     };
     socketManager.on('active-speaker', handleActiveSpeaker);
@@ -863,7 +1013,9 @@ export default function Call() {
 
     // Raised hand event
     const handleRaisedHand = (data: { userId: string; isRaised: boolean }) => {
-      setRaiseHand(data.userId, data.isRaised);
+      runOrQueueParticipantUpdate(data.userId, () => {
+        setRaiseHand(data.userId, data.isRaised);
+      });
     };
     socketManager.on('raised-hand', handleRaisedHand);
     eventListenersRef.current['raised-hand'] = handleRaisedHand;
@@ -1231,6 +1383,43 @@ export default function Call() {
         });
         console.log('Remote stream added (no userId):', { producerId });
       }
+
+      if (resolvedUserId) {
+        runOrQueueParticipantUpdate(resolvedUserId, () => {
+          if (track.kind === 'audio') {
+            updateParticipant(resolvedUserId, { isAudioMuted: false });
+          }
+          if (track.kind === 'video') {
+            updateParticipant(resolvedUserId, { isVideoMuted: false });
+          }
+        });
+
+        const handleTrackMuted = () => {
+          runOrQueueParticipantUpdate(resolvedUserId, () => {
+            if (track.kind === 'audio') {
+              updateParticipant(resolvedUserId, { isAudioMuted: true });
+            }
+            if (track.kind === 'video') {
+              updateParticipant(resolvedUserId, { isVideoMuted: true });
+            }
+          });
+        };
+
+        const handleTrackUnmuted = () => {
+          runOrQueueParticipantUpdate(resolvedUserId, () => {
+            if (track.kind === 'audio') {
+              updateParticipant(resolvedUserId, { isAudioMuted: false });
+            }
+            if (track.kind === 'video') {
+              updateParticipant(resolvedUserId, { isVideoMuted: false });
+            }
+          });
+        };
+
+        track.onended = handleTrackMuted;
+        track.onmute = handleTrackMuted;
+        track.onunmute = handleTrackUnmuted;
+      }
     } catch (error) {
       consumingProducersRef.current.delete(producerId);
       console.error('Error consuming producer:', { producerId, userId, kind, error });
@@ -1367,6 +1556,7 @@ export default function Call() {
       
       // Step 8: Clear consuming producers ref
       consumingProducersRef.current.clear();
+      pendingParticipantEventsRef.current.clear();
       
       // Step 9: Reset all state in store
       resetCallState();

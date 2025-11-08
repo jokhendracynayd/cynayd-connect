@@ -10,6 +10,104 @@ import { RedisStateService } from '../../shared/services/state.redis';
 import { RoomRoutingService } from '../../shared/services/room-routing.service';
 import { config } from '../../shared/config';
 import prisma from '../../shared/database/prisma';
+import type { Participant } from '@prisma/client';
+
+type RoomWithParticipants = Awaited<ReturnType<typeof RoomService.getRoomByCode>>;
+
+export interface ParticipantRosterEntry {
+  userId: string;
+  name: string;
+  email: string;
+  picture?: string | null;
+  isAdmin: boolean;
+  isAudioMuted: boolean;
+  isVideoMuted: boolean;
+  isSpeaking: boolean;
+  hasRaisedHand: boolean;
+  joinedAt: string;
+}
+
+function normalizeDate(value?: Date | string | null): string {
+  if (!value) {
+    return new Date().toISOString();
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toISOString();
+}
+
+function buildParticipantRoster(room: RoomWithParticipants): ParticipantRosterEntry[] {
+  if (!room?.participants?.length) {
+    return [];
+  }
+
+  const deduped = new Map<string, ParticipantRosterEntry>();
+
+  for (const participant of room.participants as Array<Participant & { user: { id: string; name: string; email: string; picture?: string | null } }>) {
+    if (!participant?.user) {
+      continue;
+    }
+
+    const { user } = participant;
+    const joinedAtIso = normalizeDate(participant.joinedAt ?? undefined);
+    const entry: ParticipantRosterEntry = {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      picture: user.picture,
+      isAdmin: participant.role === 'admin' || room.adminId === user.id,
+      isAudioMuted: true,
+      isVideoMuted: true,
+      isSpeaking: false,
+      hasRaisedHand: false,
+      joinedAt: joinedAtIso,
+    };
+
+    const existing = deduped.get(user.id);
+
+    if (!existing) {
+      deduped.set(user.id, entry);
+      continue;
+    }
+
+    // Retain the latest record based on joinedAt
+    if (new Date(entry.joinedAt).getTime() >= new Date(existing.joinedAt).getTime()) {
+      deduped.set(user.id, entry);
+    }
+  }
+
+  return Array.from(deduped.values()).sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
+}
+
+interface RoomJoinRequestUser {
+  id: string;
+  name: string;
+  email: string;
+  picture?: string | null;
+}
+
+interface RoomJoinRequestWithUser {
+  id: string;
+  requestedAt: Date;
+  user: RoomJoinRequestUser;
+}
+
+function isRoomJoinRequestWithUser(value: unknown): value is RoomJoinRequestWithUser {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<RoomJoinRequestWithUser>;
+  const user = candidate.user as Partial<RoomJoinRequestUser> | undefined;
+
+  return (
+    typeof candidate.id === 'string' &&
+    candidate.requestedAt instanceof Date &&
+    !!user &&
+    typeof user.id === 'string' &&
+    typeof user.name === 'string' &&
+    typeof user.email === 'string'
+  );
+}
 
 /**
  * Cleanup socket resources with retry logic
@@ -91,6 +189,134 @@ async function verifySocketCleanup(socketId: string): Promise<void> {
     logger.error(`Error verifying cleanup for socket ${socketId}:`, error);
     // Don't throw - verification failure shouldn't break disconnect flow
   }
+}
+
+interface HandleSocketLeaveOptions {
+  reason?: string | null;
+  triggeredByDisconnect?: boolean;
+}
+
+interface HandleSocketLeaveResult {
+  success: boolean;
+  skipped?: boolean;
+  alreadyLeft?: boolean;
+  reason?: string | null;
+  cleanupFailed?: boolean;
+}
+
+export async function handleSocketLeave(
+  _io: SocketIOServer,
+  socket: Socket,
+  options: HandleSocketLeaveOptions = {}
+): Promise<HandleSocketLeaveResult> {
+  const roomCode: string | undefined = socket.data.roomCode;
+  const userId: string | undefined = socket.data.userId;
+
+  const reason = options.reason ?? null;
+  const triggeredByDisconnect = options.triggeredByDisconnect ?? false;
+
+  if (!roomCode || !userId) {
+    logger.debug('handleSocketLeave: socket not associated with a room, skipping', {
+      socketId: socket.id,
+      reason,
+    });
+    return { success: true, skipped: true, reason };
+  }
+
+  if (socket.data.hasLeftRoom) {
+    logger.debug('handleSocketLeave: socket already processed leave, ignoring duplicate call', {
+      socketId: socket.id,
+      userId,
+      roomCode,
+      reason,
+    });
+    return { success: true, alreadyLeft: true, reason };
+  }
+
+  socket.data.hasLeftRoom = true;
+
+  let cleanupFailed = false;
+
+  try {
+    await cleanupSocketWithRetry(socket.id);
+  } catch (error) {
+    cleanupFailed = true;
+    logger.error('handleSocketLeave: failed to cleanup socket resources', {
+      socketId: socket.id,
+      userId,
+      roomCode,
+      error,
+    });
+  }
+
+  try {
+    await RoomService.leaveRoom(userId, roomCode);
+  } catch (error: any) {
+    logger.warn('handleSocketLeave: error updating participant record during leave', {
+      socketId: socket.id,
+      userId,
+      roomCode,
+      error: error?.message || error,
+    });
+  }
+
+  const payload = {
+    userId,
+    leftAt: new Date().toISOString(),
+    reason,
+  };
+
+  try {
+    socket.to(roomCode).emit('user-left', payload);
+  } catch (error) {
+    logger.warn('handleSocketLeave: failed to emit user-left event', {
+      socketId: socket.id,
+      userId,
+      roomCode,
+      error,
+    });
+  }
+
+  try {
+    await socket.leave(roomCode);
+  } catch (error) {
+    logger.warn('handleSocketLeave: failed to leave socket room', {
+      socketId: socket.id,
+      userId,
+      roomCode,
+      error,
+    });
+  }
+
+  try {
+    await redis.publish('room:leave', JSON.stringify({
+      roomCode,
+      userId,
+      socketId: socket.id,
+      reason,
+    }));
+  } catch (error) {
+    logger.warn('handleSocketLeave: failed to publish room leave event', {
+      socketId: socket.id,
+      userId,
+      roomCode,
+      error,
+    });
+  }
+
+  socket.data.roomCode = undefined;
+  socket.data.roomId = undefined;
+
+  logger.info('handleSocketLeave: user left room', {
+    socketId: socket.id,
+    userId,
+    roomCode,
+    reason,
+    triggeredByDisconnect,
+    cleanupFailed,
+  });
+
+  return { success: true, reason, cleanupFailed };
 }
 
 interface JoinRoomData {
@@ -198,16 +424,17 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
             try {
               // Create the request automatically (this will return existing if already pending)
               const request = await RoomService.requestRoomJoin(userId, normalizedRoomCode);
+              const joinRequest = isRoomJoinRequestWithUser(request) ? request : undefined;
               
               // Notify admin - use Socket.io room emission OR direct socket (not both to avoid duplicates)
-              if (request.user) {
+              if (joinRequest) {
                 const requestData = {
-                  requestId: request.id,
-                  userId: request.user.id,
-                  name: request.user.name,
-                  email: request.user.email,
-                  picture: request.user.picture,
-                  requestedAt: request.requestedAt,
+                  requestId: joinRequest.id,
+                  userId: joinRequest.user.id,
+                  name: joinRequest.user.name,
+                  email: joinRequest.user.email,
+                  picture: joinRequest.user.picture,
+                  requestedAt: joinRequest.requestedAt,
                 };
                 
                 // Find admin sockets
@@ -228,7 +455,12 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
                   });
                 }
                 
-                logger.info(`Notified admin ${room.adminId} about join request from ${request.user.name} (room: ${normalizedRoomCode})`);
+                logger.info(`Notified admin ${room.adminId} about join request from ${joinRequest.user.name} (room: ${normalizedRoomCode})`);
+              } else {
+                logger.warn('RoomService.requestRoomJoin returned unexpected result when creating join request', {
+                  userId,
+                  roomCode: normalizedRoomCode,
+                });
               }
 
               // Return waiting status so user sees waiting screen
@@ -236,7 +468,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
                 success: false,
                 error: 'Room is private. Join request sent. Waiting for admin approval.',
                 waitingApproval: true,
-                requestId: request.id,
+                ...(joinRequest ? { requestId: joinRequest.id } : {}),
               });
             } catch (requestError: any) {
               // If request creation fails (e.g., already exists), check for existing request
@@ -337,6 +569,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       socket.data.userName = name;
       socket.data.userEmail = email;
       socket.data.userPicture = picture;
+      socket.data.hasLeftRoom = false;
 
       // Publish join event to Redis (for multi-server)
       await redis.publish('room:join', JSON.stringify({
@@ -348,13 +581,24 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         picture,
       }));
 
-      // Notify other participants
-      socket.to(normalizedRoomCode).emit('user-joined', {
-        userId,
-        name,
-        email,
-        picture,
-      });
+      const participantRoster = buildParticipantRoster(updatedRoom);
+      const joiningParticipant =
+        participantRoster.find((participant) => participant.userId === userId) ||
+        {
+          userId,
+          name,
+          email,
+          picture,
+          isAdmin: updatedRoom.adminId === userId,
+          isAudioMuted: true,
+          isVideoMuted: true,
+          isSpeaking: false,
+          hasRaisedHand: false,
+          joinedAt: new Date().toISOString(),
+        };
+
+      // Notify other participants with normalized payload
+      socket.to(normalizedRoomCode).emit('user-joined', joiningParticipant);
 
       // Get existing participants with their producers
       // IMPORTANT: Only get producers from the SAME ROOM
@@ -424,14 +668,6 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         }))
       );
 
-      // Also send existingParticipants separately for easier frontend handling
-      const existingParticipants = Array.from(userMap.values()).map(userInfo => ({
-        userId: userInfo.userId,
-        name: userInfo.name,
-        email: userInfo.email,
-        picture: userInfo.picture,
-      }));
-
       logger.info(`User ${userId} joined room ${normalizedRoomCode}`);
 
       // If user is admin, check for pending requests and notify them
@@ -476,9 +712,15 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         success: true,
         rtpCapabilities: router.rtpCapabilities,
         otherProducers: producerInfoList,
-        existingParticipants, // Send user info for existing participants
-        isAdmin: updatedRoom.adminId === userId, // Include admin status in response
-        isPublic: updatedRoom.isPublic, // Include room privacy status
+        existingParticipants: Array.from(userMap.values()).map(userInfo => ({
+          userId: userInfo.userId,
+          name: userInfo.name,
+          email: userInfo.email,
+          picture: userInfo.picture,
+        })),
+        participants: participantRoster,
+        isAdmin: updatedRoom.adminId === userId,
+        isPublic: updatedRoom.isPublic,
       });
     } catch (error: any) {
       logger.error('Error joining room:', {
@@ -504,38 +746,13 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
     }
   });
 
-  socket.on('leaveRoom', async () => {
+  socket.on('leaveRoom', async (_data, callback?: (result: HandleSocketLeaveResult) => void) => {
     try {
-      const { roomCode, userId } = socket.data;
-
-      if (roomCode) {
-        logger.info(`User ${userId} leaving room: ${roomCode}`);
-
-        // Cleanup media with retry logic
-        await cleanupSocketWithRetry(socket.id);
-
-        // Leave database room
-        await RoomService.leaveRoom(userId, roomCode);
-        
-        // Notify others
-        socket.to(roomCode).emit('user-left', { userId });
-        socket.leave(roomCode);
-
-        // Publish to Redis
-        await redis.publish('room:leave', JSON.stringify({
-          roomCode,
-          userId,
-          socketId: socket.id,
-        }));
-
-        // Clear socket data
-        socket.data.roomCode = undefined;
-        socket.data.roomId = undefined;
-
-        logger.info(`User ${userId} left room ${roomCode}`);
-      }
+      const result = await handleSocketLeave(io, socket, { reason: 'manual' });
+      callback?.(result);
     } catch (error: any) {
       logger.error('Error leaving room:', error);
+      callback?.({ success: false, reason: 'manual', cleanupFailed: true });
     }
   });
 
@@ -552,6 +769,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
 
       const normalizedRoomCode = data.roomCode.trim().toLowerCase();
       const request = await RoomService.requestRoomJoin(userId, normalizedRoomCode);
+      const joinRequest = isRoomJoinRequestWithUser(request) ? request : undefined;
 
       // Notify admin - use room OR direct socket (not both to avoid duplicates)
       const room = await RoomService.getRoomByCode(normalizedRoomCode);
@@ -559,14 +777,14 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         s.data.userId === room.adminId
       );
 
-      if (adminSockets.length > 0 && request.user) {
+      if (adminSockets.length > 0 && joinRequest) {
         const requestData = {
-          requestId: request.id,
-          userId: request.user.id,
-          name: request.user.name,
-          email: request.user.email,
-          picture: request.user.picture,
-          requestedAt: request.requestedAt,
+          requestId: joinRequest.id,
+          userId: joinRequest.user.id,
+          name: joinRequest.user.name,
+          email: joinRequest.user.email,
+          picture: joinRequest.user.picture,
+          requestedAt: joinRequest.requestedAt,
         };
         
         // If admin is in the room, emit to room only (avoids duplicates)
@@ -581,13 +799,27 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
             adminSocket.emit('join-request', requestData);
           });
         }
+      } else if (!joinRequest) {
+        logger.info('requestRoomJoin: user already approved or joined, skipping admin notification', {
+          socketId: socket.id,
+          userId,
+          roomCode: normalizedRoomCode,
+        });
       }
 
-      callback({
-        success: true,
-        requestId: request.id,
-        message: 'Join request sent. Waiting for admin approval.',
-      });
+      if (joinRequest) {
+        callback({
+          success: true,
+          requestId: joinRequest.id,
+          message: 'Join request sent. Waiting for admin approval.',
+        });
+      } else {
+        callback({
+          success: true,
+          message: 'Join request already approved. You can join the room.',
+          alreadyApproved: true,
+        });
+      }
     } catch (error: any) {
       logger.error('Error requesting room join:', error);
       callback({
@@ -677,7 +909,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         });
       }
 
-      const result = await RoomService.rejectJoinRequest(userId, roomCode, data.requestId);
+      await RoomService.rejectJoinRequest(userId, roomCode, data.requestId);
 
       // Get request with user info
       const requestWithUser = await prisma.roomJoinRequest.findUnique({
