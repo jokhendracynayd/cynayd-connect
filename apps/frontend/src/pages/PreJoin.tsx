@@ -13,7 +13,16 @@ interface MediaDeviceInfo {
 export default function PreJoin() {
   const { roomCode } = useParams<{ roomCode: string }>();
   const navigate = useNavigate();
-  const { settings, setSettings, selectedDevices, setSelectedDevices, localStream, setLocalStream } = useCallStore();
+  const {
+    settings,
+    setSettings,
+    selectedDevices,
+    setSelectedDevices,
+    localStream,
+    setLocalStream,
+    setPermissionError,
+    clearPermissionErrors,
+  } = useCallStore();
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const [devices, setDevices] = useState<{
@@ -25,6 +34,7 @@ export default function PreJoin() {
   const [hasDevices, setHasDevices] = useState(false);
 
   useEffect(() => {
+    clearPermissionErrors();
     loadDevices();
   }, []);
 
@@ -100,10 +110,34 @@ export default function PreJoin() {
       }
     } catch (error: any) {
       console.error('Failed to start preview:', error);
-      if (error.name === 'NotAllowedError') {
-        toast.error('Please allow camera and microphone access');
+      const blockedByPermission =
+        error.name === 'NotAllowedError' ||
+        error.name === 'SecurityError';
+
+      if (blockedByPermission) {
+        if (settings.joinWithAudio) {
+          setSettings({ joinWithAudio: false });
+          setPermissionError('audio', true);
+        }
+        if (settings.joinWithVideo) {
+          setSettings({ joinWithVideo: false });
+          setPermissionError('video', true);
+        }
+
+        stopPreview();
+        toast.error('Browser blocked access. Join in listen-only mode and re-enable devices inside the room.', {
+          duration: 5000,
+        });
       } else if (error.name === 'NotFoundError') {
+        if (settings.joinWithAudio) {
+          setSettings({ joinWithAudio: false });
+        }
+        if (settings.joinWithVideo) {
+          setSettings({ joinWithVideo: false });
+        }
         toast.error('No camera or microphone found');
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        toast.error('Camera or microphone is busy');
       } else {
         toast.error('Failed to start preview');
       }
@@ -120,6 +154,11 @@ export default function PreJoin() {
 
   const handleToggleAudio = () => {
     const newAudioState = !settings.joinWithAudio;
+
+    if (!newAudioState) {
+      setPermissionError('audio', false);
+    }
+
     setSettings({ joinWithAudio: newAudioState });
     
     // If turning audio OFF, stop audio tracks (optional - can just mute)
@@ -145,6 +184,11 @@ export default function PreJoin() {
 
   const handleToggleVideo = () => {
     const newVideoState = !settings.joinWithVideo;
+
+    if (!newVideoState) {
+      setPermissionError('video', false);
+    }
+
     setSettings({ joinWithVideo: newVideoState });
     
     // If turning video OFF, stop video tracks

@@ -50,6 +50,10 @@ interface CallState {
   screenShares: Map<string, ScreenShare>; // userId -> ScreenShare
   pinnedScreenShareUserId: string | null; // User's local pin choice
   isScreenSharing: boolean; // Local user's screen share state
+  permissionErrors: {
+    audio: boolean;
+    video: boolean;
+  };
   selectedDevices: {
     audioInput: string;
     videoInput: string;
@@ -80,6 +84,8 @@ interface CallState {
   removeScreenShare: (userId: string) => void;
   setPinnedScreenShare: (userId: string | null) => void;
   setIsScreenSharing: (isSharing: boolean) => void;
+  setPermissionError: (kind: 'audio' | 'video', hasError: boolean) => void;
+  clearPermissionErrors: () => void;
   setSelectedDevices: (devices: Partial<CallState['selectedDevices']>) => void;
   setSettings: (settings: Partial<CallState['settings']>) => void;
   resetCallState: () => void;
@@ -124,6 +130,10 @@ export const useCallStore = create<CallState>((set) => ({
   screenShares: new Map<string, ScreenShare>(),
   pinnedScreenShareUserId: null,
   isScreenSharing: false,
+  permissionErrors: {
+    audio: false,
+    video: false,
+  },
   selectedDevices: {
     audioInput: '',
     videoInput: '',
@@ -220,6 +230,18 @@ export const useCallStore = create<CallState>((set) => ({
   }),
   setPinnedScreenShare: (userId) => set({ pinnedScreenShareUserId: userId }),
   setIsScreenSharing: (isSharing) => set({ isScreenSharing: isSharing }),
+  setPermissionError: (kind, hasError) => set((state) => ({
+    permissionErrors: {
+      ...state.permissionErrors,
+      [kind]: hasError,
+    },
+  })),
+  clearPermissionErrors: () => set({
+    permissionErrors: {
+      audio: false,
+      video: false,
+    },
+  }),
   setSelectedDevices: (devices) => set((state) => ({
     selectedDevices: { ...state.selectedDevices, ...devices },
   })),
@@ -241,6 +263,10 @@ export const useCallStore = create<CallState>((set) => ({
     screenShares: new Map<string, ScreenShare>(),
     pinnedScreenShareUserId: null,
     isScreenSharing: false,
+    permissionErrors: {
+      audio: false,
+      video: false,
+    },
     selectedDevices: {
       audioInput: '',
       videoInput: '',

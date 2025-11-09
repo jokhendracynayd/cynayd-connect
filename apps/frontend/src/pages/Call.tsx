@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { useCallStore } from '../store/callStore';
@@ -93,6 +93,9 @@ export default function Call() {
     removeScreenShare,
     setPinnedScreenShare,
     setIsScreenSharing,
+    permissionErrors,
+    setPermissionError,
+    clearPermissionErrors,
   } = useCallStore();
   
   const navigate = useNavigate();
@@ -118,6 +121,21 @@ export default function Call() {
   const isLeavingRef = useRef(false); // Prevent double cleanup
   const isLoadingPendingRequestsRef = useRef(false); // Track API call in progress
   const [showParticipantList, setShowParticipantList] = useState(false);
+  const [permissionBannerDismissed, setPermissionBannerDismissed] = useState(false);
+
+  const hasPermissionIssue = permissionErrors.audio || permissionErrors.video;
+
+  useEffect(() => {
+    if (hasPermissionIssue) {
+      setPermissionBannerDismissed(false);
+      toast.error('Microphone or camera permission blocked. You joined in listen-only mode.', {
+        id: 'permission-warning',
+        duration: 4000,
+      });
+    } else {
+      toast.dismiss('permission-warning');
+    }
+  }, [hasPermissionIssue]);
 
   const runOrQueueParticipantUpdate = (targetUserId: string | undefined, action: () => void) => {
     if (!targetUserId) {
@@ -606,26 +624,54 @@ export default function Call() {
       mediaManager.stopLocalMedia();
       
       // Get fresh local media - always get new tracks (don't reuse stopped tracks from PreJoin)
+      clearPermissionErrors();
       let stream: MediaStream | null = null;
       if (settings.joinWithAudio || settings.joinWithVideo) {
-        stream = await mediaManager.getLocalMedia(
-          settings.joinWithAudio,
-          settings.joinWithVideo,
-          selectedDevices.audioInput,
-          selectedDevices.videoInput
-        );
-        
-        // Set initial enabled state based on muted settings
-        if (stream) {
-          stream.getAudioTracks().forEach(track => {
-            track.enabled = settings.joinWithAudio && !isAudioMuted;
-          });
-          stream.getVideoTracks().forEach(track => {
-            track.enabled = settings.joinWithVideo && !isVideoMuted;
-          });
+        try {
+          stream = await mediaManager.getLocalMedia(
+            settings.joinWithAudio,
+            settings.joinWithVideo,
+            selectedDevices.audioInput,
+            selectedDevices.videoInput
+          );
+
+          if (settings.joinWithAudio) {
+            setPermissionError('audio', false);
+          }
+          if (settings.joinWithVideo) {
+            setPermissionError('video', false);
+          }
+
+          // Set initial enabled state based on muted settings
+          if (stream) {
+            stream.getAudioTracks().forEach(track => {
+              track.enabled = settings.joinWithAudio && !isAudioMuted;
+            });
+            stream.getVideoTracks().forEach(track => {
+              track.enabled = settings.joinWithVideo && !isVideoMuted;
+            });
+          }
+
+          setLocalStream(stream);
+        } catch (mediaError: any) {
+          const permissionDenied =
+            mediaError?.name === 'NotAllowedError' ||
+            mediaError?.name === 'NotFoundError';
+
+          if (permissionDenied) {
+            if (settings.joinWithAudio) {
+              setPermissionError('audio', true);
+            }
+            if (settings.joinWithVideo) {
+              setPermissionError('video', true);
+            }
+            console.warn('Media permissions denied, continuing without local media', mediaError);
+            stream = null;
+            setLocalStream(null);
+          } else {
+            throw mediaError;
+          }
         }
-        
-        setLocalStream(stream);
       }
       
       // Always create send transport (even without media, in case user enables later)
@@ -1018,7 +1064,8 @@ export default function Call() {
         });
       } else {
         // Clear active speaker if this user stopped speaking
-        if (activeSpeakerId === data.userId) {
+        const { activeSpeakerId: currentActiveSpeaker } = useCallStore.getState();
+        if (currentActiveSpeaker === data.userId) {
           setActiveSpeaker(null);
         }
         runOrQueueParticipantUpdate(data.userId, () => {
@@ -1050,7 +1097,8 @@ export default function Call() {
       console.log('Received join-request event:', data);
       
       // Check if request already exists (avoid duplicates)
-      const existingRequest = pendingRequests.find(r => r.id === data.requestId);
+      const { pendingRequests: currentPendingRequests } = useCallStore.getState();
+      const existingRequest = currentPendingRequests.find(r => r.id === data.requestId);
       if (!existingRequest) {
         addPendingRequest({
           id: data.requestId,
@@ -1100,13 +1148,14 @@ export default function Call() {
       // Verify: Compare with current state and update if needed
       // This ensures we have the latest data even if API call missed something
       const socketRequestIds = new Set(data.requests.map(r => r.id));
+      const { pendingRequests: currentPendingRequests } = useCallStore.getState();
       
       // Check if socket has requests we don't have (shouldn't happen, but verify)
       let addedCount = 0;
       let updatedCount = 0;
       
       data.requests.forEach(req => {
-        const existingRequest = pendingRequests.find(r => r.id === req.id);
+        const existingRequest = currentPendingRequests.find(r => r.id === req.id);
         if (!existingRequest) {
           // New request from socket (real-time update after API has loaded)
           addPendingRequest({
@@ -1126,7 +1175,7 @@ export default function Call() {
       });
       
       // Check if we have requests that socket doesn't (stale data) - refresh from API
-      const staleRequests = pendingRequests.filter(r => !socketRequestIds.has(r.id));
+      const staleRequests = currentPendingRequests.filter(r => !socketRequestIds.has(r.id));
       if (staleRequests.length > 0) {
         console.log(`Found ${staleRequests.length} stale requests, refreshing from API...`);
         // Refresh from API to get latest state (only if not already loading)
@@ -1672,6 +1721,66 @@ export default function Call() {
   };
 
   const handleToggleAudio = async () => {
+    if (permissionErrors.audio) {
+      try {
+        const newAudioTrack = await mediaManager.getSingleTrack('audio', selectedDevices.audioInput);
+
+        // Remove any existing audio tracks
+        if (localStream) {
+          localStream.getAudioTracks().forEach(track => {
+            track.stop();
+            localStream.removeTrack(track);
+          });
+          localStream.addTrack(newAudioTrack);
+          setLocalStream(new MediaStream(localStream));
+        } else {
+          const newStream = new MediaStream([newAudioTrack]);
+          setLocalStream(newStream);
+        }
+
+        newAudioTrack.enabled = !isAudioMuted;
+
+        const existingProducer = webrtcManager.getProducer('audio');
+        if (existingProducer) {
+          await webrtcManager.replaceAudioTrack(newAudioTrack);
+        } else {
+          await webrtcManager.produceAudio(newAudioTrack);
+        }
+
+        if (isAudioMuted) {
+          newAudioTrack.enabled = false;
+          try {
+            await webrtcManager.pauseProducer('audio');
+          } catch (pauseError) {
+            console.warn('Failed to pause audio producer after replacing track:', pauseError);
+          }
+        } else {
+          try {
+            await webrtcManager.resumeProducer('audio');
+          } catch (resumeError) {
+            console.warn('Failed to resume audio producer after replacing track:', resumeError);
+          }
+        }
+
+        setPermissionError('audio', false);
+        toast.success('Microphone ready');
+      } catch (error: any) {
+        console.error('Failed to enable microphone after permission retry:', error);
+        setPermissionError('audio', true);
+
+        if (error.name === 'NotAllowedError') {
+          toast.error('Microphone permission denied');
+        } else if (error.name === 'NotFoundError') {
+          toast.error('No microphone found');
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          toast.error('Microphone is busy or unavailable');
+        } else {
+          toast.error('Failed to start microphone');
+        }
+      }
+      return;
+    }
+
     const wasMuted = isAudioMuted; // Store BEFORE toggle
     const newMuted = !isAudioMuted;
     toggleAudio();
@@ -1735,6 +1844,65 @@ export default function Call() {
   };
 
   const handleToggleVideo = async () => {
+    if (permissionErrors.video) {
+      try {
+        const newVideoTrack = await mediaManager.getSingleTrack('video', selectedDevices.videoInput);
+
+        if (localStream) {
+          localStream.getVideoTracks().forEach(track => {
+            track.stop();
+            localStream.removeTrack(track);
+          });
+          localStream.addTrack(newVideoTrack);
+          setLocalStream(new MediaStream(localStream));
+        } else {
+          const newStream = new MediaStream([newVideoTrack]);
+          setLocalStream(newStream);
+        }
+
+        newVideoTrack.enabled = !isVideoMuted;
+
+        const existingProducer = webrtcManager.getProducer('video');
+        if (existingProducer) {
+          await webrtcManager.replaceVideoTrack(newVideoTrack);
+        } else {
+          await webrtcManager.produceVideo(newVideoTrack);
+        }
+
+        if (isVideoMuted) {
+          newVideoTrack.enabled = false;
+          try {
+            await webrtcManager.pauseProducer('video');
+          } catch (pauseError) {
+            console.warn('Failed to pause video producer after replacing track:', pauseError);
+          }
+        } else {
+          try {
+            await webrtcManager.resumeProducer('video');
+          } catch (resumeError) {
+            console.warn('Failed to resume video producer after replacing track:', resumeError);
+          }
+        }
+
+        setPermissionError('video', false);
+        toast.success('Camera ready');
+      } catch (error: any) {
+        console.error('Failed to enable camera after permission retry:', error);
+        setPermissionError('video', true);
+
+        if (error.name === 'NotAllowedError') {
+          toast.error('Camera permission denied');
+        } else if (error.name === 'NotFoundError') {
+          toast.error('No camera found');
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          toast.error('Camera is busy or unavailable');
+        } else {
+          toast.error('Failed to start camera');
+        }
+      }
+      return;
+    }
+
     const wasMuted = isVideoMuted; // Store BEFORE toggle
     toggleVideo();
     
@@ -2091,18 +2259,37 @@ export default function Call() {
   const hasScreenShareStage = screenShares.size > 0;
   const hasPinnedScreenShare = hasScreenShareStage && Boolean(pinnedScreenShareUserId);
   const showSplitLayout = hasPinnedScreenShare;
-  const maxVisibleTiles = 9;
+  const maxVisibleTiles = showSplitLayout ? 9 : 4;
   const defaultVisibleTiles = allParticipantTiles.slice(0, maxVisibleTiles);
   const participantTilesForDisplay = showSplitLayout ? allParticipantTiles : defaultVisibleTiles;
   const overflowCount = showSplitLayout ? 0 : Math.max(allParticipantTiles.length - defaultVisibleTiles.length, 0);
   const isSoloLayout = !showSplitLayout && participantTilesForDisplay.length === 1;
-  const gridClasses = getGridTemplateClasses(participantTilesForDisplay.length);
-  const gridStyle =
-    !showSplitLayout && participantTilesForDisplay.length >= 7
-      ? { gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }
-      : undefined;
+  const nonSplitLayoutConfig = useMemo(() => {
+    if (showSplitLayout) {
+      return null;
+    }
+    return getNonSplitLayoutConfig(participantTilesForDisplay.length);
+  }, [showSplitLayout, participantTilesForDisplay.length]);
+  const splitGridClasses = showSplitLayout ? getGridTemplateClasses(participantTilesForDisplay.length) : '';
+  const splitGridAutoRowsClass =
+    showSplitLayout && participantTilesForDisplay.length >= 7
+      ? 'auto-rows-[minmax(200px,1fr)]'
+      : showSplitLayout
+      ? 'auto-rows-[minmax(180px,1fr)]'
+      : '';
+  const bottomControlsOffset = showSplitLayout ? 120 : 140;
+  const splitLayoutContainerStyle = useMemo(() => {
+    if (!showSplitLayout) {
+      return undefined;
+    }
+    return {
+      maxHeight: `calc(100vh - (${bottomControlsOffset}px + env(safe-area-inset-bottom)) + 8px)`,
+      paddingBottom: '4px',
+      marginBottom: '-4px',
+    };
+  }, [showSplitLayout, bottomControlsOffset]);
   const sharePaneBaseClasses =
-    'flex-1 min-w-0 overflow-hidden rounded-[32px] border border-slate-200 bg-white/90 shadow-[0_30px_60px_-35px_rgba(14,165,233,0.35)] backdrop-blur';
+    'flex-1 min-h-0 min-w-0 overflow-hidden rounded-[32px] border border-slate-200 bg-white/90 shadow-[0_30px_60px_-35px_rgba(14,165,233,0.35)] backdrop-blur';
   const sharePaneClassName = showSplitLayout
     ? `${sharePaneBaseClasses} ${isSidebarCollapsed ? 'lg:basis-full xl:basis-full' : 'lg:basis-[78%] xl:basis-[82%]'}`
     : sharePaneBaseClasses;
@@ -2150,6 +2337,50 @@ export default function Call() {
     });
   }, [activeSpeakerHasLiveVideo, activeSpeakerStream, shouldShowActiveSpeakerOverlay]);
 
+  function getNonSplitLayoutConfig(count: number) {
+    const baseGrid = 'grid h-full w-full gap-4 grid-cols-1 sm:grid-cols-2';
+
+    if (count <= 0) {
+      return {
+        gridClasses: `${baseGrid} content-center justify-items-center`,
+        autoRowsClass: '',
+        tileBaseClass: '',
+      };
+    }
+
+    if (count === 1) {
+      return {
+        gridClasses: 'grid h-full w-full gap-4 grid-cols-1',
+        autoRowsClass: 'auto-rows-[minmax(100%,1fr)]',
+        tileBaseClass: 'min-h-full h-full max-h-full',
+      };
+    }
+
+    if (count === 2) {
+      return {
+        gridClasses: `${baseGrid} items-stretch`,
+        autoRowsClass: 'auto-rows-[minmax(260px,1fr)] sm:auto-rows-[minmax(340px,1fr)]',
+        tileBaseClass: 'min-h-[260px] sm:min-h-[340px] max-h-full sm:max-h-[560px]',
+      };
+    }
+
+    if (count === 3) {
+      return {
+        gridClasses: `${baseGrid} items-stretch`,
+        autoRowsClass: 'auto-rows-[minmax(260px,1fr)] sm:auto-rows-[minmax(320px,1fr)]',
+        tileBaseClass: 'min-h-[260px] sm:min-h-[320px] max-h-full sm:max-h-[520px]',
+        tileClassForIndex: (index: number) =>
+          index === 2 ? 'sm:col-span-2 sm:justify-self-center sm:w-full sm:max-w-[600px]' : '',
+      };
+    }
+
+    return {
+      gridClasses: `${baseGrid} items-stretch`,
+      autoRowsClass: 'auto-rows-[minmax(220px,1fr)] sm:auto-rows-[minmax(280px,1fr)]',
+      tileBaseClass: 'min-h-[220px] sm:min-h-[280px] max-h-full sm:max-h-[480px]',
+    };
+  }
+
   function getGridTemplateClasses(count: number) {
     if (count <= 1) {
       return 'grid-cols-1';
@@ -2165,13 +2396,6 @@ export default function Call() {
     }
     return 'grid-cols-1 sm:grid-cols-2';
   }
-
-  const getTileSpanClass = (index: number, count: number) => {
-    if (count === 3 && index === 0) {
-      return 'lg:col-span-2 lg:row-span-2';
-    }
-    return '';
-  };
 
   const setRemoteVideoRef = (tile: ParticipantTile) => (element: HTMLVideoElement | null) => {
     if (!tile.stream) {
@@ -2202,12 +2426,20 @@ export default function Call() {
     const videoTracks = tileStream?.getVideoTracks() ?? [];
     const hasLiveVideo = videoTracks.some(track => track.readyState === 'live');
     const shouldShowVideo = Boolean(tileStream && !tile.isVideoMuted && hasLiveVideo);
+    const layoutTileBaseClass = !showSplitLayout ? nonSplitLayoutConfig?.tileBaseClass ?? '' : '';
+    const layoutTileIndexClass =
+      !showSplitLayout && nonSplitLayoutConfig?.tileClassForIndex
+        ? nonSplitLayoutConfig.tileClassForIndex(index)
+        : '';
+
     const tileClasses = [
       'relative overflow-hidden rounded-3xl border border-slate-200 bg-white/90 shadow-[0_24px_60px_-35px_rgba(14,165,233,0.35)] transition-all',
+      'w-full',
       tile.isSpeaking ? 'ring-2 ring-cyan-400 shadow-[0_0_0_4px_rgba(14,165,233,0.15)]' : '',
       tile.isLocal ? 'ring-1 ring-cyan-200/60' : '',
-      showSplitLayout ? 'aspect-[4/3] w-full' : isSoloLayout ? 'h-full w-full' : 'aspect-video',
-      showSplitLayout ? '' : getTileSpanClass(index, participantTilesForDisplay.length),
+      showSplitLayout ? 'aspect-[4/3]' : isSoloLayout ? 'h-full' : '',
+      layoutTileBaseClass,
+      layoutTileIndexClass,
     ]
       .filter(Boolean)
       .join(' ');
@@ -2336,6 +2568,58 @@ export default function Call() {
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-[#f7f9fc] text-slate-900">
+      {hasPermissionIssue && !permissionBannerDismissed && (
+        <div className="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4">
+          <div className="pointer-events-auto flex w-full max-w-3xl flex-col gap-3 rounded-[24px] border border-amber-200 bg-white/95 p-4 shadow-[0_18px_55px_-28px_rgba(251,191,36,0.55)] backdrop-blur">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-amber-100 text-amber-600">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L4.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-amber-800">You’re in listen-only mode</p>
+                  <p className="mt-1 text-sm text-amber-700">
+                    Your browser blocked access to {permissionErrors.audio && permissionErrors.video ? 'the microphone and camera' : permissionErrors.audio ? 'the microphone' : 'the camera'}. Use the controls below to grant permission and re-enable them.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPermissionBannerDismissed(true)}
+                className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-transparent text-amber-600 transition hover:border-amber-200 hover:bg-amber-50"
+                aria-label="Dismiss permission warning"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {permissionErrors.audio && (
+                <button
+                  type="button"
+                  onClick={() => handleToggleAudio()}
+                  className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white transition hover:bg-slate-700"
+                >
+                  Retry microphone
+                </button>
+              )}
+              {permissionErrors.video && (
+                <button
+                  type="button"
+                  onClick={() => handleToggleVideo()}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-900 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-900 transition hover:bg-slate-900 hover:text-white"
+                >
+                  Retry camera
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute -left-36 -top-24 h-[520px] w-[520px] rounded-full bg-gradient-to-br from-cyan-100 via-sky-100 to-indigo-100 opacity-70 blur-[170px]" />
         <div className="absolute right-[-160px] bottom-[-180px] h-[520px] w-[520px] rounded-full bg-gradient-to-tl from-white via-cyan-100 to-indigo-100 opacity-60 blur-[180px]" />
@@ -2390,9 +2674,15 @@ export default function Call() {
           </div>
         )}
 
-        <main className={`relative flex flex-1 flex-col px-4 pb-[calc(140px+env(safe-area-inset-bottom))] ${mainLayoutSpacingClass}`}>
+        <main
+          className={`relative flex min-h-0 flex-1 flex-col px-4 ${mainLayoutSpacingClass}`}
+          style={{ paddingBottom: `calc(${bottomControlsOffset}px + env(safe-area-inset-bottom))` }}
+        >
           {showSplitLayout ? (
-            <div className="flex flex-1 flex-col gap-4 lg:flex-row lg:items-stretch lg:gap-6">
+            <div
+              className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch lg:gap-6"
+              style={splitLayoutContainerStyle}
+            >
               <div className={`${sharePaneClassName} relative`} style={{ maxHeight: 'calc(100vh - 140px)' }}>
                 <ScreenShareSection
                   screenShares={screenShares}
@@ -2501,7 +2791,10 @@ export default function Call() {
                   </button>
                 </div>
               ) : (
-                <aside className="flex w-full flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white/80 backdrop-blur lg:basis-[22%] lg:max-w-[300px] xl:basis-[18%]">
+                <aside
+                  className="flex w-full min-h-0 flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white/80 backdrop-blur lg:basis-[22%] lg:max-w-[300px] xl:basis-[18%]"
+                  style={{ maxHeight: 'calc(100vh - 140px)' }}
+                >
                   <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
                     <p className="text-[11px] uppercase tracking-[0.35em] text-slate-400">Participants</p>
                     <div className="flex items-center gap-2">
@@ -2517,7 +2810,7 @@ export default function Call() {
                       </button>
                     </div>
                   </div>
-                  <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+                  <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 pr-5 min-h-0">
                     {participantTilesForDisplay.length === 0 ? (
                       <div className="flex h-full items-center justify-center text-sm font-medium text-slate-400">
                         Waiting for participants…
@@ -2545,19 +2838,25 @@ export default function Call() {
 
               <div className="relative flex flex-1 overflow-hidden">
                 <div className="relative flex h-full w-full flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white/80 backdrop-blur">
-                  <div className="relative h-full w-full overflow-hidden p-4" style={{ maxHeight: 'calc(100vh - 140px)' }}>
+                  <div
+                    className={`relative h-full w-full p-4 ${
+                      showSplitLayout ? 'overflow-y-auto pr-3 sm:pr-4' : 'overflow-hidden'
+                    }`}
+                    style={{ maxHeight: 'calc(100vh - 140px)' }}
+                  >
                     {participantTilesForDisplay.length === 0 ? (
                       <div className="flex h-full items-center justify-center text-sm font-medium text-slate-400">
                         Waiting for participants…
                       </div>
                     ) : (
                       <div
-                        className={`grid h-full w-full gap-4 ${gridClasses} ${
-                          participantTilesForDisplay.length >= 7
-                            ? 'auto-rows-[minmax(200px,1fr)]'
-                            : 'auto-rows-[minmax(180px,1fr)]'
-                        } ${isSoloLayout ? 'content-center justify-items-center' : ''}`}
-                        style={gridStyle}
+                        className={
+                          showSplitLayout
+                            ? `grid h-full w-full gap-4 ${splitGridClasses} ${splitGridAutoRowsClass}`
+                            : `${nonSplitLayoutConfig?.gridClasses ?? 'grid h-full w-full gap-4 grid-cols-1 sm:grid-cols-2'} ${
+                                nonSplitLayoutConfig?.autoRowsClass ?? ''
+                              }`
+                        }
                       >
                         {participantTilesForDisplay.map((tile, index) => renderParticipantTile(tile, index))}
                       </div>

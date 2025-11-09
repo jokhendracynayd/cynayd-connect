@@ -32,7 +32,7 @@ export class MediaManager {
 
       const constraints: MediaStreamConstraints = {
         audio: audio ? (audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true) : false,
-        video: video ? (videoDeviceId ? { deviceId: { exact: videoDeviceId } } : true) : true,
+        video: video ? (videoDeviceId ? { deviceId: { exact: videoDeviceId } } : true) : false,
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
