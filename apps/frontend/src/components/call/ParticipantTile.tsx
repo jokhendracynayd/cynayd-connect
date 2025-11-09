@@ -1,5 +1,7 @@
 import { useRef, useEffect } from 'react';
+import { shallow } from 'zustand/shallow';
 import { useCallStore } from '../../store/callStore';
+import NetworkIndicator from './NetworkIndicator';
 
 interface ParticipantTileProps {
   participant: {
@@ -19,8 +21,21 @@ interface ParticipantTileProps {
 
 export default function ParticipantTile({ participant, stream, isLocal = false }: ParticipantTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { activeSpeakerId } = useCallStore();
+  const { activeSpeakerId, qualityEntry } = useCallStore(
+    state => ({
+      activeSpeakerId: state.activeSpeakerId,
+      qualityEntry: state.networkQuality.get(participant.userId),
+    }),
+    shallow
+  );
   const isActiveSpeaker = activeSpeakerId === participant.userId;
+  const upstreamSummary = qualityEntry?.upstream ?? null;
+  const downstreamSummary = qualityEntry?.downstream ?? null;
+  console.log('[ParticipantTile] qualityEntry', participant.userId, { upstreamSummary, downstreamSummary });
+  const indicatorSummary = isLocal
+    ? upstreamSummary ?? downstreamSummary
+    : downstreamSummary ?? upstreamSummary;
+  const indicatorDirection = isLocal ? 'upstream' : 'downstream';
 
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -126,6 +141,9 @@ export default function ParticipantTile({ participant, stream, isLocal = false }
                   />
                 </svg>
               </div>
+            )}
+            {indicatorSummary && (
+              <NetworkIndicator summary={indicatorSummary} direction={indicatorDirection} />
             )}
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
@@ -7,6 +7,7 @@ import { useCallStore, EVERYONE_CONVERSATION_ID, type ChatMessage } from '../sto
 import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
 import { webrtcManager } from '../lib/webrtc';
+import { NetworkMonitor } from '../lib/networkMonitor';
 import ChatPanel from '../components/call/ChatPanel';
 import ParticipantList from '../components/call/ParticipantList';
 import PendingRequestsPanel from '../components/call/PendingRequestsPanel';
@@ -72,6 +73,7 @@ export default function Call() {
     toggleAudio,
     toggleVideo,
     setIsConnected,
+    isConnected,
     participants,
     addParticipant,
     removeParticipant,
@@ -102,6 +104,8 @@ export default function Call() {
     chat,
     ingestChatMessage,
     setChatActiveConversation,
+    updateNetworkQuality,
+    clearNetworkQuality,
   } = useCallStore();
   
   const navigate = useNavigate();
@@ -117,6 +121,7 @@ export default function Call() {
   const producerMetadataRef = useRef<Map<string, { source?: string; userId?: string; kind?: 'audio' | 'video' }>>(new Map());
   const activeScreenShareProducersRef = useRef<Set<string>>(new Set());
   const isStoppingScreenShareRef = useRef(false);
+  const networkMonitorRef = useRef<NetworkMonitor | null>(null);
   const pendingParticipantEventsRef = useRef<Map<string, Array<() => void>>>(new Map());
   const activeSpeakerVideoRef = useRef<HTMLVideoElement>(null);
   const [showPendingRequests, setShowPendingRequests] = useState(false);
@@ -146,6 +151,61 @@ export default function Call() {
   useEffect(() => {
     showChatPanelRef.current = showChatPanel;
   }, [showChatPanel]);
+
+  const resolveProducerMeta = useCallback((producerId: string) => {
+    const metadata = producerMetadataRef.current.get(producerId);
+    if (!metadata) {
+      return undefined;
+    }
+
+    const source = metadata.source;
+    let kind: 'audio' | 'video' | 'screen';
+    if (source === 'screen') {
+      kind = 'screen';
+    } else if (source === 'microphone') {
+      kind = 'audio';
+    } else if (source === 'camera') {
+      kind = 'video';
+    } else {
+      kind = metadata.kind ?? 'video';
+    }
+
+    return {
+      userId: metadata.userId,
+      kind,
+    };
+  }, []);
+
+  const handleNetworkSamples = useCallback((samples: Parameters<typeof updateNetworkQuality>[0]) => {
+    updateNetworkQuality(samples);
+  }, [updateNetworkQuality]);
+
+  useEffect(() => {
+    if (!isConnected || !user?.id) {
+      if (networkMonitorRef.current) {
+        networkMonitorRef.current.stop();
+        networkMonitorRef.current = null;
+      }
+      clearNetworkQuality();
+      return;
+    }
+
+    if (!networkMonitorRef.current) {
+      networkMonitorRef.current = new NetworkMonitor({
+        localUserId: user.id,
+        intervalMs: 4000,
+        resolveProducerMeta,
+        onSamples: handleNetworkSamples,
+      });
+    }
+
+    networkMonitorRef.current.start();
+
+    return () => {
+      networkMonitorRef.current?.stop();
+      networkMonitorRef.current = null;
+    };
+  }, [isConnected, user?.id, resolveProducerMeta, handleNetworkSamples, clearNetworkQuality]);
 
   useEffect(() => {
     if (hasPermissionIssue) {
@@ -1563,6 +1623,11 @@ export default function Call() {
     
     isLeavingRef.current = true;
     setIsLeaving(true);
+    if (networkMonitorRef.current) {
+      networkMonitorRef.current.stop();
+      networkMonitorRef.current = null;
+    }
+    clearNetworkQuality();
     setShowChatPanel(false);
     
     try {

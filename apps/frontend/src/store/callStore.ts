@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ScreenShare } from '../types/screenShare';
+import type { NetworkQualityLevel, NetworkSample } from '../lib/networkMonitor';
 
 export type ChatMessageType = 'BROADCAST' | 'DIRECT' | 'SYSTEM';
 
@@ -38,6 +39,57 @@ export interface ChatConversation {
 }
 
 export const EVERYONE_CONVERSATION_ID = 'everyone';
+
+export type NetworkDirection = 'upstream' | 'downstream';
+
+export interface NetworkQualitySummary {
+  level: NetworkQualityLevel;
+  bitrateKbps: number;
+  packetLoss: number;
+  jitter: number;
+  rtt: number;
+  kind: 'audio' | 'video' | 'screen';
+  lastUpdated: number;
+}
+
+export interface NetworkQualityAggregate {
+  upstream: NetworkQualitySummary | null;
+  downstream: NetworkQualitySummary | null;
+  lastUpdated: number;
+}
+
+const qualityRank: Record<NetworkQualityLevel, number> = {
+  excellent: 4,
+  good: 3,
+  fair: 2,
+  poor: 1,
+  unknown: 0,
+};
+
+const updateDirectionSummary = (
+  existing: NetworkQualitySummary | null,
+  incoming: NetworkQualitySummary
+): NetworkQualitySummary => {
+  if (!existing) {
+    return incoming;
+  }
+
+  const incomingRank = qualityRank[incoming.level];
+  const existingRank = qualityRank[existing.level];
+
+  const useIncoming =
+    incomingRank < existingRank ||
+    (incomingRank === existingRank && incoming.lastUpdated >= existing.lastUpdated);
+
+  if (useIncoming) {
+    return incoming;
+  }
+
+  return {
+    ...existing,
+    lastUpdated: Math.max(existing.lastUpdated, incoming.lastUpdated),
+  };
+};
 
 const createGroupConversation = (): ChatConversation => ({
   id: EVERYONE_CONVERSATION_ID,
@@ -190,6 +242,7 @@ interface CallState {
     conversations: Map<string, ChatConversation>;
     messages: Map<string, ChatMessage[]>;
   };
+  networkQuality: Map<string, NetworkQualityAggregate>;
   setRoomCode: (code: string) => void;
   setIsConnected: (connected: boolean) => void;
   setLocalStream: (stream: MediaStream | null) => void;
@@ -226,6 +279,8 @@ interface CallState {
     options?: { currentUserId?: string; nextCursor?: string | null; hasMore?: boolean }
   ) => void;
   ensureChatConversation: (conversation: ChatConversation) => void;
+  updateNetworkQuality: (samples: NetworkSample[]) => void;
+  clearNetworkQuality: () => void;
   resetCallState: () => void;
 }
 
@@ -290,6 +345,7 @@ export const useCallStore = create<CallState>((set) => ({
       [EVERYONE_CONVERSATION_ID, []],
     ]),
   },
+  networkQuality: new Map<string, NetworkQualityAggregate>(),
   
   setRoomCode: (code) => set({ roomCode: code }),
   setIsConnected: (connected) => set({ isConnected: connected }),
@@ -660,6 +716,65 @@ export const useCallStore = create<CallState>((set) => ({
       },
     };
   }),
+  updateNetworkQuality: (samples) => set((state) => {
+    if (!samples || samples.length === 0) {
+      return { networkQuality: state.networkQuality };
+    }
+
+    const updated = new Map(state.networkQuality);
+
+    for (const sample of samples) {
+      if (!sample || !sample.userId) {
+        continue;
+      }
+
+      const summary: NetworkQualitySummary = {
+        level: sample.quality ?? 'unknown',
+        bitrateKbps: Number.isFinite(sample.bitrateKbps) ? Math.max(0, Math.round(sample.bitrateKbps)) : 0,
+        packetLoss: Number.isFinite(sample.packetLoss) ? Math.max(0, Number(sample.packetLoss.toFixed(2))) : 0,
+        jitter: Number.isFinite(sample.jitter) ? Math.max(0, Number(sample.jitter.toFixed(2))) : 0,
+        rtt: Number.isFinite(sample.rtt) ? Math.max(0, Math.round(sample.rtt)) : 0,
+        kind: sample.kind,
+        lastUpdated: sample.timestamp ?? Date.now(),
+      };
+
+      const existing = updated.get(sample.userId);
+      const base: NetworkQualityAggregate = existing
+        ? {
+            upstream: existing.upstream,
+            downstream: existing.downstream,
+            lastUpdated: existing.lastUpdated,
+          }
+        : {
+            upstream: null,
+            downstream: null,
+            lastUpdated: 0,
+          };
+
+      const next: NetworkQualityAggregate = {
+        upstream:
+          sample.direction === 'upstream'
+            ? updateDirectionSummary(base.upstream, summary)
+            : base.upstream,
+        downstream:
+          sample.direction === 'downstream'
+            ? updateDirectionSummary(base.downstream, summary)
+            : base.downstream,
+        lastUpdated: Math.max(base.lastUpdated, summary.lastUpdated),
+      };
+
+      updated.set(sample.userId, next);
+    }
+
+    return {
+      ...state,
+      networkQuality: updated,
+    };
+  }),
+  clearNetworkQuality: () => set((state) => ({
+    ...state,
+    networkQuality: new Map<string, NetworkQualityAggregate>(),
+  })),
   resetCallState: () => set({
     isConnected: false,
     roomCode: null,
@@ -697,6 +812,7 @@ export const useCallStore = create<CallState>((set) => ({
         [EVERYONE_CONVERSATION_ID, []],
       ]),
     },
+    networkQuality: new Map<string, NetworkQualityAggregate>(),
   }),
 }));
 

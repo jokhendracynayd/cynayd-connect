@@ -339,6 +339,20 @@ class WebRTCManager {
     return this.producersByKind.get(kind) || null;
   }
 
+  getProducerEntries(): Array<{ producerId: string; producer: any }> {
+    return Array.from(this.producers.entries()).map(([producerId, producer]) => ({
+      producerId,
+      producer,
+    }));
+  }
+
+  getConsumerEntries(): Array<{ producerId: string; consumer: any }> {
+    return Array.from(this.consumers.entries()).map(([producerId, consumer]) => ({
+      producerId,
+      consumer,
+    }));
+  }
+
   async pauseProducer(kind: 'audio' | 'video'): Promise<void> {
     const producer = this.producersByKind.get(kind);
     if (!producer) {

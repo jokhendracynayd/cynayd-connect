@@ -112,7 +112,7 @@
 ### In Progress / Pending
 - [ ] Screen sharing ⏳ **TODO**: Not yet implemented
 - [x] Text chat with history ✅ **VERIFIED**: Persistent chat + DM support (`chat.handler.ts`, chat store, `ChatPanel.tsx`)
-- [ ] Network quality indicators ⏳ **TODO**: Not implemented
+- [x] Network quality indicators ✅ **VERIFIED**: Live metrics via `networkMonitor.ts`, `callStore.ts`, `ParticipantTile.tsx`
 - [ ] Host controls (mute all) ⏳ **TODO**: Not implemented
 
 **Timeline**: Weeks 7-8  
