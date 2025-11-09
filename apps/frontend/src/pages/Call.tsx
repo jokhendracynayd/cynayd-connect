@@ -43,6 +43,20 @@ type ServerParticipant = {
   joinedAt?: string;
 };
 
+interface ParticipantTile {
+  userId: string;
+  name: string;
+  email: string;
+  picture?: string | null;
+  isLocal: boolean;
+  isHost: boolean;
+  stream?: MediaStream | null;
+  isAudioMuted: boolean;
+  isVideoMuted: boolean;
+  isSpeaking: boolean;
+  hasRaisedHand: boolean;
+}
+
 export default function Call() {
   const { roomCode } = useParams<{ roomCode: string }>();
   const { user, token, hasCheckedAuth } = useAuthStore();
@@ -95,6 +109,15 @@ export default function Call() {
   const activeScreenShareProducersRef = useRef<Set<string>>(new Set());
   const isStoppingScreenShareRef = useRef(false);
   const pendingParticipantEventsRef = useRef<Map<string, Array<() => void>>>(new Map());
+  const activeSpeakerVideoRef = useRef<HTMLVideoElement>(null);
+  const [showPendingRequests, setShowPendingRequests] = useState(false);
+  const [showRoomSettings, setShowRoomSettings] = useState(false);
+  const [showWaitingRoom, setShowWaitingRoom] = useState(false);
+  const [isLeaving, setIsLeaving] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const isLeavingRef = useRef(false); // Prevent double cleanup
+  const isLoadingPendingRequestsRef = useRef(false); // Track API call in progress
+  const [showParticipantList, setShowParticipantList] = useState(false);
 
   const runOrQueueParticipantUpdate = (targetUserId: string | undefined, action: () => void) => {
     if (!targetUserId) {
@@ -200,6 +223,7 @@ export default function Call() {
     screenShareProducersRef.current.delete(userId);
 
     producerIds.forEach(id => {
+      webrtcManager.closeConsumerByProducerId(id);
       activeScreenShareProducersRef.current.delete(id);
       producerMetadataRef.current.delete(id);
     });
@@ -257,13 +281,6 @@ export default function Call() {
       hasProducer: !!webrtcManager.getScreenShareProducer(),
     });
   };
-  const [showParticipantList, setShowParticipantList] = useState(false);
-  const [showPendingRequests, setShowPendingRequests] = useState(false);
-  const [showRoomSettings, setShowRoomSettings] = useState(false);
-  const [showWaitingRoom, setShowWaitingRoom] = useState(false);
-  const [isLeaving, setIsLeaving] = useState(false);
-  const isLeavingRef = useRef(false); // Prevent double cleanup
-  const isLoadingPendingRequestsRef = useRef(false); // Track API call in progress
 
   useEffect(() => {
     // Wait for auth check to complete
@@ -916,6 +933,7 @@ export default function Call() {
         cleanupScreenShare(metadata.userId, data.producerId);
       } else {
         producerMetadataRef.current.delete(data.producerId);
+        webrtcManager.closeConsumerByProducerId(data.producerId);
       }
 
       const userIdForProducer = metadata?.userId || data.userId;
@@ -1464,9 +1482,9 @@ export default function Call() {
       try {
         remoteStreams.forEach((stream, userId) => {
           try {
-            stream.getTracks().forEach(track => {
-              track.stop();
-              stream.removeTrack(track);
+            stream.getTracks().forEach(mediaTrack => {
+              mediaTrack.stop();
+              stream.removeTrack(mediaTrack);
             });
           } catch (err) {
             console.warn(`Error stopping tracks for user ${userId}:`, err);
@@ -1481,9 +1499,9 @@ export default function Call() {
       try {
         screenShareStreams.forEach((stream, userId) => {
           try {
-            stream.getTracks().forEach(track => {
-              track.stop();
-              stream.removeTrack(track);
+            stream.getTracks().forEach(mediaTrack => {
+              mediaTrack.stop();
+              stream.removeTrack(mediaTrack);
             });
           } catch (err) {
             console.warn(`Error stopping screen share tracks for user ${userId}:`, err);
@@ -2012,6 +2030,247 @@ export default function Call() {
     }
   };
 
+  const remoteParticipantTiles: ParticipantTile[] = participants
+    .filter(participant => participant.userId !== user?.id)
+    .map(participant => ({
+      userId: participant.userId,
+      name: participant.name,
+      email: participant.email,
+      picture: participant.picture,
+      isLocal: false,
+      isHost: participant.isAdmin ?? false,
+      stream: remoteStreams.get(participant.userId) ?? null,
+      isAudioMuted: participant.isAudioMuted ?? true,
+      isVideoMuted: participant.isVideoMuted ?? true,
+      isSpeaking: participant.isSpeaking ?? false,
+      hasRaisedHand: participant.hasRaisedHand ?? false,
+    }));
+
+  const localTile: ParticipantTile = {
+    userId: user?.id ?? 'local-user',
+    name: user?.name ?? 'You',
+    email: user?.email ?? '',
+    picture: user?.picture ?? null,
+    isLocal: true,
+    isHost: isAdmin,
+    stream: localStream ?? null,
+    isAudioMuted,
+    isVideoMuted,
+    isSpeaking: activeSpeakerId === user?.id,
+    hasRaisedHand: user?.id ? raisedHands.has(user.id) : false,
+  };
+
+  let allParticipantTiles: ParticipantTile[] = [localTile, ...remoteParticipantTiles];
+// this is for the demo mode
+  if (import.meta.env.MODE !== 'production') {
+    const targetDemoCount =10
+    if (allParticipantTiles.length < targetDemoCount) {
+      const demoNeeded = targetDemoCount - allParticipantTiles.length;
+      const existingCount = allParticipantTiles.length;
+      const demoTiles = Array.from({ length: demoNeeded }, (_, index) => {
+        const demoNumber = existingCount + index;
+        return {
+          userId: `__demo_${demoNumber}`,
+          name: `Guest ${demoNumber}`,
+          email: '',
+          picture: null,
+          isLocal: false,
+          isHost: false,
+          stream: null,
+          isAudioMuted: true,
+          isVideoMuted: true,
+          isSpeaking: false,
+          hasRaisedHand: false,
+        } satisfies ParticipantTile;
+      });
+      allParticipantTiles = [...allParticipantTiles, ...demoTiles];
+    }
+  }
+
+  const totalParticipants = allParticipantTiles.length;
+  const hasScreenShareStage = screenShares.size > 0;
+  const hasPinnedScreenShare = hasScreenShareStage && Boolean(pinnedScreenShareUserId);
+  const showSplitLayout = hasPinnedScreenShare;
+  const maxVisibleTiles = 9;
+  const defaultVisibleTiles = allParticipantTiles.slice(0, maxVisibleTiles);
+  const participantTilesForDisplay = showSplitLayout ? allParticipantTiles : defaultVisibleTiles;
+  const overflowCount = showSplitLayout ? 0 : Math.max(allParticipantTiles.length - defaultVisibleTiles.length, 0);
+  const isSoloLayout = !showSplitLayout && participantTilesForDisplay.length === 1;
+  const gridClasses = getGridTemplateClasses(participantTilesForDisplay.length);
+  const gridStyle =
+    !showSplitLayout && participantTilesForDisplay.length >= 7
+      ? { gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }
+      : undefined;
+  const sharePaneBaseClasses =
+    'flex-1 min-w-0 overflow-hidden rounded-[32px] border border-slate-200 bg-white/90 shadow-[0_30px_60px_-35px_rgba(14,165,233,0.35)] backdrop-blur';
+  const sharePaneClassName = showSplitLayout
+    ? `${sharePaneBaseClasses} ${isSidebarCollapsed ? 'lg:basis-full xl:basis-full' : 'lg:basis-[78%] xl:basis-[82%]'}`
+    : sharePaneBaseClasses;
+  const activeSpeakerTile = showSplitLayout
+    ? allParticipantTiles.find(tile => tile.userId === activeSpeakerId)
+    : undefined;
+  const activeSpeakerStream = activeSpeakerTile?.stream ?? null;
+  const activeSpeakerHasLiveVideo = Boolean(
+    activeSpeakerStream &&
+    activeSpeakerStream.getVideoTracks().some(track => track.readyState === 'live' && track.enabled) &&
+    !activeSpeakerTile?.isVideoMuted
+  );
+  const shouldShowActiveSpeakerOverlay = Boolean(
+    showSplitLayout && activeSpeakerTile && activeSpeakerTile.userId !== pinnedScreenShareUserId
+  );
+  const mainLayoutSpacingClass = isSidebarCollapsed ? 'gap-2 pt-0' : 'gap-4 pt-4';
+
+  useEffect(() => {
+    if (!showSplitLayout && isSidebarCollapsed) {
+      setIsSidebarCollapsed(false);
+    }
+  }, [showSplitLayout, isSidebarCollapsed]);
+
+  useEffect(() => {
+    const videoElement = activeSpeakerVideoRef.current;
+    const stream = shouldShowActiveSpeakerOverlay && activeSpeakerHasLiveVideo ? activeSpeakerStream : null;
+
+    if (!videoElement) {
+      return;
+    }
+
+    if (!stream) {
+      if (videoElement.srcObject) {
+        videoElement.srcObject = null;
+      }
+      return;
+    }
+
+    if (videoElement.srcObject !== stream) {
+      videoElement.srcObject = stream;
+    }
+
+    videoElement.play().catch(error => {
+      console.warn('Error playing active speaker overlay video:', error);
+    });
+  }, [activeSpeakerHasLiveVideo, activeSpeakerStream, shouldShowActiveSpeakerOverlay]);
+
+  function getGridTemplateClasses(count: number) {
+    if (count <= 1) {
+      return 'grid-cols-1';
+    }
+    if (count === 2) {
+      return 'grid-cols-1 md:grid-cols-2';
+    }
+    if (count === 3) {
+      return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+    }
+    if (count >= 4 && count <= 6) {
+      return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+    }
+    return 'grid-cols-1 sm:grid-cols-2';
+  }
+
+  const getTileSpanClass = (index: number, count: number) => {
+    if (count === 3 && index === 0) {
+      return 'lg:col-span-2 lg:row-span-2';
+    }
+    return '';
+  };
+
+  const setRemoteVideoRef = (tile: ParticipantTile) => (element: HTMLVideoElement | null) => {
+    if (!tile.stream) {
+      remoteVideoRefs.current.delete(tile.userId);
+      return;
+    }
+
+    if (!element) {
+      remoteVideoRefs.current.delete(tile.userId);
+      return;
+    }
+
+    remoteVideoRefs.current.set(tile.userId, element);
+
+    if (element.srcObject !== tile.stream) {
+      element.srcObject = tile.stream;
+    }
+
+    if (element.paused) {
+      element.play().catch(() => {
+        /* ignore autoplay errors */
+      });
+    }
+  };
+
+  const renderParticipantTile = (tile: ParticipantTile, index: number) => {
+    const tileStream = tile.stream ?? null;
+    const videoTracks = tileStream?.getVideoTracks() ?? [];
+    const hasLiveVideo = videoTracks.some(track => track.readyState === 'live');
+    const shouldShowVideo = Boolean(tileStream && !tile.isVideoMuted && hasLiveVideo);
+    const tileClasses = [
+      'relative overflow-hidden rounded-3xl border border-slate-200 bg-white/90 shadow-[0_24px_60px_-35px_rgba(14,165,233,0.35)] transition-all',
+      tile.isSpeaking ? 'ring-2 ring-cyan-400 shadow-[0_0_0_4px_rgba(14,165,233,0.15)]' : '',
+      tile.isLocal ? 'ring-1 ring-cyan-200/60' : '',
+      showSplitLayout ? 'aspect-[4/3] w-full' : isSoloLayout ? 'h-full w-full' : 'aspect-video',
+      showSplitLayout ? '' : getTileSpanClass(index, participantTilesForDisplay.length),
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    return (
+      <div key={`${tile.userId}-${tile.isLocal ? 'local' : 'remote'}`} className={tileClasses}>
+        <video
+          ref={tile.isLocal ? localVideoRef : setRemoteVideoRef(tile)}
+          autoPlay
+          playsInline
+          muted={tile.isLocal}
+          className="h-full w-full bg-slate-950/90 object-cover"
+          style={{ visibility: shouldShowVideo ? 'visible' : 'hidden' }}
+        />
+
+        {!shouldShowVideo && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-900/80 text-white/70">
+            {tile.picture ? (
+              <img
+                src={tile.picture}
+                alt={tile.name}
+                className="h-16 w-16 rounded-full border border-white/40 object-cover"
+              />
+            ) : (
+              <svg className="h-16 w-16 text-white/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+            )}
+            <span className="text-sm font-medium">{tile.name}</span>
+          </div>
+        )}
+
+        {tile.isAudioMuted && (
+          <div className="absolute left-4 top-4 rounded-full bg-rose-500 p-2 text-white shadow">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+            </svg>
+          </div>
+        )}
+
+        {tile.hasRaisedHand && (
+          <div className="absolute right-4 top-4 rounded-full bg-amber-300 p-2 text-amber-900 shadow">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 0a1.5 1.5 0 00-3 0v2.5m6 0V11m0-5.5v-1a1.5 1.5 0 00-3 0v1m0 0V11m3-5.5a1.5 1.5 0 00-3 0v3m6 0V11" />
+            </svg>
+          </div>
+        )}
+
+        <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur">
+          <span className="normal-case tracking-normal">
+            {tile.name}
+            {tile.isLocal ? ' (You)' : ''}
+          </span>
+          {tile.isHost && (
+            <span className="rounded-full bg-cyan-200/80 px-2 py-0.5 text-[10px] font-semibold uppercase text-cyan-900">
+              Host
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
    // Show waiting room if user is waiting for approval
    if (showWaitingRoom && roomCode) {
      return (
@@ -2036,22 +2295,22 @@ export default function Call() {
    // Show leaving state
    if (isLeaving) {
      return (
-       <div className="min-h-screen flex items-center justify-center bg-gray-900">
-         <div className="text-center text-white">
-           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto"></div>
-           <p className="mt-4">Leaving room...</p>
-           <p className="mt-2 text-gray-400 text-sm">Please wait while we clean up</p>
+      <div className="min-h-screen flex items-center justify-center bg-[#f7f9fc] text-slate-600">
+        <div className="text-center space-y-3">
+          <div className="mx-auto h-12 w-12 rounded-full border-2 border-slate-200 border-t-cyan-400 animate-spin"></div>
+          <p className="text-slate-800 font-medium">Leaving room...</p>
+          <p className="text-sm text-slate-500">Please wait while we reset your session.</p>
          </div>
        </div>
      );
    }
 
-   if (isConnecting) {
+  if (isConnecting) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900">
-        <div className="text-center text-white">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto"></div>
-          <p className="mt-4">Connecting to room...</p>
+      <div className="flex min-h-screen items-center justify-center bg-[#f7f9fc] text-slate-600">
+        <div className="text-center">
+          <div className="mx-auto h-12 w-12 rounded-full border-2 border-slate-200 border-t-cyan-400 animate-spin" />
+          <p className="mt-4 font-medium text-slate-800">Connecting to room...</p>
         </div>
       </div>
     );
@@ -2059,14 +2318,14 @@ export default function Call() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900">
-        <div className="text-center text-white max-w-md">
-          <div className="text-red-500 text-6xl mb-4">⚠️</div>
-          <h1 className="text-2xl font-bold mb-2">Connection Error</h1>
-          <p className="text-gray-400 mb-6">{error}</p>
+      <div className="flex min-h-screen items-center justify-center bg-[#f7f9fc]">
+        <div className="max-w-md rounded-[24px] border border-rose-100 bg-white/90 px-8 py-10 text-center text-rose-500 shadow-[0_28px_70px_-40px_rgba(244,63,94,0.35)]">
+          <div className="mb-4 text-5xl">⚠️</div>
+          <h1 className="mb-2 text-2xl font-semibold text-slate-900">Connection error</h1>
+          <p className="mb-6 text-slate-500">{error}</p>
           <button
             onClick={() => navigate('/')}
-            className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium"
+            className="rounded-full bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 px-6 py-3 font-semibold text-white shadow-[0_18px_45px_-28px_rgba(14,165,233,0.55)] transition hover:from-cyan-500 hover:via-sky-600 hover:to-indigo-600"
           >
             Go Home
           </button>
@@ -2076,377 +2335,391 @@ export default function Call() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col">
-      {/* Top Alert - You are sharing screen */}
-      {isScreenSharing && (
-        <div className="bg-yellow-600 text-white px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-              />
-            </svg>
-            <span className="font-medium">You are sharing your screen</span>
-          </div>
-          <button
-            onClick={handleStopScreenShare}
-            className="text-white hover:text-yellow-200 underline text-sm"
-          >
-            Stop sharing
-          </button>
-        </div>
-      )}
+    <div className="relative flex h-screen flex-col overflow-hidden bg-[#f7f9fc] text-slate-900">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-36 -top-24 h-[520px] w-[520px] rounded-full bg-gradient-to-br from-cyan-100 via-sky-100 to-indigo-100 opacity-70 blur-[170px]" />
+        <div className="absolute right-[-160px] bottom-[-180px] h-[520px] w-[520px] rounded-full bg-gradient-to-tl from-white via-cyan-100 to-indigo-100 opacity-60 blur-[180px]" />
+      </div>
 
-      {/* Screen Share Section - Only show other users' screen shares */}
-      {screenShares.size > 0 && (
-        <div className="px-4 pt-4 pb-2 border-b border-gray-700">
-          <ScreenShareSection
-            screenShares={screenShares}
-            pinnedUserId={pinnedScreenShareUserId}
-            onPin={handlePinScreenShare}
-            remoteStreams={screenShareStreams}
-            currentUserId={user?.id}
-          />
-        </div>
-      )}
-
-      {/* Video Grid - Participant Videos Only */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4 pb-24">
-        {/* Local Video */}
-        <div className="bg-gray-800 rounded-lg overflow-hidden aspect-video relative">
-          {localStream ? (
-            <video
-              ref={localVideoRef}
-              autoPlay
-              muted
-              playsInline
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center bg-gray-700">
-              <div className="text-center">
-                <svg className="w-20 h-20 mx-auto text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                </svg>
-                <p className="text-gray-400 mt-2">{user?.name}</p>
+      <div className="relative z-10 flex h-full flex-col">
+        {false && (
+          <header className="flex h-14 shrink-0 items-center justify-between px-6">
+            <div className="flex items-center gap-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.45em] text-slate-400">CYNAYD CONNECT</p>
+                <p className="text-sm font-semibold text-slate-700">Room {roomCode}</p>
               </div>
-            </div>
-          )}
-          
-          {/* Video Muted Overlay */}
-          {isVideoMuted && localStream && (
-            <div className="absolute inset-0 w-full h-full flex items-center justify-center bg-gray-700 bg-opacity-90 pointer-events-none">
-              <div className="text-center">
-                <svg className="w-20 h-20 mx-auto text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              <span className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm sm:inline-flex">
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7a3 3 0 11-6 0 3 3 0 016 0zM4 15.5a4 4 0 014-4h4a4 4 0 014 4v.5H4v-.5z" />
                 </svg>
-                <p className="text-gray-400 mt-2">{user?.name}</p>
-              </div>
+                {totalParticipants} participant{totalParticipants === 1 ? '' : 's'}
+              </span>
             </div>
-          )}
-          
-          {/* Name Badge */}
-          <div className="absolute bottom-4 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-full text-sm">
-            {user?.name} (You)
-          </div>
+            <div className="flex items-center gap-3 text-xs text-slate-500">
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 font-medium text-slate-500">
+                Live
+              </span>
+              <button
+                onClick={() => setShowParticipantList(true)}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 font-semibold text-slate-600 shadow-sm transition hover:border-cyan-200 hover:text-cyan-600"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7a3 3 0 11-6 0 3 3 0 016 0zM4 15.5a4 4 0 014-4h4a4 4 0 014 4v.5H4v-.5zM17 6v4m2-2h-4" />
+                </svg>
+                View list
+              </button>
+            </div>
+          </header>
+        )}
 
-          {/* Mute Indicator */}
-          {isAudioMuted && (
-            <div className="absolute top-4 left-4 bg-red-600 text-white p-2 rounded-full">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+        {isScreenSharing && (
+          <div className="flex items-center justify-between border-b border-amber-200 bg-amber-100/90 px-6 py-3 text-amber-700 backdrop-blur">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
               </svg>
+              <span>You are sharing your screen</span>
             </div>
-          )}
-        </div>
+            <button
+              onClick={handleStopScreenShare}
+              className="text-sm font-semibold underline transition hover:text-amber-900"
+            >
+              Stop sharing
+            </button>
+          </div>
+        )}
 
-        {/* Remote Videos - Filter out current user */}
-        {participants
-          .filter(p => p.userId !== user?.id) // Don't show self in remote participants
-          .map((participant) => {
-            const remoteStream = remoteStreams.get(participant.userId);
-            const videoTracks = remoteStream?.getVideoTracks() || [];
-            const hasLiveVideo = videoTracks.length > 0 && videoTracks[0].readyState === 'live';
-            const shouldShowVideo = remoteStream && !participant.isVideoMuted && hasLiveVideo;
-            
-            console.log('Rendering participant:', participant.userId, {
-              hasStream: !!remoteStream,
-              streamTracks: remoteStream?.getTracks().length || 0,
-              videoTracks: videoTracks.length,
-              videoState: videoTracks[0]?.readyState,
-              shouldShowVideo,
-            });
-            
-            return (
-              <div key={participant.userId} className="bg-gray-800 rounded-lg overflow-hidden aspect-video relative">
-              {shouldShowVideo ? (
-                <video
-                  autoPlay
-                  playsInline
-                  muted={false}
-                  className="w-full h-full object-cover"
-                  ref={(el) => {
-                    if (el && remoteStream && hasLiveVideo) {
-                      const videoTracks = remoteStream.getVideoTracks();
-                      const audioTracks = remoteStream.getAudioTracks();
-                      
-                      console.log('Setting video srcObject for user:', participant.userId, {
-                        tracks: remoteStream.getTracks().length,
-                        videoTracks: videoTracks.length,
-                        audioTracks: audioTracks.length,
-                        videoTrackId: videoTracks[0]?.id,
-                        videoTrackState: videoTracks[0]?.readyState,
-                      });
-                      
-                      // Only set if track is actually live
-                      if (videoTracks[0]?.readyState === 'live') {
-                        // Only update if different
-                        if (el.srcObject !== remoteStream) {
-                          el.srcObject = remoteStream;
-                        }
-                        remoteVideoRefs.current.set(participant.userId, el);
-                        
-                        // Debug video element events
-                        el.onloadedmetadata = () => {
-                          console.log('✅ Video metadata loaded for user:', participant.userId, 'readyState:', el.readyState);
-                        };
-                        el.onplay = () => {
-                          console.log('✅ Video playing for user:', participant.userId);
-                        };
-                        el.onpause = () => {
-                          console.warn('⏸️ Video paused for user:', participant.userId);
-                        };
-                        el.onstalled = () => {
-                          console.error('❌ Video stalled for user:', participant.userId);
-                        };
-                        el.onwaiting = () => {
-                          console.warn('⏳ Video waiting for user:', participant.userId);
-                        };
-                        el.onerror = () => {
-                          console.error('❌ Video error for user:', participant.userId, 'error:', el.error);
-                        };
-                        
-                        // Try to play immediately (only once)
-                        if (el.paused) {
-                          el.play().then(() => {
-                            console.log('✅ Video play() succeeded for user:', participant.userId);
-                          }).catch(err => {
-                            // Ignore AbortError (interrupted by new load request)
-                            if (err.name !== 'AbortError') {
-                              console.error('❌ Video play() failed for user:', participant.userId, err);
-                            }
-                          });
-                        }
-                      } else {
-                        console.warn('⚠️ Not setting srcObject - video track not live:', participant.userId, videoTracks[0]?.readyState);
-                      }
-                    }
-                  }}
+        <main className={`relative flex flex-1 flex-col px-4 pb-[calc(140px+env(safe-area-inset-bottom))] ${mainLayoutSpacingClass}`}>
+          {showSplitLayout ? (
+            <div className="flex flex-1 flex-col gap-4 lg:flex-row lg:items-stretch lg:gap-6">
+              <div className={`${sharePaneClassName} relative`} style={{ maxHeight: 'calc(100vh - 140px)' }}>
+                <ScreenShareSection
+                  screenShares={screenShares}
+                  pinnedUserId={pinnedScreenShareUserId}
+                  onPin={handlePinScreenShare}
+                  remoteStreams={screenShareStreams}
+                  currentUserId={user?.id}
                 />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center bg-gray-700">
-                  <div className="text-center">
-                    <svg className="w-20 h-20 mx-auto text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+
+                <button
+                  type="button"
+                  onClick={() => setIsSidebarCollapsed(prev => !prev)}
+                  title={isSidebarCollapsed ? 'Show participants sidebar' : 'Hide participants sidebar'}
+                  aria-label={isSidebarCollapsed ? 'Show participants sidebar' : 'Hide participants sidebar'}
+                  aria-expanded={!isSidebarCollapsed}
+                  className="pointer-events-auto absolute right-6 top-6 hidden items-center gap-2 rounded-full border border-white/60 bg-white/85 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-600 shadow-sm transition hover:border-cyan-200 hover:text-cyan-600 lg:inline-flex"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                    {isSidebarCollapsed ? (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 6l8 4-8 4V6z" />
+                    ) : (
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14 6l-8 4 8 4V6z" />
+                    )}
+                  </svg>
+                  {isSidebarCollapsed ? 'Show participants' : 'Hide participants'}
+                </button>
+
+                {shouldShowActiveSpeakerOverlay && activeSpeakerTile && (
+                  <div className="pointer-events-auto absolute bottom-6 right-6 flex w-[min(240px,35%)] flex-col gap-2 rounded-3xl border border-white/40 bg-white/90 p-3 shadow-[0_22px_45px_-28px_rgba(15,23,42,0.45)] backdrop-blur">
+                    <div className="relative aspect-video overflow-hidden rounded-2xl bg-slate-900/85">
+                      {activeSpeakerHasLiveVideo ? (
+                        <video
+                          ref={activeSpeakerVideoRef}
+                          autoPlay
+                          muted
+                          playsInline
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center bg-slate-900/80 text-white/70">
+                          {activeSpeakerTile.picture ? (
+                            <img
+                              src={activeSpeakerTile.picture}
+                              alt={activeSpeakerTile.name}
+                              className="h-12 w-12 rounded-full border border-white/40 object-cover"
+                            />
+                          ) : (
+                            <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                          )}
+                        </div>
+                      )}
+                      <div className="absolute left-3 top-3 rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.3em] text-white">
+                        Speaker
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-600">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-slate-700">
+                          {activeSpeakerTile.name}
+                          {activeSpeakerTile.isLocal ? ' (You)' : ''}
+                        </span>
+                        <span
+                          className={`flex h-6 w-6 items-center justify-center rounded-full ${
+                            activeSpeakerTile.isAudioMuted
+                              ? 'bg-rose-100 text-rose-500'
+                              : 'bg-cyan-100 text-cyan-600'
+                          }`}
+                        >
+                          {activeSpeakerTile.isAudioMuted ? (
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10v2a3 3 0 01-6 0V7m9 5a7 7 0 01-7 7m0 0a7 7 0 01-7-7v-2m7 7v4" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3l18 18" />
+                            </svg>
+                          ) : (
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5a3 3 0 016 0v6a3 3 0 11-6 0V5z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10v2a7 7 0 0014 0v-2" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 17v4" />
+                            </svg>
+                          )}
+                        </span>
+                      </div>
+                      {activeSpeakerTile.isHost && (
+                        <span className="rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.25em] text-cyan-700">
+                          Host
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {isSidebarCollapsed ? (
+                <div className="hidden lg:flex lg:flex-col lg:items-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsSidebarCollapsed(false)}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-cyan-200 hover:text-cyan-600"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 6l8 4-8 4V6z" />
                     </svg>
-                    <p className="text-gray-400 mt-2">{participant.name}</p>
+                    Show participants
+                  </button>
+                </div>
+              ) : (
+                <aside className="flex w-full flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white/80 backdrop-blur lg:basis-[22%] lg:max-w-[300px] xl:basis-[18%]">
+                  <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                    <p className="text-[11px] uppercase tracking-[0.35em] text-slate-400">Participants</p>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">
+                        {totalParticipants}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsSidebarCollapsed(true)}
+                        className="hidden rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 transition hover:border-cyan-200 hover:text-cyan-600 lg:inline-flex"
+                      >
+                        Hide
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+                    {participantTilesForDisplay.length === 0 ? (
+                      <div className="flex h-full items-center justify-center text-sm font-medium text-slate-400">
+                        Waiting for participants…
+                      </div>
+                    ) : (
+                      participantTilesForDisplay.map((tile, index) => renderParticipantTile(tile, index))
+                    )}
+                  </div>
+                </aside>
+              )}
+            </div>
+          ) : (
+            <>
+              {hasScreenShareStage && (
+                <div className="flex-none overflow-hidden rounded-[32px] border border-slate-200 bg-white/90 shadow-[0_30px_60px_-35px_rgba(14,165,233,0.35)]">
+                  <ScreenShareSection
+                    screenShares={screenShares}
+                    pinnedUserId={pinnedScreenShareUserId}
+                    onPin={handlePinScreenShare}
+                    remoteStreams={screenShareStreams}
+                    currentUserId={user?.id}
+                  />
+                </div>
+              )}
+
+              <div className="relative flex flex-1 overflow-hidden">
+                <div className="relative flex h-full w-full flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white/80 backdrop-blur">
+                  <div className="relative h-full w-full overflow-hidden p-4" style={{ maxHeight: 'calc(100vh - 140px)' }}>
+                    {participantTilesForDisplay.length === 0 ? (
+                      <div className="flex h-full items-center justify-center text-sm font-medium text-slate-400">
+                        Waiting for participants…
+                      </div>
+                    ) : (
+                      <div
+                        className={`grid h-full w-full gap-4 ${gridClasses} ${
+                          participantTilesForDisplay.length >= 7
+                            ? 'auto-rows-[minmax(200px,1fr)]'
+                            : 'auto-rows-[minmax(180px,1fr)]'
+                        } ${isSoloLayout ? 'content-center justify-items-center' : ''}`}
+                        style={gridStyle}
+                      >
+                        {participantTilesForDisplay.map((tile, index) => renderParticipantTile(tile, index))}
+                      </div>
+                    )}
+
+                    {!showSplitLayout && overflowCount > 0 && (
+                      <button
+                        onClick={() => setShowParticipantList(true)}
+                        className="absolute right-6 top-6 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow transition hover:border-cyan-200 hover:text-cyan-600"
+                      >
+                        +{overflowCount} more participants
+                      </button>
+                    )}
                   </div>
                 </div>
-              )}
-              
-              {/* Name Badge */}
-              <div className="absolute bottom-4 left-4 bg-black bg-opacity-50 text-white px-3 py-1 rounded-full text-sm">
-                {participant.name}
               </div>
+            </>
+          )}
+        </main>
 
-              {/* Mute Indicator */}
-              {participant.isAudioMuted && (
-                <div className="absolute top-4 left-4 bg-red-600 text-white p-2 rounded-full">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+        <div className="pointer-events-none absolute bottom-0 left-1/2 z-30 -translate-x-1/2 px-4 lg:max-w-4xl">
+          <div
+            className="pointer-events-auto flex flex-wrap items-center justify-center gap-3 rounded-full border border-white/60 bg-white/90 px-6 py-4 shadow-[0_22px_45px_-28px_rgba(14,165,233,0.45)]"
+            style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}
+          >
+            <button
+              onClick={handleToggleAudio}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
+                isAudioMuted
+                  ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
+                  : 'bg-slate-800 hover:bg-slate-900'
+              }`}
+              title={isAudioMuted ? 'Unmute microphone' : 'Mute microphone'}
+            >
+              {isAudioMuted ? (
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              onClick={handleToggleVideo}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
+                isVideoMuted
+                  ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
+                  : 'bg-slate-800 hover:bg-slate-900'
+              }`}
+              title={isVideoMuted ? 'Turn camera on' : 'Turn camera off'}
+            >
+              {isVideoMuted ? (
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              onClick={handleToggleRaiseHand}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
+                user?.id && raisedHands.has(user.id)
+                  ? 'bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 shadow-[0_15px_35px_-20px_rgba(251,191,36,0.65)] hover:from-amber-500 hover:via-amber-600 hover:to-amber-700'
+                  : 'bg-slate-800 hover:bg-slate-900'
+              }`}
+              title={user?.id && raisedHands.has(user.id) ? 'Lower hand' : 'Raise hand'}
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 0a1.5 1.5 0 00-3 0v2.5m6 0V11m0-5.5v-1a1.5 1.5 0 00-3 0v1m0 0V11m3-5.5a1.5 1.5 0 00-3 0v3m6 0V11" />
+              </svg>
+            </button>
+
+            <button
+              onClick={isScreenSharing ? handleStopScreenShare : handleStartScreenShare}
+              className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
+                isScreenSharing
+                  ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
+                  : 'bg-slate-800 hover:bg-slate-900'
+              }`}
+              title={isScreenSharing ? 'Stop sharing screen' : 'Share your screen'}
+            >
+              {isScreenSharing ? (
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              onClick={() => setShowParticipantList(true)}
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+              title="Show participants"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+            </button>
+
+            {isAdmin && (
+              <>
+                <button
+                  onClick={() => setShowRoomSettings(true)}
+                  className="flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+                  title="Room settings"
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
-                </div>
+                </button>
+
+                <button
+                  onClick={() => setShowPendingRequests(!showPendingRequests)}
+                  className="relative flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+                  title="Join requests"
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                  </svg>
+                  {pendingRequests.length > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-semibold text-white">
+                      {pendingRequests.length}
+                    </span>
+                  )}
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={leaveRoom}
+              disabled={isLeaving}
+              className="flex items-center gap-2 rounded-full bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_18px_40px_-24px_rgba(244,63,94,0.65)] transition hover:from-rose-600 hover:via-rose-700 hover:to-rose-800 disabled:cursor-not-allowed disabled:opacity-60"
+              title={isLeaving ? 'Leaving room...' : 'Leave room'}
+            >
+              {isLeaving ? (
+                <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              ) : (
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
               )}
-            </div>
-          );
-        })}
+              <span className="hidden sm:inline">Leave</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Controls */}
-      <div className="fixed bottom-0 left-0 right-0 bg-gray-800 border-t border-gray-700 p-4">
-        <div className="flex items-center justify-center space-x-4 max-w-4xl mx-auto">
-          {/* Mute Audio */}
-          <button
-            onClick={handleToggleAudio}
-            className={`p-4 rounded-full transition-colors ${
-              isAudioMuted ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-700 hover:bg-gray-600'
-            } text-white`}
-          >
-            {isAudioMuted ? (
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-              </svg>
-            ) : (
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-            )}
-          </button>
-
-          {/* Toggle Video */}
-          <button
-            onClick={handleToggleVideo}
-            className={`p-4 rounded-full transition-colors ${
-              isVideoMuted ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-700 hover:bg-gray-600'
-            } text-white`}
-          >
-            {isVideoMuted ? (
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-              </svg>
-            ) : (
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-            )}
-          </button>
-
-          {/* Raise Hand Button */}
-          <button
-            onClick={handleToggleRaiseHand}
-            className={`p-4 rounded-full transition-colors ${
-              user?.id && raisedHands.has(user.id)
-                ? 'bg-yellow-600 hover:bg-yellow-700'
-                : 'bg-gray-700 hover:bg-gray-600'
-            } text-white`}
-            title={user?.id && raisedHands.has(user.id) ? 'Lower hand' : 'Raise hand'}
-          >
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 0a1.5 1.5 0 00-3 0v2.5m6 0V11m0-5.5v-1a1.5 1.5 0 00-3 0v1m0 0V11m3-5.5a1.5 1.5 0 00-3 0v3m6 0V11"
-              />
-            </svg>
-          </button>
-
-          {/* Screen Share Button */}
-          <button
-            onClick={isScreenSharing ? handleStopScreenShare : handleStartScreenShare}
-            className={`p-4 rounded-full transition-colors ${
-              isScreenSharing
-                ? 'bg-red-600 hover:bg-red-700'
-                : 'bg-gray-700 hover:bg-gray-600'
-            } text-white`}
-            title={isScreenSharing ? 'Stop sharing' : 'Share screen'}
-          >
-            {isScreenSharing ? (
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            ) : (
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                />
-              </svg>
-            )}
-          </button>
-
-          {/* Participant List Toggle */}
-          <button
-            onClick={() => setShowParticipantList(!showParticipantList)}
-            className="p-4 rounded-full bg-gray-700 hover:bg-gray-600 text-white transition-colors"
-            title="Participants"
-          >
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-            </svg>
-          </button>
-
-          {/* Room Settings (Admin only) */}
-          {isAdmin && (
-            <button
-              onClick={() => setShowRoomSettings(true)}
-              className="p-4 rounded-full bg-gray-700 hover:bg-gray-600 text-white transition-colors"
-              title="Room Settings"
-            >
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-          )}
-
-          {/* Pending Requests (Admin only) */}
-          {isAdmin && (
-            <button
-              onClick={() => setShowPendingRequests(!showPendingRequests)}
-              className="relative p-4 rounded-full bg-gray-700 hover:bg-gray-600 text-white transition-colors"
-              title="Join Requests"
-            >
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-              </svg>
-              {pendingRequests.length > 0 && (
-                <span className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center">
-                  {pendingRequests.length}
-                </span>
-              )}
-            </button>
-          )}
-
-           {/* Leave */}
-           <button
-             onClick={leaveRoom}
-             disabled={isLeaving}
-             className={`p-4 rounded-full transition-colors ${
-               isLeaving 
-                 ? 'bg-gray-500 cursor-not-allowed opacity-50' 
-                 : 'bg-red-600 hover:bg-red-700'
-             } text-white`}
-             title={isLeaving ? 'Leaving room...' : 'Leave room'}
-           >
-             {isLeaving ? (
-               <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-               </svg>
-             ) : (
-               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-               </svg>
-             )}
-           </button>
-        </div>
-
-        {/* Room Info */}
-        <div className="text-center mt-4">
-          <p className="text-gray-400 text-sm">
-            Room: {roomCode} • {participants.length + 1} participant{participants.length !== 0 ? 's' : ''}
-          </p>
-        </div>
-      </div>
-
-      {/* Components */}
-      <ParticipantList
-        isOpen={showParticipantList}
-        onClose={() => setShowParticipantList(false)}
-      />
+      <ParticipantList isOpen={showParticipantList} onClose={() => setShowParticipantList(false)} />
       {roomCode && (
         <>
           <PendingRequestsPanel

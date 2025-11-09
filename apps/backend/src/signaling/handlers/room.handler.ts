@@ -808,11 +808,11 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       }
 
       if (joinRequest) {
-        callback({
-          success: true,
+      callback({
+        success: true,
           requestId: joinRequest.id,
-          message: 'Join request sent. Waiting for admin approval.',
-        });
+        message: 'Join request sent. Waiting for admin approval.',
+      });
       } else {
         callback({
           success: true,

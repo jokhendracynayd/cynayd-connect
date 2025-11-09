@@ -210,22 +210,22 @@ export default function PreJoin() {
   if (!hasDevices) {
     // No devices available - can still join
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="max-w-md w-full mx-4">
-          <div className="bg-gray-800 rounded-lg p-8 text-center">
-            <div className="mb-6">
-              <svg className="w-16 h-16 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <div className="min-h-screen bg-[#f7f9fc] flex items-center justify-center px-6 py-16">
+        <div className="max-w-md w-full">
+          <div className="rounded-[28px] border border-slate-200 bg-white/90 p-10 text-center shadow-[0_28px_70px_-35px_rgba(14,165,233,0.45)] backdrop-blur">
+            <div className="mb-6 flex justify-center">
+              <svg className="h-16 w-16 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
             </div>
-            <h2 className="text-2xl font-bold text-white mb-4">No Audio/Video Devices</h2>
-            <p className="text-gray-400 mb-6">
-              You can still join the room as a listener, but won't be able to share audio or video.
+            <h2 className="text-2xl font-semibold text-slate-900 mb-3">No audio/video devices detected</h2>
+            <p className="text-sm leading-relaxed text-slate-600 mb-8">
+              You can still enter the room as a listener. Reconnect devices anytime from within the session.
             </p>
             <button
               onClick={handleJoin}
               disabled={isLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-medium disabled:opacity-50"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-[20px] bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-[0_22px_45px_-24px_rgba(14,165,233,0.6)] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isLoading ? 'Joining...' : 'Join Room'}
             </button>
@@ -236,105 +236,132 @@ export default function PreJoin() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-      <div className="max-w-4xl w-full">
-        <div className="grid md:grid-cols-2 gap-6">
+    <div className="relative min-h-screen overflow-hidden bg-[#f7f9fc] text-slate-900">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-32 top-[-120px] h-[520px] w-[520px] rounded-full bg-gradient-to-br from-cyan-100 via-sky-100 to-indigo-100 opacity-70 blur-[160px]" />
+        <div className="absolute right-[-100px] bottom-[-160px] h-[480px] w-[480px] rounded-full bg-gradient-to-tl from-white via-cyan-100 to-indigo-100 opacity-60 blur-[170px]" />
+      </div>
+
+      <div className="relative z-10 mx-auto flex min-h-screen max-w-6xl flex-col justify-center px-6 py-16 sm:px-8 lg:px-10">
+        <div className="grid gap-10 lg:grid-cols-[1.05fr_0.95fr]">
           {/* Video Preview */}
-          <div className="bg-gray-800 rounded-lg overflow-hidden">
-            <div className="aspect-video bg-black relative">
-              {settings.joinWithVideo ? (
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  <div className="text-center">
-                    <svg className="w-20 h-20 mx-auto text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                    <p className="text-gray-400 mt-4">Camera off</p>
+          <div className="rounded-[34px] border border-slate-200 bg-white/95 shadow-[0_32px_75px_-40px_rgba(14,165,233,0.55)] backdrop-blur overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.35em] text-cyan-500">Preview</p>
+                <h3 className="mt-2 text-lg font-semibold text-slate-900">Check your presence</h3>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500">
+                Live preview
+              </div>
+            </div>
+            <div className="relative">
+              <div className="aspect-video border-b border-slate-100 bg-slate-950/90">
+                {settings.joinWithVideo ? (
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-100 via-white to-slate-50">
+                    <div className="text-center">
+                      <svg className="mx-auto h-16 w-16 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                      <p className="mt-4 text-sm font-medium text-slate-500">Camera is currently off</p>
+                    </div>
                   </div>
-                </div>
-              )}
-              <div className="absolute bottom-4 left-4 right-4 flex gap-2">
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2 border-t border-slate-100 bg-white/90 px-6 py-4 sm:flex-row">
                 <button
                   onClick={handleToggleAudio}
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg font-medium ${
+                  className={`flex-1 rounded-[18px] px-4 py-3 text-sm font-medium transition ${
                     settings.joinWithAudio
-                      ? 'bg-gray-700 text-white hover:bg-gray-600'
-                      : 'bg-red-600 text-white hover:bg-red-700'
+                      ? 'bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 text-white shadow-[0_18px_40px_-22px_rgba(14,165,233,0.6)] hover:shadow-[0_22px_50px_-24px_rgba(14,165,233,0.65)]'
+                      : 'border border-rose-200 bg-rose-50 text-rose-500 hover:border-rose-300'
                   }`}
                 >
-                  {settings.joinWithAudio ? (
-                    <>
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                      </svg>
-                      Mic on
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                      </svg>
-                      Mic off
-                    </>
-                  )}
+                  <span className="flex items-center justify-center gap-2">
+                    {settings.joinWithAudio ? (
+                      <>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                        </svg>
+                        Mic on
+                      </>
+                    ) : (
+                      <>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                        </svg>
+                        Mic muted
+                      </>
+                    )}
+                  </span>
                 </button>
                 <button
                   onClick={handleToggleVideo}
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-lg font-medium ${
+                  className={`flex-1 rounded-[18px] px-4 py-3 text-sm font-medium transition ${
                     settings.joinWithVideo
-                      ? 'bg-gray-700 text-white hover:bg-gray-600'
-                      : 'bg-red-600 text-white hover:bg-red-700'
+                      ? 'border border-slate-200 bg-white text-slate-700 hover:border-cyan-200 hover:bg-cyan-50'
+                      : 'border border-rose-200 bg-rose-50 text-rose-500 hover:border-rose-300'
                   }`}
                 >
-                  {settings.joinWithVideo ? (
-                    <>
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                      Camera on
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                      </svg>
-                      Camera off
-                    </>
-                  )}
+                  <span className="flex items-center justify-center gap-2">
+                    {settings.joinWithVideo ? (
+                      <>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                        Camera on
+                      </>
+                    ) : (
+                      <>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                        </svg>
+                        Camera off
+                      </>
+                    )}
+                  </span>
                 </button>
               </div>
             </div>
           </div>
 
           {/* Settings Panel */}
-          <div className="space-y-4">
-            <div className="bg-gray-800 rounded-lg p-6">
-              <h3 className="text-xl font-bold text-white mb-4">
-                Ready to join?
-              </h3>
-              <p className="text-gray-400 mb-6">
-                Adjust your settings before joining the room.
+          <div className="flex flex-col gap-6">
+            <div className="rounded-[32px] border border-slate-200 bg-white/95 p-8 shadow-[0_30px_75px_-38px_rgba(14,165,233,0.5)] backdrop-blur">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.35em] text-cyan-500">Ready to join?</p>
+                  <h3 className="mt-2 text-xl font-semibold text-slate-900">Personalize before entering</h3>
+                </div>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500">
+                  Step 2 of 2
+                </span>
+              </div>
+              <p className="mt-3 text-sm leading-relaxed text-slate-600">
+                Confirm your devices and presence settings. You can adjust these anytime inside the room.
               </p>
 
               {/* Device Selection */}
-              <div className="space-y-4 mb-6">
+              <div className="mt-6 space-y-5">
                 {devices.audioInput.length > 0 && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                    <label className="mb-2 block text-sm font-medium text-slate-600">
                       Microphone
                     </label>
                     <select
                       value={selectedDevices.audioInput}
                       onChange={(e) => handleDeviceChange('audioInput', e.target.value)}
-                      className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full rounded-[16px] border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 shadow-[0_16px_40px_-32px_rgba(14,165,233,0.55)] focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                     >
                       {devices.audioInput.map((device) => (
                         <option key={device.deviceId} value={device.deviceId}>
@@ -347,13 +374,13 @@ export default function PreJoin() {
 
                 {devices.videoInput.length > 0 && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                    <label className="mb-2 block text-sm font-medium text-slate-600">
                       Camera
                     </label>
                     <select
                       value={selectedDevices.videoInput}
                       onChange={(e) => handleDeviceChange('videoInput', e.target.value)}
-                      className="w-full bg-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full rounded-[16px] border border-slate-200 bg-white px-3 py-3 text-sm text-slate-800 shadow-[0_16px_40px_-32px_rgba(14,165,233,0.55)] focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                     >
                       {devices.videoInput.map((device) => (
                         <option key={device.deviceId} value={device.deviceId}>
@@ -366,27 +393,28 @@ export default function PreJoin() {
               </div>
 
               {/* Join Button */}
-              <button
-                onClick={handleJoin}
-                disabled={isLoading}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-lg font-medium disabled:opacity-50 mb-4"
-              >
-                {isLoading ? 'Joining...' : 'Join Now'}
-              </button>
+              <div className="mt-8 space-y-3">
+                <button
+                  onClick={handleJoin}
+                  disabled={isLoading}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-[20px] bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 px-6 py-3 text-sm font-semibold text-white shadow-[0_22px_45px_-24px_rgba(14,165,233,0.6)] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isLoading ? 'Joining...' : 'Join now'}
+                </button>
 
-              {/* Back Button */}
-              <button
-                onClick={() => navigate(-1)}
-                className="w-full bg-gray-700 hover:bg-gray-600 text-white py-3 rounded-lg font-medium"
-              >
-                Back
-              </button>
+                <button
+                  onClick={() => navigate(-1)}
+                  className="inline-flex w-full items-center justify-center rounded-[20px] border border-slate-200 bg-white px-6 py-3 text-sm font-semibold text-slate-600 transition hover:border-cyan-200 hover:bg-cyan-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-100"
+                >
+                  Back
+                </button>
+              </div>
             </div>
 
             {/* Room Info */}
-            <div className="bg-gray-800 rounded-lg p-4">
-              <p className="text-sm text-gray-400">Room code</p>
-              <p className="text-xl font-bold text-white">{roomCode}</p>
+            <div className="rounded-[24px] border border-slate-200 bg-white/80 p-6 shadow-[0_20px_50px_-36px_rgba(14,165,233,0.45)] backdrop-blur">
+              <p className="text-xs uppercase tracking-[0.35em] text-cyan-500">Room code</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{roomCode}</p>
             </div>
           </div>
         </div>

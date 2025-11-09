@@ -28,7 +28,7 @@ export default function ScreenShareThumbnail({
 
   return (
     <div
-      className="relative rounded-lg overflow-hidden bg-gray-900 aspect-video cursor-pointer hover:ring-2 hover:ring-blue-500 transition-all"
+      className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video cursor-pointer border border-transparent hover:border-cyan-200 hover:shadow-[0_18px_45px_-28px_rgba(14,165,233,0.45)] transition-all"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onClick={onPin}
@@ -60,7 +60,7 @@ export default function ScreenShareThumbnail({
       )}
 
       {/* Name Badge */}
-      <div className="absolute bottom-2 left-2 bg-black bg-opacity-70 text-white px-2 py-1 rounded text-xs truncate max-w-[calc(100%-4rem)]">
+      <div className="absolute bottom-2 left-2 bg-black/70 text-white px-2 py-1 rounded-full text-[11px] truncate max-w-[calc(100%-4rem)] backdrop-blur-sm">
         {share.name}
       </div>
 
@@ -71,7 +71,7 @@ export default function ScreenShareThumbnail({
             e.stopPropagation();
             onPin();
           }}
-          className="absolute top-2 right-2 bg-blue-600 hover:bg-blue-700 text-white p-1.5 rounded-full transition-colors"
+          className="absolute top-2 right-2 bg-cyan-500 hover:bg-cyan-600 text-white p-1.5 rounded-full transition-colors shadow-sm"
           title="Pin this screen share"
           aria-label="Pin screen share"
         >

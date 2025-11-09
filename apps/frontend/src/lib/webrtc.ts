@@ -291,8 +291,29 @@ class WebRTCManager {
   }
 
   closeConsumers() {
-    this.consumers.forEach(consumer => consumer.close());
+    this.consumers.forEach((consumer, producerId) => {
+      try {
+        consumer.close();
+      } catch (error) {
+        console.warn('Error closing consumer', producerId, error);
+      }
+    });
     this.consumers.clear();
+  }
+
+  closeConsumerByProducerId(producerId: string) {
+    const consumer = this.consumers.get(producerId);
+    if (!consumer) {
+      return;
+    }
+
+    try {
+      consumer.close();
+    } catch (error) {
+      console.warn('Error closing consumer', producerId, error);
+    }
+
+    this.consumers.delete(producerId);
   }
 
   closeTransports() {

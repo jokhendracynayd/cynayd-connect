@@ -26,7 +26,7 @@ export default function PinnedScreenShare({
   const hasLiveVideo = stream?.getVideoTracks().some(t => t.readyState === 'live');
 
   return (
-    <div className="relative rounded-lg overflow-hidden bg-gray-900 w-full aspect-video">
+    <div className="relative rounded-3xl overflow-hidden bg-slate-950/90 border border-slate-900 w-full aspect-video shadow-[0_24px_60px_-32px_rgba(15,23,42,0.7)]">
       {hasLiveVideo && stream ? (
         <video
           ref={videoRef}
@@ -57,7 +57,7 @@ export default function PinnedScreenShare({
       )}
 
       {/* Name Badge */}
-      <div className="absolute bottom-4 left-4 bg-black bg-opacity-70 text-white px-3 py-1.5 rounded-lg flex items-center space-x-2">
+      <div className="absolute bottom-4 left-4 bg-black/70 text-white px-3 py-1.5 rounded-full flex items-center gap-2 backdrop-blur">
         <svg
           className="w-4 h-4"
           fill="none"
@@ -72,13 +72,13 @@ export default function PinnedScreenShare({
           />
         </svg>
         <span className="text-sm font-medium">{share.name}'s Screen</span>
-        <span className="text-xs bg-yellow-500 text-yellow-900 px-2 py-0.5 rounded">📌 Pinned</span>
+        <span className="text-[11px] bg-amber-300 text-amber-900 px-2 py-0.5 rounded-full">📌 Pinned</span>
       </div>
 
       {/* Unpin Button */}
       <button
         onClick={onUnpin}
-        className="absolute top-4 right-4 bg-gray-800 bg-opacity-80 hover:bg-opacity-100 text-white p-2 rounded-full transition-colors"
+        className="absolute top-4 right-4 bg-white/15 hover:bg-white/25 text-white p-2 rounded-full transition"
         title="Unpin screen share"
         aria-label="Unpin screen share"
       >
