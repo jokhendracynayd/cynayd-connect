@@ -1,11 +1,13 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
-import { useCallStore } from '../store/callStore';
+import { useCallStore, EVERYONE_CONVERSATION_ID, type ChatMessage } from '../store/callStore';
 import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
 import { webrtcManager } from '../lib/webrtc';
-import { toast } from 'react-hot-toast';
+import ChatPanel from '../components/call/ChatPanel';
 import ParticipantList from '../components/call/ParticipantList';
 import PendingRequestsPanel from '../components/call/PendingRequestsPanel';
 import RoomSettings from '../components/call/RoomSettings';
@@ -20,6 +22,7 @@ type SocketEventKey =
   | 'user-left'
   | 'new-producer'
   | 'producer-closed'
+  | 'chat:message'
   | 'chat'
   | 'audio-mute'
   | 'video-mute'
@@ -96,6 +99,9 @@ export default function Call() {
     permissionErrors,
     setPermissionError,
     clearPermissionErrors,
+    chat,
+    ingestChatMessage,
+    setChatActiveConversation,
   } = useCallStore();
   
   const navigate = useNavigate();
@@ -121,9 +127,25 @@ export default function Call() {
   const isLeavingRef = useRef(false); // Prevent double cleanup
   const isLoadingPendingRequestsRef = useRef(false); // Track API call in progress
   const [showParticipantList, setShowParticipantList] = useState(false);
+  const [showChatPanel, setShowChatPanel] = useState(false);
   const [permissionBannerDismissed, setPermissionBannerDismissed] = useState(false);
+  const showChatPanelRef = useRef(showChatPanel);
 
   const hasPermissionIssue = permissionErrors.audio || permissionErrors.video;
+
+  const chatUnreadCount = useMemo(() => {
+    let total = 0;
+    chat.conversations.forEach(conversation => {
+      if (conversation.id !== chat.activeConversationId) {
+        total += conversation.unreadCount;
+      }
+    });
+    return total;
+  }, [chat]);
+
+  useEffect(() => {
+    showChatPanelRef.current = showChatPanel;
+  }, [showChatPanel]);
 
   useEffect(() => {
     if (hasPermissionIssue) {
@@ -1029,13 +1051,52 @@ export default function Call() {
     socketManager.on('producer-closed', handleProducerClosed);
     eventListenersRef.current['producer-closed'] = handleProducerClosed;
 
-    // Chat messages
-    const handleChat = (data: any) => {
-      console.log('Chat message:', data);
-      toast.success(`${data.name}: ${data.message}`, { duration: 3000 });
+    const mapToChatMessage = (data: any): ChatMessage => ({
+      id: data.id ?? data.messageId ?? '',
+      roomId: data.roomId ?? roomCode ?? '',
+      senderId: data.senderId ?? data.userId ?? '',
+      recipientId: data.recipientId ?? null,
+      content: data.content ?? data.message ?? '',
+      messageType: data.messageType ?? (data.recipientId ? 'DIRECT' : 'BROADCAST'),
+      createdAt: data.createdAt ?? data.timestamp ?? new Date().toISOString(),
+      updatedAt: data.updatedAt ?? data.createdAt ?? new Date().toISOString(),
+      sender: data.sender ?? (data.userId
+        ? {
+            id: data.userId,
+            name: data.name ?? data.senderName ?? 'Guest',
+            email: data.email ?? '',
+            picture: data.picture ?? null,
+          }
+        : null),
+      recipient: data.recipient ?? null,
+      clientMessageId: data.clientMessageId,
+      status: 'sent',
+    });
+
+    const handleChatMessage = (data: any) => {
+      try {
+        const message = mapToChatMessage(data);
+        ingestChatMessage(message, {
+          currentUserId: user?.id,
+          markAsRead: showChatPanelRef.current,
+        });
+      } catch (error) {
+        console.warn('Failed to ingest chat message', error, data);
+      }
     };
-    socketManager.on('chat', handleChat);
-    eventListenersRef.current['chat'] = handleChat;
+    socketManager.on('chat:message', handleChatMessage);
+    eventListenersRef.current['chat:message'] = handleChatMessage;
+
+    // Legacy fallback
+    const handleLegacyChat = (data: any) => {
+      handleChatMessage({
+        ...data,
+        senderId: data.userId ?? data.senderId,
+        content: data.message ?? data.content,
+      });
+    };
+    socketManager.on('chat', handleLegacyChat);
+    eventListenersRef.current['chat'] = handleLegacyChat;
 
     // Audio mute event
     const handleAudioMute = (data: { userId: string; isAudioMuted: boolean }) => {
@@ -1502,6 +1563,7 @@ export default function Call() {
     
     isLeavingRef.current = true;
     setIsLeaving(true);
+    setShowChatPanel(false);
     
     try {
       console.log('Leaving room, starting cleanup...');
@@ -2231,7 +2293,7 @@ export default function Call() {
   let allParticipantTiles: ParticipantTile[] = [localTile, ...remoteParticipantTiles];
 // this is for the demo mode
   if (import.meta.env.MODE !== 'production') {
-    const targetDemoCount =10
+    const targetDemoCount =0
     if (allParticipantTiles.length < targetDemoCount) {
       const demoNeeded = targetDemoCount - allParticipantTiles.length;
       const existingCount = allParticipantTiles.length;
@@ -2958,6 +3020,29 @@ export default function Call() {
             </button>
 
             <button
+              onClick={() => {
+                setShowChatPanel(true);
+                setChatActiveConversation(EVERYONE_CONVERSATION_ID);
+              }}
+              className="relative flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+              title="Open chat"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M7 8h10M7 12h6m7 0a9 9 0 11-4.219-7.516L21 4v8z"
+                />
+              </svg>
+              {chatUnreadCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
+                  {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+                </span>
+              )}
+            </button>
+
+            <button
               onClick={() => setShowParticipantList(true)}
               className="flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
               title="Show participants"
@@ -3035,6 +3120,31 @@ export default function Call() {
           />
         </>
       )}
+      {showChatPanel &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowChatPanel(false)}
+              className="absolute inset-0 z-0 bg-slate-900/30 backdrop-blur-sm transition"
+              aria-label="Close chat panel"
+            />
+            <div className="relative z-10 h-full w-full max-w-[28rem]">
+              <ChatPanel
+                currentUser={{
+                  id: user?.id ?? 'local-user',
+                  name: user?.name ?? 'You',
+                  email: user?.email ?? '',
+                  picture: user?.picture ?? null,
+                }}
+                onClose={() => setShowChatPanel(false)}
+                className="h-full"
+              />
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

@@ -1,6 +1,128 @@
 import { create } from 'zustand';
 import type { ScreenShare } from '../types/screenShare';
 
+export type ChatMessageType = 'BROADCAST' | 'DIRECT' | 'SYSTEM';
+
+export interface ChatUserInfo {
+  id: string;
+  name: string;
+  email: string;
+  picture?: string | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  roomId: string;
+  senderId: string;
+  recipientId?: string | null;
+  content: string;
+  messageType: ChatMessageType;
+  createdAt: string;
+  updatedAt?: string;
+  sender?: ChatUserInfo | null;
+  recipient?: ChatUserInfo | null;
+  clientMessageId?: string;
+  status?: 'pending' | 'sent' | 'failed';
+}
+
+export interface ChatConversation {
+  id: string;
+  type: 'group' | 'direct';
+  title: string;
+  participantIds: string[];
+  unreadCount: number;
+  lastMessageAt?: string;
+  lastMessagePreview?: string;
+  nextCursor: string | null;
+  hasMoreHistory: boolean;
+}
+
+export const EVERYONE_CONVERSATION_ID = 'everyone';
+
+const createGroupConversation = (): ChatConversation => ({
+  id: EVERYONE_CONVERSATION_ID,
+  type: 'group',
+  title: 'Everyone',
+  participantIds: [],
+  unreadCount: 0,
+  nextCursor: null,
+  hasMoreHistory: true,
+});
+
+const sortMessages = (messages: ChatMessage[]): ChatMessage[] =>
+  [...messages].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+
+const upsertMessage = (messages: ChatMessage[], incoming: ChatMessage): ChatMessage[] => {
+  const updated = [...messages];
+
+  const byIdIndex = incoming.id
+    ? updated.findIndex(message => message.id === incoming.id)
+    : -1;
+
+  if (byIdIndex >= 0) {
+    updated[byIdIndex] = { ...updated[byIdIndex], ...incoming, status: incoming.status ?? updated[byIdIndex].status };
+    return sortMessages(updated);
+  }
+
+  if (incoming.clientMessageId) {
+    const byClientIndex = updated.findIndex(
+      message => message.clientMessageId && message.clientMessageId === incoming.clientMessageId
+    );
+
+    if (byClientIndex >= 0) {
+      updated[byClientIndex] = {
+        ...updated[byClientIndex],
+        ...incoming,
+        status: incoming.status ?? updated[byClientIndex].status,
+      };
+      return sortMessages(updated);
+    }
+  }
+
+  updated.push(incoming);
+  return sortMessages(updated);
+};
+
+const mergeMessages = (existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] => {
+  let merged = [...existing];
+  for (const message of incoming) {
+    merged = upsertMessage(merged, message);
+  }
+  return merged;
+};
+
+const deriveConversationFromMessage = (
+  message: ChatMessage,
+  currentUserId?: string
+): { id: string; type: 'group' | 'direct'; title: string; otherParticipantId?: string } => {
+  if (message.messageType !== 'DIRECT') {
+    return {
+      id: EVERYONE_CONVERSATION_ID,
+      type: 'group',
+      title: 'Everyone',
+    };
+  }
+
+  const senderId = message.senderId;
+  const recipientId = message.recipientId ?? '';
+  const otherParticipantId =
+    senderId === currentUserId ? recipientId || senderId : senderId || recipientId;
+
+  const title =
+    senderId === currentUserId
+      ? message.recipient?.name ?? 'Direct message'
+      : message.sender?.name ?? 'Direct message';
+
+  return {
+    id: `direct:${otherParticipantId ?? senderId}`,
+    type: 'direct',
+    title,
+    otherParticipantId: otherParticipantId ?? senderId,
+  };
+};
+
 export interface RoomJoinRequest {
   id: string;
   userId: string;
@@ -63,6 +185,11 @@ interface CallState {
     joinWithAudio: boolean;
     joinWithVideo: boolean;
   };
+  chat: {
+    activeConversationId: string;
+    conversations: Map<string, ChatConversation>;
+    messages: Map<string, ChatMessage[]>;
+  };
   setRoomCode: (code: string) => void;
   setIsConnected: (connected: boolean) => void;
   setLocalStream: (stream: MediaStream | null) => void;
@@ -88,6 +215,17 @@ interface CallState {
   clearPermissionErrors: () => void;
   setSelectedDevices: (devices: Partial<CallState['selectedDevices']>) => void;
   setSettings: (settings: Partial<CallState['settings']>) => void;
+  setChatActiveConversation: (conversationId: string) => void;
+  ingestChatMessage: (message: ChatMessage, options?: { currentUserId?: string; markAsRead?: boolean }) => void;
+  addPendingChatMessage: (conversationId: string, message: ChatMessage) => void;
+  resolvePendingChatMessage: (conversationId: string, clientMessageId: string, serverMessage: ChatMessage) => void;
+  failPendingChatMessage: (conversationId: string, clientMessageId: string) => void;
+  applyChatHistory: (
+    conversationId: string,
+    messages: ChatMessage[],
+    options?: { currentUserId?: string; nextCursor?: string | null; hasMore?: boolean }
+  ) => void;
+  ensureChatConversation: (conversation: ChatConversation) => void;
   resetCallState: () => void;
 }
 
@@ -142,6 +280,15 @@ export const useCallStore = create<CallState>((set) => ({
   settings: {
     joinWithAudio: true,
     joinWithVideo: true,
+  },
+  chat: {
+    activeConversationId: EVERYONE_CONVERSATION_ID,
+    conversations: new Map<string, ChatConversation>([
+      [EVERYONE_CONVERSATION_ID, createGroupConversation()],
+    ]),
+    messages: new Map<string, ChatMessage[]>([
+      [EVERYONE_CONVERSATION_ID, []],
+    ]),
   },
   
   setRoomCode: (code) => set({ roomCode: code }),
@@ -248,6 +395,271 @@ export const useCallStore = create<CallState>((set) => ({
   setSettings: (settings) => set((state) => ({
     settings: { ...state.settings, ...settings },
   })),
+  setChatActiveConversation: (conversationId) => set((state) => {
+    const conversations = new Map(state.chat.conversations);
+    const messages = new Map(state.chat.messages);
+
+    if (!conversations.has(conversationId)) {
+      const conversation =
+        conversationId === EVERYONE_CONVERSATION_ID
+          ? createGroupConversation()
+          : {
+              id: conversationId,
+              type: 'direct' as const,
+              title: 'Direct message',
+              participantIds: [],
+              unreadCount: 0,
+              nextCursor: null,
+              hasMoreHistory: true,
+            };
+      conversations.set(conversationId, conversation);
+      if (!messages.has(conversationId)) {
+        messages.set(conversationId, []);
+      }
+    }
+
+    const conversation = conversations.get(conversationId)!;
+    conversations.set(conversationId, {
+      ...conversation,
+      unreadCount: 0,
+    });
+
+    return {
+      chat: {
+        ...state.chat,
+        activeConversationId: conversationId,
+        conversations,
+        messages,
+      },
+    };
+  }),
+  ingestChatMessage: (message, options) => set((state) => {
+    const conversations = new Map(state.chat.conversations);
+    const messages = new Map(state.chat.messages);
+
+    const { id: conversationId, type, title, otherParticipantId } = deriveConversationFromMessage(
+      message,
+      options?.currentUserId
+    );
+
+    if (!conversations.has(conversationId)) {
+      const conversation =
+        type === 'group'
+          ? createGroupConversation()
+          : {
+              id: conversationId,
+              type: 'direct' as const,
+              title,
+              participantIds: otherParticipantId ? [otherParticipantId] : [],
+              unreadCount: 0,
+              nextCursor: null,
+              hasMoreHistory: true,
+            };
+      conversations.set(conversationId, conversation);
+    }
+
+    if (!messages.has(conversationId)) {
+      messages.set(conversationId, []);
+    }
+
+    const existingConversation = conversations.get(conversationId)!;
+    const existingMessages = messages.get(conversationId)!;
+
+    const shouldMarkRead =
+      options?.markAsRead ??
+      (state.chat.activeConversationId === conversationId ||
+        message.senderId === options?.currentUserId);
+
+    const mergedMessages = upsertMessage(existingMessages, {
+      ...message,
+      status: message.status ?? 'sent',
+    });
+    messages.set(conversationId, mergedMessages);
+
+    conversations.set(conversationId, {
+      ...existingConversation,
+      title: type === 'direct' ? title : existingConversation.title,
+      participantIds:
+        type === 'direct' && otherParticipantId
+          ? existingConversation.participantIds.length
+            ? existingConversation.participantIds
+            : [otherParticipantId]
+          : existingConversation.participantIds,
+      unreadCount: shouldMarkRead ? 0 : existingConversation.unreadCount + 1,
+      lastMessageAt: message.createdAt,
+      lastMessagePreview: message.content,
+    });
+
+    return {
+      chat: {
+        ...state.chat,
+        conversations,
+        messages,
+      },
+    };
+  }),
+  addPendingChatMessage: (conversationId, message) => set((state) => {
+    const conversations = new Map(state.chat.conversations);
+    const messages = new Map(state.chat.messages);
+
+    if (!conversations.has(conversationId)) {
+      const conversation =
+        conversationId === EVERYONE_CONVERSATION_ID
+          ? createGroupConversation()
+          : {
+              id: conversationId,
+              type: 'direct' as const,
+              title: 'Direct message',
+              participantIds: [],
+              unreadCount: 0,
+              nextCursor: null,
+              hasMoreHistory: true,
+            };
+      conversations.set(conversationId, conversation);
+    }
+
+    if (!messages.has(conversationId)) {
+      messages.set(conversationId, []);
+    }
+
+    const existingMessages = messages.get(conversationId)!;
+    const mergedMessages = upsertMessage(existingMessages, {
+      ...message,
+      status: 'pending',
+    });
+    messages.set(conversationId, mergedMessages);
+
+    return {
+      chat: {
+        ...state.chat,
+        conversations,
+        messages,
+      },
+    };
+  }),
+  resolvePendingChatMessage: (conversationId, clientMessageId, serverMessage) => set((state) => {
+    const messages = state.chat.messages.get(conversationId);
+    if (!messages) {
+      return { chat: state.chat };
+    }
+
+    const updatedMessages = upsertMessage(messages, {
+      ...serverMessage,
+      clientMessageId,
+      status: 'sent',
+    });
+
+    const messagesMap = new Map(state.chat.messages);
+    messagesMap.set(conversationId, updatedMessages);
+
+    const conversations = new Map(state.chat.conversations);
+    const conversation = conversations.get(conversationId);
+    if (conversation) {
+      conversations.set(conversationId, {
+        ...conversation,
+        lastMessageAt: serverMessage.createdAt,
+        lastMessagePreview: serverMessage.content,
+      });
+    }
+
+    return {
+      chat: {
+        ...state.chat,
+        conversations,
+        messages: messagesMap,
+      },
+    };
+  }),
+  failPendingChatMessage: (conversationId, clientMessageId) => set((state) => {
+    const messages = state.chat.messages.get(conversationId);
+    if (!messages) {
+      return { chat: state.chat };
+    }
+
+    const updatedMessages = messages.map((msg) =>
+      msg.clientMessageId === clientMessageId
+        ? { ...msg, status: 'failed' }
+        : msg
+    );
+
+    const messagesMap = new Map(state.chat.messages);
+    messagesMap.set(conversationId, sortMessages(updatedMessages));
+
+    return {
+      chat: {
+        ...state.chat,
+        messages: messagesMap,
+      },
+    };
+  }),
+  applyChatHistory: (conversationId, historyMessages, options) => set((state) => {
+    const conversations = new Map(state.chat.conversations);
+    const messages = new Map(state.chat.messages);
+
+    if (!conversations.has(conversationId)) {
+      const conversation =
+        conversationId === EVERYONE_CONVERSATION_ID
+          ? createGroupConversation()
+          : {
+              id: conversationId,
+              type: 'direct' as const,
+              title: 'Direct message',
+              participantIds: [],
+              unreadCount: 0,
+              nextCursor: null,
+              hasMoreHistory: true,
+            };
+      conversations.set(conversationId, conversation);
+    }
+
+    const existingMessages = messages.get(conversationId) ?? [];
+    const mergedMessages = mergeMessages(historyMessages, existingMessages);
+    messages.set(conversationId, mergedMessages);
+
+    const conversation = conversations.get(conversationId)!;
+    const nextCursor = options?.nextCursor ?? conversation.nextCursor;
+    const hasMore =
+      options?.hasMore !== undefined ? options.hasMore : Boolean(nextCursor);
+
+    conversations.set(conversationId, {
+      ...conversation,
+      nextCursor,
+      hasMoreHistory: hasMore,
+    });
+
+    return {
+      chat: {
+        ...state.chat,
+        conversations,
+        messages,
+      },
+    };
+  }),
+  ensureChatConversation: (conversation) => set((state) => {
+    const conversations = new Map(state.chat.conversations);
+    const messages = new Map(state.chat.messages);
+
+    if (!conversations.has(conversation.id)) {
+      conversations.set(conversation.id, conversation);
+    } else {
+      conversations.set(conversation.id, {
+        ...conversations.get(conversation.id)!,
+        ...conversation,
+      });
+    }
+
+    if (!messages.has(conversation.id)) {
+      messages.set(conversation.id, []);
+    }
+
+    return {
+      chat: {
+        ...state.chat,
+        conversations,
+        messages,
+      },
+    };
+  }),
   resetCallState: () => set({
     isConnected: false,
     roomCode: null,
@@ -275,6 +687,15 @@ export const useCallStore = create<CallState>((set) => ({
     settings: {
       joinWithAudio: true,
       joinWithVideo: true,
+    },
+    chat: {
+      activeConversationId: EVERYONE_CONVERSATION_ID,
+      conversations: new Map<string, ChatConversation>([
+        [EVERYONE_CONVERSATION_ID, createGroupConversation()],
+      ]),
+      messages: new Map<string, ChatMessage[]>([
+        [EVERYONE_CONVERSATION_ID, []],
+      ]),
     },
   }),
 }));

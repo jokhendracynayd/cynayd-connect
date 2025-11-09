@@ -1,29 +1,186 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
+import { ChatMessageType } from '@prisma/client';
 import { logger } from '../../shared/utils/logger';
+import { ChatService } from '../../shared/services/chat.service';
+
+const MAX_MESSAGE_LENGTH = 2000;
+const HISTORY_DEFAULT_LIMIT = 50;
+
+type SendChatPayload = {
+  content?: string;
+  recipientId?: string | null;
+  clientMessageId?: string;
+};
+
+type HistoryPayload = {
+  limit?: number;
+  cursor?: string;
+  participantId?: string | null;
+};
 
 export function chatHandler(io: SocketIOServer, socket: Socket) {
-  
-  socket.on('chat', (data: { message: string }) => {
+  const sendChatMessage = async (data: SendChatPayload, callback?: (payload: any) => void) => {
     try {
-      const { roomCode, userName, userId } = socket.data;
+      const roomId: string | undefined = socket.data.roomId;
+      const roomCode: string | undefined = socket.data.roomCode;
+      const senderId: string | undefined = socket.data.userId;
 
-      if (!roomCode) {
-        logger.error('Chat: No room code in socket data');
+      if (!roomId || !roomCode || !senderId) {
+        logger.warn('Chat send failed - missing socket metadata', {
+          socketId: socket.id,
+          roomId,
+          roomCode,
+          senderId,
+        });
+        callback?.({ success: false, error: 'Not joined to a room' });
         return;
       }
 
-      logger.debug(`Chat message from ${userName} in room ${roomCode}: ${data.message}`);
+      const rawContent = typeof data?.content === 'string' ? data.content.trim() : '';
+      if (!rawContent) {
+        callback?.({ success: false, error: 'Message cannot be empty' });
+        return;
+      }
 
-      // Broadcast to all users in room
-      io.to(roomCode).emit('chat', {
-        message: data.message,
-        name: userName,
-        userId,
-        timestamp: new Date().toISOString(),
+      if (rawContent.length > MAX_MESSAGE_LENGTH) {
+        callback?.({ success: false, error: 'Message is too long' });
+        return;
+      }
+
+      const recipientId =
+        typeof data?.recipientId === 'string' && data.recipientId.trim().length > 0
+          ? data.recipientId.trim()
+          : null;
+
+      let messageType = ChatMessageType.BROADCAST;
+      let directRecipientSockets: Socket[] = [];
+
+      if (recipientId) {
+        if (recipientId === senderId) {
+          callback?.({ success: false, error: 'Cannot send direct messages to yourself' });
+          return;
+        }
+
+        messageType = ChatMessageType.DIRECT;
+        directRecipientSockets = Array.from(io.sockets.sockets.values()).filter(
+          s => s.data.roomCode === roomCode && s.data.userId === recipientId
+        );
+
+        if (directRecipientSockets.length === 0) {
+          callback?.({ success: false, error: 'Recipient is not connected to this room' });
+          return;
+        }
+      }
+
+      const savedMessage = await ChatService.saveMessage({
+        roomId,
+        senderId,
+        recipientId,
+        content: rawContent,
+        messageType,
+      });
+
+      const payload = {
+        id: savedMessage.id,
+        roomId: savedMessage.roomId,
+        senderId: savedMessage.senderId,
+        recipientId: savedMessage.recipientId,
+        content: savedMessage.content,
+        messageType: savedMessage.messageType,
+        createdAt: savedMessage.createdAt,
+        updatedAt: savedMessage.updatedAt,
+        sender: savedMessage.sender,
+        recipient: savedMessage.recipient,
+        clientMessageId: data?.clientMessageId,
+      };
+
+      if (messageType === ChatMessageType.DIRECT) {
+        // Emit to recipient sockets and echo back to sender
+        directRecipientSockets.forEach(targetSocket => {
+          targetSocket.emit('chat:message', payload);
+        });
+        socket.emit('chat:message', payload);
+      } else {
+        io.to(roomCode).emit('chat:message', payload);
+      }
+
+      callback?.({
+        success: true,
+        messageId: savedMessage.id,
+        timestamp: savedMessage.createdAt,
+        clientMessageId: data?.clientMessageId,
       });
     } catch (error: any) {
-      logger.error('Error sending chat:', error);
+      logger.error('Error sending chat message', {
+        socketId: socket.id,
+        error: error?.message ?? error,
+      });
+      callback?.({ success: false, error: 'Failed to send message' });
     }
+  };
+
+  const handleHistoryRequest = async (data: HistoryPayload, callback?: (payload: any) => void) => {
+    try {
+      const roomId: string | undefined = socket.data.roomId;
+      const participantId: string | undefined = socket.data.userId;
+
+      if (!roomId || !participantId) {
+        callback?.({ success: false, error: 'Not joined to a room' });
+        return;
+      }
+
+      const limit = Number.isFinite(data?.limit) ? Number(data?.limit) : HISTORY_DEFAULT_LIMIT;
+      const cursor = typeof data?.cursor === 'string' ? data.cursor : undefined;
+      const otherParticipantId =
+        typeof data?.participantId === 'string' && data.participantId.trim().length > 0
+          ? data.participantId.trim()
+          : undefined;
+
+      let messages;
+      if (otherParticipantId) {
+        messages = await ChatService.getDirectMessages({
+          roomId,
+          limit,
+          cursor,
+          participantAId: participantId,
+          participantBId: otherParticipantId,
+        });
+      } else {
+        messages = await ChatService.getBroadcastMessages({
+          roomId,
+          limit,
+          cursor,
+        });
+      }
+
+      const nextCursor = messages.length > 0 ? messages[messages.length - 1].id : null;
+
+      callback?.({
+        success: true,
+        messages,
+        nextCursor,
+      });
+    } catch (error: any) {
+      logger.error('Error fetching chat history', {
+        socketId: socket.id,
+        error: error?.message ?? error,
+      });
+      callback?.({ success: false, error: 'Failed to load history' });
+    }
+  };
+
+  // New structured event for sending messages
+  socket.on('chat:send', (data: SendChatPayload, callback?: (payload: any) => void) => {
+    void sendChatMessage(data, callback);
+  });
+
+  // Legacy support for existing clients emitting "chat"
+  socket.on('chat', (data: { message?: string }) => {
+    void sendChatMessage({ content: data?.message ?? '' });
+  });
+
+  socket.on('chat:history', (data: HistoryPayload, callback?: (payload: any) => void) => {
+    void handleHistoryRequest(data, callback);
   });
 
   socket.on('active-speaker', (data: { uid: string; isActiveSpeaker: boolean }) => {

@@ -19,6 +19,8 @@ model User {
   rooms            Room[]
   participants     Participant[]
   joinRequests     RoomJoinRequest[]
+  sentMessages     ChatMessage[]     @relation("SentMessages")
+  receivedMessages ChatMessage[]     @relation("ReceivedMessages")
 
   @@index([email])
 }
@@ -39,6 +41,7 @@ model Room {
   participants    Participant[]
   metrics         CallMetrics[]
   joinRequests    RoomJoinRequest[]
+  chatMessages    ChatMessage[]
 
   @@index([roomCode])
   @@index([adminId])
@@ -89,5 +92,30 @@ model RoomJoinRequest {
   @@unique([roomId, userId])
   @@index([roomId, status])
   @@index([userId])
+}
+
+enum ChatMessageType {
+  BROADCAST
+  DIRECT
+  SYSTEM
+}
+
+model ChatMessage {
+  id           String          @id @default(uuid())
+  roomId       String
+  room         Room            @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  senderId     String
+  sender       User            @relation("SentMessages", fields: [senderId], references: [id])
+  recipientId  String?
+  recipient    User?           @relation("ReceivedMessages", fields: [recipientId], references: [id])
+  content      String
+  messageType  ChatMessageType @default(BROADCAST)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([roomId, createdAt])
+  @@index([roomId, messageType])
+  @@index([senderId, createdAt])
+  @@index([recipientId, createdAt])
 }
 

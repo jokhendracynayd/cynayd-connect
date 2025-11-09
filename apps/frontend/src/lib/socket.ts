@@ -248,9 +248,82 @@ class SocketManager {
     });
   }
 
+  sendChatMessage(
+    content: string,
+    options: { participantId?: string; clientMessageId?: string } = {}
+  ): Promise<{ messageId: string; timestamp: string; clientMessageId?: string }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) {
+        return reject(new Error('Not connected'));
+      }
+
+      this.socket.emit(
+        'chat:send',
+        {
+          content,
+          recipientId: options.participantId,
+          clientMessageId: options.clientMessageId,
+        },
+        (response: any) => {
+          if (!response?.success) {
+            return reject(new Error(response?.error || 'Failed to send message'));
+          }
+          resolve({
+            messageId: response.messageId,
+            timestamp: response.timestamp,
+            clientMessageId: response.clientMessageId,
+          });
+        }
+      );
+    });
+  }
+
+  sendDirectMessage(
+    participantId: string,
+    content: string,
+    options: { clientMessageId?: string } = {}
+  ) {
+    return this.sendChatMessage(content, {
+      participantId,
+      clientMessageId: options.clientMessageId,
+    });
+  }
+
+  requestChatHistory(options: {
+    participantId?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ messages: any[]; nextCursor?: string | null }> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket) {
+        return reject(new Error('Not connected'));
+      }
+
+      this.socket.emit(
+        'chat:history',
+        {
+          participantId: options?.participantId,
+          cursor: options?.cursor,
+          limit: options?.limit,
+        },
+        (response: any) => {
+          if (!response?.success) {
+            return reject(new Error(response?.error || 'Failed to load messages'));
+          }
+          resolve({
+            messages: response.messages ?? [],
+            nextCursor: response.nextCursor ?? null,
+          });
+        }
+      );
+    });
+  }
+
+  // Legacy helper (deprecated). Use sendChatMessage instead.
   sendChat(message: string) {
-    if (!this.socket) return;
-    this.socket.emit('chat', { message });
+    void this.sendChatMessage(message).catch(error => {
+      console.warn('sendChat legacy call failed:', error);
+    });
   }
 
   requestRoomJoin(roomCode: string): Promise<any> {

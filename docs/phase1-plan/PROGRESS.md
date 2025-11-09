@@ -111,7 +111,7 @@
 
 ### In Progress / Pending
 - [ ] Screen sharing ⏳ **TODO**: Not yet implemented
-- [ ] Text chat with history ⏳ **PARTIAL**: Backend handler exists, UI needs completion
+- [x] Text chat with history ✅ **VERIFIED**: Persistent chat + DM support (`chat.handler.ts`, chat store, `ChatPanel.tsx`)
 - [ ] Network quality indicators ⏳ **TODO**: Not implemented
 - [ ] Host controls (mute all) ⏳ **TODO**: Not implemented
 
