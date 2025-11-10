@@ -5,19 +5,25 @@ import { useAuthStore } from '../../store/authStore';
 interface ParticipantListProps {
   isOpen: boolean;
   onClose: () => void;
-  isHost?: boolean;
+  canModerate?: boolean;
+  canManageRoles?: boolean;
   currentUserId?: string | null;
   onForceMute?: (userId: string, targets: { audio?: boolean; video?: boolean }, mute: boolean) => void;
   onRemoveParticipant?: (userId: string) => void;
+  onPromoteToCoHost?: (userId: string) => void;
+  onDemoteFromCoHost?: (userId: string) => void;
 }
 
 export default function ParticipantList({
   isOpen,
   onClose,
-  isHost = false,
+  canModerate = false,
+  canManageRoles = false,
   currentUserId,
   onForceMute,
   onRemoveParticipant,
+  onPromoteToCoHost,
+  onDemoteFromCoHost,
 }: ParticipantListProps) {
   const { participants, activeSpeakerId } = useCallStore();
   const { user } = useAuthStore();
@@ -91,9 +97,14 @@ export default function ParticipantList({
                   {participant.name}
                   {participant.userId === user?.id && ' (You)'}
                 </span>
-                {participant.isAdmin && (
+                {participant.role === 'HOST' && (
                   <span className="px-2 py-0.5 text-[11px] font-semibold text-cyan-700 bg-cyan-100 rounded-full tracking-wide uppercase">
                     Host
+                  </span>
+                )}
+                {participant.role === 'COHOST' && participant.role !== 'HOST' && (
+                  <span className="px-2 py-0.5 text-[11px] font-semibold text-indigo-700 bg-indigo-100 rounded-full tracking-wide uppercase">
+                    Co-host
                   </span>
                 )}
               </div>
@@ -161,8 +172,32 @@ export default function ParticipantList({
                   </span>
                 )}
               </div>
-              {isHost && participant.userId !== currentUserId && (
+              {canModerate && participant.userId !== currentUserId && (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {canManageRoles && participant.role !== 'HOST' && (
+                    <button
+                      onClick={() =>
+                        (participant.role === 'COHOST'
+                          ? onDemoteFromCoHost
+                          : onPromoteToCoHost)?.(participant.userId)
+                      }
+                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                        participant.role === 'COHOST'
+                          ? 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:text-amber-800'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-200 hover:text-indigo-600'
+                      }`}
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                      {participant.role === 'COHOST' ? 'Remove co-host' : 'Make co-host'}
+                    </button>
+                  )}
                   <button
                     onClick={() =>
                       onForceMute?.(

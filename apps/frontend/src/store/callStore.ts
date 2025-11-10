@@ -185,11 +185,14 @@ export interface RoomJoinRequest {
   status: 'pending' | 'approved' | 'rejected';
 }
 
+export type ParticipantRole = 'HOST' | 'COHOST' | 'PARTICIPANT';
+
 interface Participant {
   userId: string;
   name: string;
   email: string;
   picture?: string;
+  role: ParticipantRole;
   isAudioMuted: boolean;
   isVideoMuted: boolean;
   isAudioForceMuted: boolean;
@@ -209,6 +212,7 @@ type ParticipantInput = {
   name?: string;
   email?: string;
   picture?: string;
+  role?: ParticipantRole;
   isAudioMuted?: boolean;
   isVideoMuted?: boolean;
   isAudioForceMuted?: boolean;
@@ -231,6 +235,8 @@ interface CallState {
   isAudioMuted: boolean;
   isVideoMuted: boolean;
   isAdmin: boolean;
+  participantRole: ParticipantRole;
+  isHost: boolean;
   roomIsPublic: boolean;
   pendingRequests: RoomJoinRequest[];
   activeSpeakerId: string | null;
@@ -284,6 +290,8 @@ interface CallState {
   setLocalAudioMuted: (muted: boolean) => void;
   setLocalVideoMuted: (muted: boolean) => void;
   setIsAdmin: (isAdmin: boolean) => void;
+  setParticipantRole: (role: ParticipantRole) => void;
+  setIsHost: (isHost: boolean) => void;
   setRoomIsPublic: (isPublic: boolean) => void;
   setPendingRequests: (requests: RoomJoinRequest[]) => void;
   addPendingRequest: (request: RoomJoinRequest) => void;
@@ -340,12 +348,16 @@ const withParticipantDefaults = (participant: ParticipantInput): Participant => 
   name: participant.name ?? 'Unknown',
   email: participant.email ?? '',
   picture: participant.picture,
+  role: participant.role ?? 'PARTICIPANT',
   isAudioMuted: participant.isAudioMuted ?? true,
   isVideoMuted: participant.isVideoMuted ?? true,
   isAudioForceMuted: participant.isAudioForceMuted ?? false,
   isVideoForceMuted: participant.isVideoForceMuted ?? false,
   isSpeaking: participant.isSpeaking ?? false,
-  isAdmin: participant.isAdmin ?? false,
+  isAdmin:
+    participant.isAdmin ??
+    ((participant.role ?? 'PARTICIPANT') === 'HOST' ||
+      (participant.role ?? 'PARTICIPANT') === 'COHOST'),
   hasRaisedHand: participant.hasRaisedHand ?? false,
   audioForceMutedAt: participant.audioForceMutedAt ?? null,
   videoForceMutedAt: participant.videoForceMutedAt ?? null,
@@ -354,29 +366,38 @@ const withParticipantDefaults = (participant: ParticipantInput): Participant => 
   forceMuteReason: participant.forceMuteReason ?? null,
 });
 
-const mergeParticipantWithUpdates = (existing: Participant, updates: ParticipantInput): Participant => ({
-  userId: existing.userId,
-  name: updates.name ?? existing.name,
-  email: updates.email ?? existing.email,
-  picture: updates.picture ?? existing.picture,
-  isAudioMuted: updates.isAudioMuted ?? existing.isAudioMuted,
-  isVideoMuted: updates.isVideoMuted ?? existing.isVideoMuted,
-  isAudioForceMuted: updates.isAudioForceMuted ?? existing.isAudioForceMuted,
-  isVideoForceMuted: updates.isVideoForceMuted ?? existing.isVideoForceMuted,
-  isSpeaking: updates.isSpeaking ?? existing.isSpeaking,
-  isAdmin: updates.isAdmin ?? existing.isAdmin,
-  hasRaisedHand: updates.hasRaisedHand ?? existing.hasRaisedHand,
-  audioForceMutedAt:
-    updates.audioForceMutedAt !== undefined ? updates.audioForceMutedAt : existing.audioForceMutedAt ?? null,
-  videoForceMutedAt:
-    updates.videoForceMutedAt !== undefined ? updates.videoForceMutedAt : existing.videoForceMutedAt ?? null,
-  audioForceMutedBy:
-    updates.audioForceMutedBy !== undefined ? updates.audioForceMutedBy : existing.audioForceMutedBy ?? null,
-  videoForceMutedBy:
-    updates.videoForceMutedBy !== undefined ? updates.videoForceMutedBy : existing.videoForceMutedBy ?? null,
-  forceMuteReason:
-    updates.forceMuteReason !== undefined ? updates.forceMuteReason : existing.forceMuteReason ?? null,
-});
+const mergeParticipantWithUpdates = (existing: Participant, updates: ParticipantInput): Participant => {
+  const nextRole = updates.role ?? existing.role;
+  const nextIsAdmin =
+    updates.isAdmin !== undefined
+      ? updates.isAdmin
+      : nextRole === 'HOST' || nextRole === 'COHOST';
+
+  return {
+    userId: existing.userId,
+    name: updates.name ?? existing.name,
+    email: updates.email ?? existing.email,
+    picture: updates.picture ?? existing.picture,
+    role: nextRole,
+    isAudioMuted: updates.isAudioMuted ?? existing.isAudioMuted,
+    isVideoMuted: updates.isVideoMuted ?? existing.isVideoMuted,
+    isAudioForceMuted: updates.isAudioForceMuted ?? existing.isAudioForceMuted,
+    isVideoForceMuted: updates.isVideoForceMuted ?? existing.isVideoForceMuted,
+    isSpeaking: updates.isSpeaking ?? existing.isSpeaking,
+    isAdmin: nextIsAdmin,
+    hasRaisedHand: updates.hasRaisedHand ?? existing.hasRaisedHand,
+    audioForceMutedAt:
+      updates.audioForceMutedAt !== undefined ? updates.audioForceMutedAt : existing.audioForceMutedAt ?? null,
+    videoForceMutedAt:
+      updates.videoForceMutedAt !== undefined ? updates.videoForceMutedAt : existing.videoForceMutedAt ?? null,
+    audioForceMutedBy:
+      updates.audioForceMutedBy !== undefined ? updates.audioForceMutedBy : existing.audioForceMutedBy ?? null,
+    videoForceMutedBy:
+      updates.videoForceMutedBy !== undefined ? updates.videoForceMutedBy : existing.videoForceMutedBy ?? null,
+    forceMuteReason:
+      updates.forceMuteReason !== undefined ? updates.forceMuteReason : existing.forceMuteReason ?? null,
+  };
+};
 
 export const useCallStore = create<CallState>((set) => ({
   isConnected: false,
@@ -386,6 +407,8 @@ export const useCallStore = create<CallState>((set) => ({
   isAudioMuted: false,
   isVideoMuted: false,
   isAdmin: false,
+  participantRole: 'PARTICIPANT',
+  isHost: false,
   roomIsPublic: true,
   pendingRequests: [],
   activeSpeakerId: null,
@@ -468,6 +491,8 @@ export const useCallStore = create<CallState>((set) => ({
   setLocalAudioMuted: (muted) => set({ isAudioMuted: muted }),
   setLocalVideoMuted: (muted) => set({ isVideoMuted: muted }),
   setIsAdmin: (isAdmin) => set({ isAdmin }),
+  setParticipantRole: (role) => set({ participantRole: role }),
+  setIsHost: (isHost) => set({ isHost }),
   setRoomIsPublic: (isPublic) => set({ roomIsPublic: isPublic }),
   setPendingRequests: (requests) => set({ pendingRequests: requests }),
   addPendingRequest: (request) => set((state) => {
@@ -936,6 +961,8 @@ export const useCallStore = create<CallState>((set) => ({
     isAudioMuted: false,
     isVideoMuted: false,
     isAdmin: false,
+    participantRole: 'PARTICIPANT',
+    isHost: false,
     roomIsPublic: true,
     pendingRequests: [],
     activeSpeakerId: null,

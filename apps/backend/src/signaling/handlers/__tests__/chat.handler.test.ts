@@ -15,6 +15,7 @@ vi.mock('../../../shared/services/state.redis', () => ({
 vi.mock('../../../shared/services/rooms.service', () => ({
   RoomService: {
     getRoomHostState: vi.fn(),
+    isModeratorRole: vi.fn((role?: string | null) => role === 'HOST' || role === 'COHOST'),
   },
 }));
 
@@ -51,6 +52,8 @@ describe('chatHandler chat mute enforcement', () => {
         roomCode: 'team-room',
         userId: 'user-1',
         isAdmin: false,
+        participantRole: 'PARTICIPANT',
+        isHost: false,
         ...overrides.data,
       },
       on: vi.fn((event: string, handler: (...args: any[]) => void) => {
@@ -153,7 +156,7 @@ describe('chatHandler chat mute enforcement', () => {
 
     const io = createIo();
     const { socket, handlers } = createSocket({
-      data: { userId: 'host-1', isAdmin: true },
+      data: { userId: 'host-1', isAdmin: true, participantRole: 'HOST', isHost: true },
     });
 
     chatHandler(io as any, socket as any);

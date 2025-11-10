@@ -1,5 +1,6 @@
 import prisma from '../database/prisma';
-import { Prisma, RoomControlState } from '@prisma/client';
+import { Prisma, RoomControlState, ParticipantRole } from '@prisma/client';
+import type { Participant as PrismaParticipant } from '@prisma/client';
 import { NotFoundError, ForbiddenError, ConflictError } from '../utils/errors';
 import { logger } from '../utils/logger';
 
@@ -265,7 +266,7 @@ export class RoomService {
         data: {
           roomId: room.id,
           userId,
-          role: room.adminId === userId ? 'admin' : 'participant',
+          role: room.adminId === userId ? ParticipantRole.HOST : ParticipantRole.PARTICIPANT,
           joinedAt: now, // Explicitly set to current time
         },
       });
@@ -315,7 +316,7 @@ export class RoomService {
               data: {
                 roomId: room.id,
                 userId,
-                role: room.adminId === userId ? 'admin' : 'participant',
+                role: room.adminId === userId ? ParticipantRole.HOST : ParticipantRole.PARTICIPANT,
                 joinedAt: new Date(), // New timestamp
               },
             });
@@ -353,6 +354,92 @@ export class RoomService {
     }
 
     return this.getRoomByCode(normalizedRoomCode);
+  }
+
+  static async setParticipantRole(
+    actorUserId: string,
+    roomId: string,
+    targetUserId: string,
+    nextRole: ParticipantRole
+  ): Promise<{ userId: string; role: ParticipantRole }> {
+    const room = await prisma.room.findUnique({
+      where: { id: roomId },
+      select: {
+        id: true,
+        adminId: true,
+      },
+    });
+
+    if (!room) {
+      throw new NotFoundError('Room not found.');
+    }
+
+    if (room.adminId !== actorUserId) {
+      throw new ForbiddenError('Only the room host can manage co-hosts.');
+    }
+
+    if (targetUserId === room.adminId) {
+      throw new ConflictError('Host role cannot be reassigned.');
+    }
+
+    if (nextRole === ParticipantRole.HOST) {
+      throw new ConflictError('Host role is reserved for the room owner.');
+    }
+
+    const participant = await prisma.participant.findFirst({
+      where: {
+        roomId: room.id,
+        userId: targetUserId,
+        leftAt: null,
+      },
+      select: {
+        id: true,
+        role: true,
+      },
+    });
+
+    if (!participant) {
+      throw new NotFoundError('Participant not found.');
+    }
+
+    if (participant.role === nextRole) {
+      return { userId: targetUserId, role: participant.role };
+    }
+
+    const result = await prisma.participant.update({
+      where: { id: participant.id },
+      data: {
+        role: nextRole,
+      },
+      select: {
+        role: true,
+      },
+    });
+
+    return {
+      userId: targetUserId,
+      role: result.role,
+    };
+  }
+
+  static async promoteToCoHost(
+    actorUserId: string,
+    roomId: string,
+    targetUserId: string
+  ): Promise<{ userId: string; role: ParticipantRole }> {
+    return this.setParticipantRole(actorUserId, roomId, targetUserId, ParticipantRole.COHOST);
+  }
+
+  static async demoteToParticipant(
+    actorUserId: string,
+    roomId: string,
+    targetUserId: string
+  ): Promise<{ userId: string; role: ParticipantRole }> {
+    return this.setParticipantRole(actorUserId, roomId, targetUserId, ParticipantRole.PARTICIPANT);
+  }
+
+  static isModeratorRole(role: ParticipantRole | null | undefined): boolean {
+    return role === ParticipantRole.HOST || role === ParticipantRole.COHOST;
   }
 
   static async updateParticipantMuteState(

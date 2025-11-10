@@ -3,7 +3,12 @@ import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
-import { useCallStore, EVERYONE_CONVERSATION_ID, type ChatMessage } from '../store/callStore';
+import {
+  useCallStore,
+  EVERYONE_CONVERSATION_ID,
+  type ChatMessage,
+  type ParticipantRole,
+} from '../store/callStore';
 import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
 import { webrtcManager } from '../lib/webrtc';
@@ -36,13 +41,15 @@ type SocketEventKey =
   | 'host-control:participant-state'
   | 'host-control:room-state'
   | 'host-control:chat-state'
-  | 'host-control:participant-removed';
+  | 'host-control:participant-removed'
+  | 'host-control:role-updated';
 
 type ServerParticipant = {
   userId: string;
   name: string;
   email: string;
   picture?: string | null;
+  role?: ParticipantRole;
   isAdmin?: boolean;
   isAudioMuted?: boolean;
   isVideoMuted?: boolean;
@@ -67,6 +74,8 @@ interface ParticipantTile {
   picture?: string | null;
   isLocal: boolean;
   isHost: boolean;
+  isModerator: boolean;
+  role: ParticipantRole;
   stream?: MediaStream | null;
   isAudioMuted: boolean;
   isVideoMuted: boolean;
@@ -95,11 +104,15 @@ export default function Call() {
     updateParticipant,
     selectedDevices,
     isAdmin,
+    participantRole,
+    isHost,
     roomIsPublic,
     pendingRequests,
     activeSpeakerId,
     raisedHands,
     setIsAdmin,
+    setParticipantRole,
+    setIsHost,
     setRoomIsPublic,
     setPendingRequests,
     addPendingRequest,
@@ -896,6 +909,7 @@ export default function Call() {
           name: participantInfo.name,
           email: participantInfo.email,
           picture: participantInfo.picture ?? undefined,
+          role: (participantInfo.role as ParticipantRole) ?? 'PARTICIPANT',
           isAdmin: participantInfo.isAdmin,
           isAudioMuted: participantInfo.isAudioMuted,
           isVideoMuted: participantInfo.isVideoMuted,
@@ -928,6 +942,7 @@ export default function Call() {
             name: participantInfo.name,
             email: participantInfo.email,
             picture: participantInfo.picture,
+          role: (participantInfo.role as ParticipantRole) ?? 'PARTICIPANT',
             isAdmin: participantInfo.isAdmin ?? false,
             isAudioMuted: true,
             isVideoMuted: true,
@@ -997,9 +1012,25 @@ export default function Call() {
       // Try to determine admin status - check response first, then API
       // Backend now includes isAdmin and isPublic in the response
       let userIsAdmin = false;
+      let userRole: ParticipantRole = 'PARTICIPANT';
+      let userIsHost = false;
       if (response?.isAdmin !== undefined) {
         userIsAdmin = response.isAdmin;
-        setIsAdmin(response.isAdmin);
+        userIsHost = response.isHost ?? (typeof response.role === 'string' && response.role === 'HOST');
+        if (typeof response.role === 'string') {
+          const normalizedRole = response.role.toUpperCase() as ParticipantRole;
+          if (normalizedRole === 'HOST' || normalizedRole === 'COHOST' || normalizedRole === 'PARTICIPANT') {
+            userRole = normalizedRole;
+          }
+        }
+        if (userRole === 'PARTICIPANT' && userIsHost) {
+          userRole = 'HOST';
+        } else if (userRole === 'PARTICIPANT' && userIsAdmin) {
+          userRole = 'COHOST';
+        }
+        setIsAdmin(userIsAdmin);
+        setIsHost(userIsHost);
+        setParticipantRole(userRole);
         if (response?.isPublic !== undefined) {
           setRoomIsPublic(response.isPublic);
         }
@@ -1024,7 +1055,11 @@ export default function Call() {
           if (roomInfoResponse.data.success && roomInfoResponse.data.data) {
             const room = roomInfoResponse.data.data;
             userIsAdmin = room.admin?.id === user.id || room.adminId === user.id;
+            userIsHost = userIsAdmin;
+            userRole = userIsAdmin ? 'HOST' : 'PARTICIPANT';
             setIsAdmin(userIsAdmin);
+            setIsHost(userIsHost);
+            setParticipantRole(userRole);
             setRoomIsPublic(room.isPublic ?? true);
           }
         } catch (apiError) {
@@ -1082,6 +1117,7 @@ export default function Call() {
         name: participant.name,
         email: participant.email,
         picture: participant.picture ?? undefined,
+        role: (participant.role as ParticipantRole) ?? 'PARTICIPANT',
         isAdmin: participant.isAdmin,
         isAudioMuted: participant.isAudioMuted,
         isVideoMuted: participant.isVideoMuted,
@@ -1530,6 +1566,46 @@ export default function Call() {
     };
     socketManager.on('host-control:participant-removed', handleHostParticipantRemoved);
     eventListenersRef.current['host-control:participant-removed'] = handleHostParticipantRemoved;
+
+    const handleHostRoleUpdated = (payload: {
+      userId?: string;
+      role?: string;
+      isModerator?: boolean;
+      updatedBy?: string;
+      updatedAt?: string;
+    }) => {
+      if (!payload?.userId || typeof payload.role !== 'string') {
+        return;
+      }
+
+      const normalizedRole = payload.role.toUpperCase() as ParticipantRole;
+      if (!['HOST', 'COHOST', 'PARTICIPANT'].includes(normalizedRole)) {
+        return;
+      }
+
+      const isModerator = payload.isModerator ?? normalizedRole !== 'PARTICIPANT';
+
+      runOrQueueParticipantUpdate(payload.userId, () => {
+        updateParticipant(payload.userId!, {
+          role: normalizedRole,
+          isAdmin: isModerator,
+        });
+      });
+
+      if (payload.userId === user?.id) {
+        setParticipantRole(normalizedRole);
+        setIsHost(normalizedRole === 'HOST');
+        setIsAdmin(isModerator);
+
+        if (normalizedRole === 'COHOST') {
+          toast.success('You are now a co-host.');
+        } else if (normalizedRole === 'PARTICIPANT') {
+          toast.success('Co-host privileges removed.');
+        }
+      }
+    };
+    socketManager.on('host-control:role-updated', handleHostRoleUpdated);
+    eventListenersRef.current['host-control:role-updated'] = handleHostRoleUpdated;
 
     // Active speaker event
     const handleActiveSpeaker = (data: { userId: string; isActiveSpeaker: boolean }) => {
@@ -2627,6 +2703,30 @@ export default function Call() {
     [emitHostControl]
   );
 
+  const handlePromoteToCoHost = useCallback(
+    (userId: string) => {
+      emitHostControl(
+        'host-control:update-role',
+        { targetUserId: userId, role: 'cohost' },
+        'Participant promoted to co-host',
+        'Failed to promote participant to co-host'
+      );
+    },
+    [emitHostControl]
+  );
+
+  const handleDemoteFromCoHost = useCallback(
+    (userId: string) => {
+      emitHostControl(
+        'host-control:update-role',
+        { targetUserId: userId, role: 'participant' },
+        'Co-host privileges revoked',
+        'Failed to update participant role'
+      );
+    },
+    [emitHostControl]
+  );
+
   const handleStartScreenShare = async () => {
     console.log('handleStartScreenShare called, current state:', {
       isScreenSharing,
@@ -2837,7 +2937,9 @@ export default function Call() {
       email: participant.email,
       picture: participant.picture,
       isLocal: false,
-      isHost: participant.isAdmin ?? false,
+      isHost: participant.role === 'HOST',
+      isModerator: participant.isAdmin ?? false,
+      role: participant.role ?? 'PARTICIPANT',
       stream: remoteStreams.get(participant.userId) ?? null,
       isAudioMuted: participant.isAudioMuted ?? true,
       isVideoMuted: participant.isVideoMuted ?? true,
@@ -2851,7 +2953,9 @@ export default function Call() {
     email: user?.email ?? '',
     picture: user?.picture ?? null,
     isLocal: true,
-    isHost: isAdmin,
+    isHost,
+    isModerator: isAdmin,
+    role: participantRole,
     stream: localStream ?? null,
     isAudioMuted,
     isVideoMuted,
@@ -2875,6 +2979,8 @@ export default function Call() {
           picture: null,
           isLocal: false,
           isHost: false,
+          isModerator: false,
+          role: 'PARTICIPANT',
           stream: null,
           isAudioMuted: true,
           isVideoMuted: true,
@@ -3127,6 +3233,11 @@ export default function Call() {
           {tile.isHost && (
             <span className="rounded-full bg-cyan-200/80 px-2 py-0.5 text-[10px] font-semibold uppercase text-cyan-900">
               Host
+            </span>
+          )}
+          {!tile.isHost && tile.role === 'COHOST' && (
+            <span className="rounded-full bg-indigo-200/80 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-900">
+              Co-host
             </span>
           )}
         </div>
@@ -3799,10 +3910,13 @@ export default function Call() {
       <ParticipantList
         isOpen={showParticipantList}
         onClose={() => setShowParticipantList(false)}
-        isHost={isAdmin}
+        canModerate={isAdmin}
+        canManageRoles={isHost}
         currentUserId={user?.id ?? null}
         onForceMute={handleHostControlParticipant}
         onRemoveParticipant={handleHostRemoveParticipant}
+        onPromoteToCoHost={handlePromoteToCoHost}
+        onDemoteFromCoHost={handleDemoteFromCoHost}
       />
       {roomCode && (
         <>

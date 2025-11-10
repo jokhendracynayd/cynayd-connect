@@ -1,6 +1,6 @@
 import { useRef, useEffect } from 'react';
 import { shallow } from 'zustand/shallow';
-import { useCallStore } from '../../store/callStore';
+import { useCallStore, type ParticipantRole } from '../../store/callStore';
 import NetworkIndicator from './NetworkIndicator';
 
 interface ParticipantTileProps {
@@ -9,6 +9,7 @@ interface ParticipantTileProps {
     name: string;
     email: string;
     picture?: string;
+    role: ParticipantRole;
     isAudioMuted: boolean;
     isVideoMuted: boolean;
     isSpeaking: boolean;
@@ -93,11 +94,16 @@ export default function ParticipantTile({ participant, stream, isLocal = false }
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <span className="text-white text-sm font-medium truncate">{participant.name}</span>
-            {participant.isAdmin && (
+              {participant.role === 'HOST' && (
               <span className="px-1.5 py-0.5 text-xs font-semibold text-white bg-indigo-600 rounded">
                 Host
               </span>
             )}
+              {participant.role === 'COHOST' && (
+                <span className="px-1.5 py-0.5 text-xs font-semibold text-white bg-indigo-500/80 rounded">
+                  Co-host
+                </span>
+              )}
           </div>
           <div className="flex items-center space-x-1">
             {/* Audio mute indicator */}

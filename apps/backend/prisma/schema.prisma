@@ -58,7 +58,7 @@ model Participant {
   user      User     @relation(fields: [userId], references: [id])
   joinedAt  DateTime @default(now())
   leftAt    DateTime?
-  role      String   @default("participant") // "admin" | "participant"
+  role      ParticipantRole @default(PARTICIPANT)
   audioMuted     Boolean   @default(true)
   videoMuted     Boolean   @default(true)
   audioMutedAt   DateTime?
@@ -149,6 +149,12 @@ model RoomHostState {
   @@index([audioForceAll])
   @@index([videoForceAll])
   @@index([chatForceAll])
+}
+
+enum ParticipantRole {
+  HOST
+  COHOST
+  PARTICIPANT
 }
 
 enum ChatMessageType {

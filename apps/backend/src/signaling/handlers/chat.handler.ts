@@ -54,9 +54,11 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
           ? data.recipientId.trim()
           : null;
 
-      const isAdmin = Boolean(socket.data.isAdmin);
+      const isModerator =
+        socket.data.isHost === true ||
+        RoomService.isModeratorRole(socket.data.participantRole);
 
-      if (!isAdmin) {
+      if (!isModerator) {
         let chatForceAll = false;
         let chatForceReason: string | null = null;
 

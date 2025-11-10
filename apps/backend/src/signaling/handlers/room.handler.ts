@@ -5,13 +5,14 @@ import { ProducerManager } from '../../media/Producer';
 import { ConsumerManager } from '../../media/Consumer';
 import { TransportManager } from '../../media/Transport';
 import { logger } from '../../shared/utils/logger';
-import { ForbiddenError } from '../../shared/utils/errors';
+import { ForbiddenError, ConflictError } from '../../shared/utils/errors';
 import redis from '../../shared/database/redis';
 import { RedisStateService, type RedisRoomControlStatePayload } from '../../shared/services/state.redis';
 import { RoomRoutingService } from '../../shared/services/room-routing.service';
 import { config } from '../../shared/config';
 import prisma from '../../shared/database/prisma';
 import type { Participant } from '@prisma/client';
+import { ParticipantRole } from '@prisma/client';
 
 type RoomWithParticipants = Awaited<ReturnType<typeof RoomService.getRoomByCode>>;
 
@@ -20,6 +21,7 @@ export interface ParticipantRosterEntry {
   name: string;
   email: string;
   picture?: string | null;
+  role: ParticipantRole;
   isAdmin: boolean;
   isAudioMuted: boolean;
   isVideoMuted: boolean;
@@ -81,13 +83,17 @@ function buildParticipantRoster(
     const videoMutedAtMs = override?.videoMutedAt ?? participant.videoMutedAt?.getTime() ?? null;
     const audioForceMutedAtMs = override?.forcedAudioAt ?? null;
     const videoForceMutedAtMs = override?.forcedVideoAt ?? null;
+    const participantRole = participant.role ?? ParticipantRole.PARTICIPANT;
 
     const entry: ParticipantRosterEntry = {
       userId: user.id,
       name: user.name,
       email: user.email,
       picture: user.picture,
-      isAdmin: participant.role === 'admin' || room.adminId === user.id,
+      role: participantRole,
+      isAdmin:
+        RoomService.isModeratorRole(participantRole) ||
+        room.adminId === user.id,
       isAudioMuted: override?.isAudioMuted ?? participant.audioMuted ?? true,
       isVideoMuted: override?.isVideoMuted ?? participant.videoMuted ?? true,
       isAudioForceMuted: override?.forcedAudio ?? false,
@@ -361,6 +367,9 @@ export async function handleSocketLeave(
 
   socket.data.roomCode = undefined;
   socket.data.roomId = undefined;
+  socket.data.participantRole = undefined;
+  socket.data.isHost = false;
+  socket.data.isAdmin = false;
 
   logger.info('handleSocketLeave: user left room', {
     socketId: socket.id,
@@ -381,21 +390,35 @@ interface JoinRoomData {
   picture?: string;
 }
 
+interface UpdateRolePayload {
+  targetUserId?: string;
+  role?: string;
+}
+
 export function roomHandler(io: SocketIOServer, socket: Socket) {
-  const resolveHostContext = () => {
+  const resolveHostContext = (options?: { requireHost?: boolean }) => {
     const roomCode: string | undefined = socket.data.roomCode;
     const roomId: string | undefined = socket.data.roomId;
     const actorUserId: string | undefined = socket.data.userId;
+    const participantRole: ParticipantRole | undefined = socket.data.participantRole;
+    const roomAdminId: string | undefined = socket.data.roomAdminId;
+    const isHost = socket.data.isHost === true || (!!roomAdminId && roomAdminId === actorUserId);
+    const isModerator =
+      isHost || RoomService.isModeratorRole(participantRole);
 
     if (!roomCode || !roomId || !actorUserId) {
       throw new Error('Host control requires active room context.');
     }
 
-    if (!socket.data.isAdmin) {
-      throw new ForbiddenError('Only the room host can perform this action.');
+    if (options?.requireHost) {
+      if (!isHost) {
+        throw new ForbiddenError('Only the room host can perform this action.');
+      }
+    } else if (!isModerator) {
+      throw new ForbiddenError('Only hosts or co-hosts can perform this action.');
     }
 
-    return { roomCode, roomId, actorUserId };
+    return { roomCode, roomId, actorUserId, participantRole, isHost, roomAdminId };
   };
 
   const emitRoomHostState = async (roomCode: string, roomId: string) => {
@@ -438,6 +461,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
     reason,
     timestamp,
     roomSockets,
+    roomAdminId,
   }: {
     targetUserId: string;
     roomCode: string;
@@ -448,6 +472,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
     reason: string | null;
     timestamp: number;
     roomSockets: Array<any>;
+    roomAdminId?: string;
   }) => {
     const targetSockets = roomSockets.filter(
       participantSocket => participantSocket.data.userId === targetUserId
@@ -518,6 +543,13 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         : null
       : existingVideoMutedAt;
 
+    const isTargetHost = roomAdminId ? targetUserId === roomAdminId : false;
+    const shouldForceAudio = targets.has('audio') && mute && !isTargetHost;
+    const shouldForceVideo = targets.has('video') && mute && !isTargetHost;
+    const forcedByValue = shouldForceAudio || shouldForceVideo ? actorUserId : null;
+    const forcedReasonValue =
+      shouldForceAudio || shouldForceVideo ? reason ?? null : null;
+
     for (const targetSocket of targetSockets) {
       if (targets.has('audio')) {
         if (mute) {
@@ -541,31 +573,31 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       isVideoMuted: nextVideoMuted,
       audioMutedAt: nextAudioMutedAtMs ?? null,
       videoMutedAt: nextVideoMutedAtMs ?? null,
-      forcedAudio: targets.has('audio') ? mute : redisState?.forcedAudio ?? false,
-      forcedVideo: targets.has('video') ? mute : redisState?.forcedVideo ?? false,
+      forcedAudio: targets.has('audio')
+        ? shouldForceAudio
+        : redisState?.forcedAudio ?? false,
+      forcedVideo: targets.has('video')
+        ? shouldForceVideo
+        : redisState?.forcedVideo ?? false,
       forcedAudioAt:
-        targets.has('audio') && mute
-          ? timestamp
-          : targets.has('audio') && !mute
-          ? null
+        targets.has('audio')
+          ? shouldForceAudio
+            ? timestamp
+            : null
           : redisState?.forcedAudioAt,
       forcedVideoAt:
-        targets.has('video') && mute
-          ? timestamp
-          : targets.has('video') && !mute
-          ? null
+        targets.has('video')
+          ? shouldForceVideo
+            ? timestamp
+            : null
           : redisState?.forcedVideoAt,
       forcedBy:
         targets.has('audio') || targets.has('video')
-          ? mute
-            ? actorUserId
-            : null
+          ? forcedByValue
           : redisState?.forcedBy ?? null,
       forcedReason:
         targets.has('audio') || targets.has('video')
-          ? mute
-            ? reason ?? null
-            : null
+          ? forcedReasonValue
           : redisState?.forcedReason ?? null,
       updatedAt: timestamp,
     });
@@ -585,41 +617,33 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
     }
 
     await RoomService.setParticipantControlState(roomId, targetUserId, {
-      forcedAudio: targets.has('audio') ? mute : undefined,
-      forcedVideo: targets.has('video') ? mute : undefined,
+      forcedAudio: targets.has('audio') ? shouldForceAudio : undefined,
+      forcedVideo: targets.has('video') ? shouldForceVideo : undefined,
       forcedAudioAt:
-        targets.has('audio') && mute
-          ? new Date(timestamp)
-          : targets.has('audio') && !mute
-          ? null
+        targets.has('audio')
+          ? shouldForceAudio
+            ? new Date(timestamp)
+            : null
           : undefined,
       forcedVideoAt:
-        targets.has('video') && mute
-          ? new Date(timestamp)
-          : targets.has('video') && !mute
-          ? null
+        targets.has('video')
+          ? shouldForceVideo
+            ? new Date(timestamp)
+            : null
           : undefined,
       forcedBy:
-        targets.has('audio') || targets.has('video')
-          ? mute
-            ? actorUserId
-            : null
-          : undefined,
+        targets.has('audio') || targets.has('video') ? forcedByValue : undefined,
       forcedReason:
-        targets.has('audio') || targets.has('video')
-          ? mute
-            ? reason ?? null
-            : null
-          : undefined,
+        targets.has('audio') || targets.has('video') ? forcedReasonValue : undefined,
     });
 
     if (targets.has('audio')) {
       io.to(roomCode).emit('audio-mute', {
         userId: targetUserId,
         isAudioMuted: nextAudioMuted,
-        forced: mute,
-        forcedBy: mute ? actorUserId : null,
-        reason: mute ? reason ?? null : null,
+        forced: shouldForceAudio,
+        forcedBy: shouldForceAudio ? actorUserId : null,
+        reason: shouldForceAudio ? reason ?? null : null,
         enforced: true,
         timestamp,
       });
@@ -629,9 +653,9 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       io.to(roomCode).emit('video-mute', {
         userId: targetUserId,
         isVideoMuted: nextVideoMuted,
-        forced: mute,
-        forcedBy: mute ? actorUserId : null,
-        reason: mute ? reason ?? null : null,
+        forced: shouldForceVideo,
+        forcedBy: shouldForceVideo ? actorUserId : null,
+        reason: shouldForceVideo ? reason ?? null : null,
         enforced: true,
         timestamp,
       });
@@ -640,12 +664,12 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
     io.to(roomCode).emit('host-control:participant-state', {
       userId: targetUserId,
       audio: targets.has('audio')
-        ? { muted: nextAudioMuted, forced: mute }
+        ? { muted: nextAudioMuted, forced: shouldForceAudio }
         : undefined,
       video: targets.has('video')
-        ? { muted: nextVideoMuted, forced: mute }
+        ? { muted: nextVideoMuted, forced: shouldForceVideo }
         : undefined,
-      reason: mute ? reason ?? null : null,
+      reason: forcedReasonValue,
       actorUserId,
       timestamp,
     });
@@ -905,6 +929,16 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       // Join Socket.io room (use normalized code)
       await socket.join(normalizedRoomCode);
 
+      const participantRecord = updatedRoom.participants.find(
+        participantEntry => participantEntry.userId === userId
+      );
+      const isHost = updatedRoom.adminId === userId;
+      const participantRole =
+        participantRecord?.role ??
+        (isHost ? ParticipantRole.HOST : ParticipantRole.PARTICIPANT);
+      const isModerator =
+        isHost || RoomService.isModeratorRole(participantRole);
+
       // Store socket data (use normalized room code) - IMPORTANT: Set AFTER successful join
       socket.data.roomCode = normalizedRoomCode;
       socket.data.roomId = roomId;
@@ -912,7 +946,9 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       socket.data.userEmail = email;
       socket.data.userPicture = picture;
       socket.data.hasLeftRoom = false;
-      socket.data.isAdmin = updatedRoom.adminId === userId;
+      socket.data.participantRole = participantRole;
+      socket.data.isHost = isHost;
+      socket.data.isAdmin = isModerator;
       socket.data.roomAdminId = updatedRoom.adminId;
 
       // Publish join event to Redis (for multi-server)
@@ -1388,7 +1424,9 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
           picture: userInfo.picture,
         })),
         participants: participantRoster,
-        isAdmin: updatedRoom.adminId === userId,
+        isAdmin: isModerator,
+        isHost,
+        role: participantRole,
         isPublic: updatedRoom.isPublic,
         hostControls: hostControlState,
       });
@@ -1417,13 +1455,87 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
   });
 
   socket.on(
+    'host-control:update-role',
+    async (data: UpdateRolePayload, callback?: (result: { success: boolean; error?: string; role?: ParticipantRole }) => void) => {
+      try {
+        const { roomCode, roomId, actorUserId } = resolveHostContext({ requireHost: true });
+
+        const targetUserId =
+          typeof data?.targetUserId === 'string' ? data.targetUserId.trim() : '';
+        const requestedRole =
+          typeof data?.role === 'string' ? data.role.trim().toLowerCase() : '';
+
+        if (!targetUserId) {
+          callback?.({ success: false, error: 'A target user is required.' });
+          return;
+        }
+
+        let result: { userId: string; role: ParticipantRole };
+        switch (requestedRole) {
+          case 'cohost':
+          case 'co-host':
+          case 'co_host':
+            result = await RoomService.promoteToCoHost(actorUserId, roomId, targetUserId);
+            break;
+          case 'participant':
+            result = await RoomService.demoteToParticipant(actorUserId, roomId, targetUserId);
+            break;
+          default:
+            callback?.({
+              success: false,
+              error: 'Unsupported role. Use "cohost" or "participant".',
+            });
+            return;
+        }
+
+        const roomSockets = await io.in(roomCode).fetchSockets();
+        const targetSockets = roomSockets.filter(
+          participantSocket => participantSocket.data.userId === targetUserId
+        );
+
+        const nowIso = new Date().toISOString();
+        const isModerator = RoomService.isModeratorRole(result.role);
+
+        for (const targetSocket of targetSockets) {
+          targetSocket.data.participantRole = result.role;
+          targetSocket.data.isAdmin = isModerator || targetSocket.data.isHost === true;
+        }
+
+        const payload = {
+          userId: targetUserId,
+          role: result.role,
+          isModerator,
+          updatedBy: actorUserId,
+          updatedAt: nowIso,
+        };
+
+        io.to(roomCode).emit('host-control:role-updated', payload);
+
+        callback?.({ success: true, role: result.role });
+      } catch (error: any) {
+        logger.error('host-control:update-role failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({
+          success: false,
+          error:
+            error instanceof ForbiddenError || error instanceof ConflictError
+              ? error.message
+              : 'Failed to update participant role.',
+        });
+      }
+    }
+  );
+
+  socket.on(
     'host-control:mute-all',
     async (
       data: { targets?: Array<'audio' | 'video'>; mute?: boolean; reason?: string },
       callback?: (result: { success: boolean; error?: string }) => void
     ) => {
       try {
-        const { roomCode, roomId, actorUserId } = resolveHostContext();
+        const { roomCode, roomId, actorUserId, roomAdminId } = resolveHostContext();
         const targetsInput = Array.isArray(data?.targets) ? data.targets : undefined;
 
         const targets = new Set<'audio' | 'video'>();
@@ -1448,10 +1560,14 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
           new Set(
             roomSockets
               .map((participantSocket: any) => participantSocket.data.userId)
-              .filter(
-                (participantUserId: string | undefined) =>
-                  participantUserId && participantUserId !== actorUserId
-              )
+              .filter((participantUserId: string | undefined) => {
+                if (!participantUserId) {
+                  return false;
+                }
+                // When muting everyone, skip the actor (co-host/host) so they aren't force-muted.
+                // When releasing, include the actor so their forced state is cleared as well.
+                return mute ? participantUserId !== actorUserId : true;
+              })
           )
         ) as string[];
 
@@ -1469,6 +1585,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
               reason,
               timestamp,
               roomSockets,
+              roomAdminId,
             })
           )
         );
@@ -1543,7 +1660,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       callback?: (result: { success: boolean; error?: string }) => void
     ) => {
       try {
-        const { roomCode, roomId, actorUserId } = resolveHostContext();
+        const { roomCode, roomId, actorUserId, roomAdminId } = resolveHostContext();
         const targets = new Set<'audio' | 'video'>();
 
         if (data?.audio || (!data?.audio && !data?.video)) {
@@ -1596,6 +1713,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
               reason,
               timestamp,
               roomSockets,
+              roomAdminId,
             })
           )
         );
