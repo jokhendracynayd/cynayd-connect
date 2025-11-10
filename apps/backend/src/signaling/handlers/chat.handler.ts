@@ -2,6 +2,8 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { ChatMessageType } from '@prisma/client';
 import { logger } from '../../shared/utils/logger';
 import { ChatService } from '../../shared/services/chat.service';
+import { RedisStateService } from '../../shared/services/state.redis';
+import { RoomService } from '../../shared/services/rooms.service';
 
 const MAX_MESSAGE_LENGTH = 2000;
 const HISTORY_DEFAULT_LIMIT = 50;
@@ -52,7 +54,7 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
           ? data.recipientId.trim()
           : null;
 
-      let messageType = ChatMessageType.BROADCAST;
+      let messageType: ChatMessageType = ChatMessageType.BROADCAST;
       let directRecipientSockets: Socket[] = [];
 
       if (recipientId) {
@@ -202,39 +204,150 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
     }
   });
 
-  socket.on('audio-mute', (data: { isAudioMuted: boolean; uid: string }) => {
+  socket.on('audio-mute', async (data: { isAudioMuted: boolean; uid: string }) => {
     try {
-      const { roomCode, userId } = socket.data;
+      const { roomCode, roomId } = socket.data;
+      const socketUserId: string | undefined = socket.data.userId;
 
       if (!roomCode) {
         return;
       }
 
-      // Broadcast with userId included
+      const targetUserId = socketUserId || data.uid;
+      if (!targetUserId) {
+        logger.warn('Audio mute event missing user identifier', { socketId: socket.id, roomCode });
+        return;
+      }
+
+      const normalizedAudioMuted = Boolean(data.isAudioMuted);
+      const timestamp = Date.now();
+
+      let isVideoMuted: boolean | undefined;
+      let videoMutedAt: number | null | undefined;
+
+      const redisState = await RedisStateService.getParticipantMuteState(roomCode, targetUserId);
+      if (redisState) {
+        isVideoMuted = redisState.isVideoMuted;
+        videoMutedAt = redisState.videoMutedAt ?? null;
+      }
+
+      if (typeof isVideoMuted !== 'boolean' && roomId) {
+        const dbState = await RoomService.getParticipantMuteState(roomId, targetUserId);
+        if (dbState) {
+          isVideoMuted = dbState.isVideoMuted;
+          videoMutedAt = dbState.videoMutedAt ? dbState.videoMutedAt.getTime() : null;
+        }
+      }
+
+      if (typeof isVideoMuted !== 'boolean') {
+        isVideoMuted = true;
+        videoMutedAt = null;
+      }
+
+      await RedisStateService.setParticipantMuteState(roomCode, targetUserId, {
+        isAudioMuted: normalizedAudioMuted,
+        isVideoMuted,
+        audioMutedAt: timestamp,
+        videoMutedAt: videoMutedAt ?? null,
+      });
+
+      if (roomId) {
+        await RoomService.updateParticipantMuteState(roomId, targetUserId, {
+          isAudioMuted: normalizedAudioMuted,
+          audioMutedAt: new Date(timestamp),
+        });
+      } else {
+        logger.warn('Skipping database persistence for audio mute due to missing roomId', {
+          socketId: socket.id,
+          roomCode,
+          targetUserId,
+        });
+      }
+
       socket.to(roomCode).emit('audio-mute', {
         ...data,
-        userId: userId || data.uid, // Use socket userId if available, fallback to uid
+        isAudioMuted: normalizedAudioMuted,
+        userId: targetUserId,
       });
     } catch (error: any) {
-      logger.error('Error handling audio mute:', error);
+      logger.error('Error handling audio mute:', {
+        error: error?.message ?? error,
+        socketId: socket.id,
+      });
     }
   });
 
-  socket.on('video-mute', (data: { isVideoMuted: boolean; uid: string }) => {
+  socket.on('video-mute', async (data: { isVideoMuted: boolean; uid: string }) => {
     try {
-      const { roomCode, userId } = socket.data;
+      const { roomCode, roomId } = socket.data;
+      const socketUserId: string | undefined = socket.data.userId;
 
       if (!roomCode) {
         return;
       }
 
-      // Broadcast with userId included
+      const targetUserId = socketUserId || data.uid;
+
+      if (!targetUserId) {
+        logger.warn('Video mute event missing user identifier', { socketId: socket.id, roomCode });
+        return;
+      }
+
+      const normalizedVideoMuted = Boolean(data.isVideoMuted);
+      const timestamp = Date.now();
+
+      let isAudioMuted: boolean | undefined;
+      let audioMutedAt: number | null | undefined;
+
+      const redisState = await RedisStateService.getParticipantMuteState(roomCode, targetUserId);
+      if (redisState) {
+        isAudioMuted = redisState.isAudioMuted;
+        audioMutedAt = redisState.audioMutedAt ?? null;
+      }
+
+      if (typeof isAudioMuted !== 'boolean' && roomId) {
+        const dbState = await RoomService.getParticipantMuteState(roomId, targetUserId);
+        if (dbState) {
+          isAudioMuted = dbState.isAudioMuted;
+          audioMutedAt = dbState.audioMutedAt ? dbState.audioMutedAt.getTime() : null;
+        }
+      }
+
+      if (typeof isAudioMuted !== 'boolean') {
+        isAudioMuted = true;
+        audioMutedAt = null;
+      }
+
+      await RedisStateService.setParticipantMuteState(roomCode, targetUserId, {
+        isAudioMuted,
+        isVideoMuted: normalizedVideoMuted,
+        audioMutedAt: audioMutedAt ?? null,
+        videoMutedAt: timestamp,
+      });
+
+      if (roomId) {
+        await RoomService.updateParticipantMuteState(roomId, targetUserId, {
+          isVideoMuted: normalizedVideoMuted,
+          videoMutedAt: new Date(timestamp),
+        });
+      } else {
+        logger.warn('Skipping database persistence for video mute due to missing roomId', {
+          socketId: socket.id,
+          roomCode,
+          targetUserId,
+        });
+      }
+
       socket.to(roomCode).emit('video-mute', {
         ...data,
-        userId: userId || data.uid, // Use socket userId if available, fallback to uid
+        isVideoMuted: normalizedVideoMuted,
+        userId: targetUserId,
       });
     } catch (error: any) {
-      logger.error('Error handling video mute:', error);
+      logger.error('Error handling video mute:', {
+        error: error?.message ?? error,
+        socketId: socket.id,
+      });
     }
   });
 

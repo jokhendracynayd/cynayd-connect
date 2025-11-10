@@ -25,6 +25,8 @@ export interface ParticipantRosterEntry {
   isSpeaking: boolean;
   hasRaisedHand: boolean;
   joinedAt: string;
+  audioMutedAt?: string | null;
+  videoMutedAt?: string | null;
 }
 
 function normalizeDate(value?: Date | string | null): string {
@@ -35,7 +37,18 @@ function normalizeDate(value?: Date | string | null): string {
   return date.toISOString();
 }
 
-function buildParticipantRoster(room: RoomWithParticipants): ParticipantRosterEntry[] {
+type PersistedMuteState = {
+  isAudioMuted: boolean;
+  isVideoMuted: boolean;
+  audioMutedAt?: number | null;
+  videoMutedAt?: number | null;
+  updatedAt?: number;
+};
+
+function buildParticipantRoster(
+  room: RoomWithParticipants,
+  muteStateOverrides: Record<string, PersistedMuteState> = {}
+): ParticipantRosterEntry[] {
   if (!room?.participants?.length) {
     return [];
   }
@@ -49,17 +62,23 @@ function buildParticipantRoster(room: RoomWithParticipants): ParticipantRosterEn
 
     const { user } = participant;
     const joinedAtIso = normalizeDate(participant.joinedAt ?? undefined);
+    const override = muteStateOverrides[user.id];
+    const audioMutedAtMs = override?.audioMutedAt ?? participant.audioMutedAt?.getTime() ?? null;
+    const videoMutedAtMs = override?.videoMutedAt ?? participant.videoMutedAt?.getTime() ?? null;
+
     const entry: ParticipantRosterEntry = {
       userId: user.id,
       name: user.name,
       email: user.email,
       picture: user.picture,
       isAdmin: participant.role === 'admin' || room.adminId === user.id,
-      isAudioMuted: true,
-      isVideoMuted: true,
+      isAudioMuted: override?.isAudioMuted ?? participant.audioMuted ?? true,
+      isVideoMuted: override?.isVideoMuted ?? participant.videoMuted ?? true,
       isSpeaking: false,
       hasRaisedHand: false,
       joinedAt: joinedAtIso,
+      audioMutedAt: audioMutedAtMs ? new Date(audioMutedAtMs).toISOString() : null,
+      videoMutedAt: videoMutedAtMs ? new Date(videoMutedAtMs).toISOString() : null,
     };
 
     const existing = deduped.get(user.id);
@@ -258,6 +277,19 @@ export async function handleSocketLeave(
       roomCode,
       error: error?.message || error,
     });
+  }
+
+  if (userId) {
+    try {
+      await RedisStateService.clearParticipantMuteState(roomCode, userId);
+    } catch (error: any) {
+      logger.warn('handleSocketLeave: failed to clear participant mute state', {
+        socketId: socket.id,
+        userId,
+        roomCode,
+        error: error?.message || error,
+      });
+    }
   }
 
   const payload = {
@@ -581,7 +613,62 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         picture,
       }));
 
-      const participantRoster = buildParticipantRoster(updatedRoom);
+      const redisMuteStates = await RedisStateService.getRoomMuteStates(normalizedRoomCode);
+      const dbMuteStates = await RoomService.getRoomParticipantMuteStates(roomId);
+
+      const combinedMuteStates: Record<string, PersistedMuteState> = {};
+
+      for (const [userIdKey, state] of Object.entries(dbMuteStates)) {
+        combinedMuteStates[userIdKey] = {
+          isAudioMuted: state.isAudioMuted,
+          isVideoMuted: state.isVideoMuted,
+          audioMutedAt: state.audioMutedAt ? state.audioMutedAt.getTime() : null,
+          videoMutedAt: state.videoMutedAt ? state.videoMutedAt.getTime() : null,
+          updatedAt: Math.max(
+            state.audioMutedAt ? state.audioMutedAt.getTime() : 0,
+            state.videoMutedAt ? state.videoMutedAt.getTime() : 0
+          ) || undefined,
+        };
+      }
+
+      for (const [userIdKey, state] of Object.entries(redisMuteStates)) {
+        const existing = combinedMuteStates[userIdKey] ?? {
+          isAudioMuted: true,
+          isVideoMuted: true,
+          audioMutedAt: null,
+          videoMutedAt: null,
+          updatedAt: undefined,
+        };
+
+        combinedMuteStates[userIdKey] = {
+          isAudioMuted: typeof state.isAudioMuted === 'boolean' ? state.isAudioMuted : existing.isAudioMuted,
+          isVideoMuted: typeof state.isVideoMuted === 'boolean' ? state.isVideoMuted : existing.isVideoMuted,
+          audioMutedAt: state.audioMutedAt ?? existing.audioMutedAt ?? null,
+          videoMutedAt: state.videoMutedAt ?? existing.videoMutedAt ?? null,
+          updatedAt: state.updatedAt ?? existing.updatedAt,
+        };
+      }
+
+      const usersNeedingRedisSync = Object.keys(combinedMuteStates).filter(
+        userIdKey => !redisMuteStates[userIdKey]
+      );
+
+      if (usersNeedingRedisSync.length > 0) {
+        await Promise.all(
+          usersNeedingRedisSync.map(userIdKey => {
+            const state = combinedMuteStates[userIdKey];
+            return RedisStateService.setParticipantMuteState(normalizedRoomCode, userIdKey, {
+              isAudioMuted: state.isAudioMuted,
+              isVideoMuted: state.isVideoMuted,
+              audioMutedAt: state.audioMutedAt ?? null,
+              videoMutedAt: state.videoMutedAt ?? null,
+            });
+          })
+        );
+      }
+
+      const participantRoster = buildParticipantRoster(updatedRoom, combinedMuteStates);
+      const joiningMuteState = combinedMuteStates[userId];
       const joiningParticipant =
         participantRoster.find((participant) => participant.userId === userId) ||
         {
@@ -590,11 +677,17 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
           email,
           picture,
           isAdmin: updatedRoom.adminId === userId,
-          isAudioMuted: true,
-          isVideoMuted: true,
+          isAudioMuted: joiningMuteState?.isAudioMuted ?? true,
+          isVideoMuted: joiningMuteState?.isVideoMuted ?? true,
           isSpeaking: false,
           hasRaisedHand: false,
           joinedAt: new Date().toISOString(),
+          audioMutedAt: joiningMuteState?.audioMutedAt
+            ? new Date(joiningMuteState.audioMutedAt).toISOString()
+            : null,
+          videoMutedAt: joiningMuteState?.videoMutedAt
+            ? new Date(joiningMuteState.videoMutedAt).toISOString()
+            : null,
         };
 
       // Notify other participants with normalized payload

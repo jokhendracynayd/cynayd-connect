@@ -252,6 +252,8 @@ interface CallState {
   updateParticipant: (userId: string, updates: Partial<Participant>) => void;
   toggleAudio: () => void;
   toggleVideo: () => void;
+  setLocalAudioMuted: (muted: boolean) => void;
+  setLocalVideoMuted: (muted: boolean) => void;
   setIsAdmin: (isAdmin: boolean) => void;
   setRoomIsPublic: (isPublic: boolean) => void;
   setPendingRequests: (requests: RoomJoinRequest[]) => void;
@@ -380,6 +382,8 @@ export const useCallStore = create<CallState>((set) => ({
   })),
   toggleAudio: () => set((state) => ({ isAudioMuted: !state.isAudioMuted })),
   toggleVideo: () => set((state) => ({ isVideoMuted: !state.isVideoMuted })),
+  setLocalAudioMuted: (muted) => set({ isAudioMuted: muted }),
+  setLocalVideoMuted: (muted) => set({ isVideoMuted: muted }),
   setIsAdmin: (isAdmin) => set({ isAdmin }),
   setRoomIsPublic: (isPublic) => set({ roomIsPublic: isPublic }),
   setPendingRequests: (requests) => set({ pendingRequests: requests }),

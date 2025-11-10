@@ -45,6 +45,8 @@ type ServerParticipant = {
   isSpeaking?: boolean;
   hasRaisedHand?: boolean;
   joinedAt?: string;
+  audioMutedAt?: string | null;
+  videoMutedAt?: string | null;
 };
 
 interface ParticipantTile {
@@ -70,6 +72,8 @@ export default function Call() {
     setLocalStream, 
     isAudioMuted,
     isVideoMuted,
+    setLocalAudioMuted,
+    setLocalVideoMuted,
     toggleAudio,
     toggleVideo,
     setIsConnected,
@@ -609,6 +613,10 @@ export default function Call() {
   const connectToRoom = async () => {
     if (!roomCode || !user) return;
     
+    let effectiveAudioMuted = isAudioMuted;
+    let effectiveVideoMuted = isVideoMuted;
+    let rosterEntries: ServerParticipant[] = [];
+
     // Get token from store or localStorage (fallback for page refresh)
     const currentToken = token || storage.getToken();
     if (!currentToken) {
@@ -699,6 +707,20 @@ export default function Call() {
         throw new Error(response?.error || 'Failed to join room');
       }
 
+    rosterEntries = Array.isArray(response.participants) ? response.participants : [];
+    const selfRosterEntry = rosterEntries.find((participant) => participant?.userId === user.id);
+
+    if (selfRosterEntry) {
+      if (typeof selfRosterEntry.isAudioMuted === 'boolean') {
+        effectiveAudioMuted = selfRosterEntry.isAudioMuted;
+        setLocalAudioMuted(selfRosterEntry.isAudioMuted);
+      }
+      if (typeof selfRosterEntry.isVideoMuted === 'boolean') {
+        effectiveVideoMuted = selfRosterEntry.isVideoMuted;
+        setLocalVideoMuted(selfRosterEntry.isVideoMuted);
+      }
+    }
+
       // Initialize Mediasoup device
       await webrtcManager.initialize(response.rtpCapabilities);
 
@@ -727,10 +749,10 @@ export default function Call() {
           // Set initial enabled state based on muted settings
           if (stream) {
             stream.getAudioTracks().forEach(track => {
-              track.enabled = settings.joinWithAudio && !isAudioMuted;
+              track.enabled = settings.joinWithAudio && !effectiveAudioMuted;
             });
             stream.getVideoTracks().forEach(track => {
-              track.enabled = settings.joinWithVideo && !isVideoMuted;
+              track.enabled = settings.joinWithVideo && !effectiveVideoMuted;
             });
           }
 
@@ -816,10 +838,6 @@ export default function Call() {
         }
       }
       
-      const rosterEntries: ServerParticipant[] = Array.isArray(response.participants)
-        ? response.participants
-        : [];
-
       const seenRosterUserIds = new Set<string>();
 
       rosterEntries.forEach((participantInfo) => {
@@ -2070,11 +2088,12 @@ export default function Call() {
       // Turning ON - Get new video track and replace in producer
       try {
         const newVideoTrack = await mediaManager.getSingleTrack('video', selectedDevices.videoInput);
-        
+        newVideoTrack.enabled = true;
+
         if (videoProducer) {
           // Replace track in producer
           await webrtcManager.replaceVideoTrack(newVideoTrack);
-          
+
           // Resume producer if it was paused
           try {
             await webrtcManager.resumeProducer('video');
@@ -2085,18 +2104,28 @@ export default function Call() {
           // Producer doesn't exist, create it
           await webrtcManager.produceVideo(newVideoTrack);
         }
-        
-        // Update local stream
+
+        // Remove any stale/ended tracks from local stream before adding the new one
         if (localStream) {
-          localStream.addTrack(newVideoTrack);
+          const existingVideoTracks = localStream.getVideoTracks();
+          existingVideoTracks.forEach(track => {
+            if (track !== newVideoTrack) {
+              track.stop();
+              localStream.removeTrack(track);
+            }
+          });
+
+          if (!localStream.getVideoTracks().includes(newVideoTrack)) {
+            localStream.addTrack(newVideoTrack);
+          }
           setLocalStream(new MediaStream(localStream));
         } else {
           const newStream = new MediaStream([newVideoTrack]);
           setLocalStream(newStream);
         }
-        
+
         console.log('Camera restarted');
-        
+
         // Emit video mute event
         const socket = (socketManager as any).socket;
         if (socket && roomCode) {

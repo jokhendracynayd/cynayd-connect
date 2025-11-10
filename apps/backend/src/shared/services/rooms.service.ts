@@ -1,6 +1,96 @@
 import prisma from '../database/prisma';
+import { Prisma } from '@prisma/client';
 import { NotFoundError, ForbiddenError, ConflictError } from '../utils/errors';
 import { logger } from '../utils/logger';
+
+let muteColumnsAvailable: boolean | null = null;
+let lastMuteColumnCheck: number | null = null;
+const MUTE_COLUMN_CHECK_INTERVAL_MS = 60_000; // 1 minute cache
+
+async function areMuteColumnsAvailable(): Promise<boolean> {
+  const now = Date.now();
+
+  if (
+    typeof muteColumnsAvailable === 'boolean' &&
+    lastMuteColumnCheck !== null &&
+    now - lastMuteColumnCheck < MUTE_COLUMN_CHECK_INTERVAL_MS
+  ) {
+    return muteColumnsAvailable;
+  }
+
+  try {
+    const result = await prisma.$queryRaw<Array<{ column_name: string }>>`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'Participant'
+        AND column_name IN ('audioMuted', 'videoMuted', 'audioMutedAt', 'videoMutedAt')
+    `;
+
+    const columns = new Set(result.map(row => row.column_name));
+    const hasColumns =
+      columns.has('audioMuted') &&
+      columns.has('videoMuted') &&
+      columns.has('audioMutedAt') &&
+      columns.has('videoMutedAt');
+
+    muteColumnsAvailable = hasColumns;
+    lastMuteColumnCheck = now;
+
+    if (!hasColumns) {
+      logger.warn(
+        'Participant mute state columns missing in database. Run latest migrations to enable persistence.'
+      );
+    }
+
+    return hasColumns;
+  } catch (error) {
+    logger.warn('Failed to verify participant mute columns. Assuming unavailable.', { error });
+    muteColumnsAvailable = false;
+    lastMuteColumnCheck = now;
+    return false;
+  }
+}
+
+function isMuteColumnMissingError(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+
+  const message =
+    typeof error === 'string'
+      ? error
+      : (error as { message?: string })?.message ?? '';
+
+  if (!message) {
+    return false;
+  }
+
+  const patterns = [
+    'Unknown field `audioMuted`',
+    'Unknown field `videoMuted`',
+    'column "audioMuted" does not exist',
+    'column "videoMuted" does not exist',
+  ];
+
+  if (patterns.some(pattern => message.includes(pattern))) {
+    return true;
+  }
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === 'P2021' || error.code === 'P2022') {
+      return true;
+    }
+  }
+
+  if (error instanceof Prisma.PrismaClientValidationError) {
+    if (patterns.some(pattern => message.includes(pattern))) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 export class RoomService {
   static async createRoom(userId: string, data: { name?: string; isPublic?: boolean }) {
@@ -235,6 +325,165 @@ export class RoomService {
     }
 
     return this.getRoomByCode(normalizedRoomCode);
+  }
+
+  static async updateParticipantMuteState(
+    roomId: string,
+    userId: string,
+    updates: {
+      isAudioMuted?: boolean;
+      isVideoMuted?: boolean;
+      audioMutedAt?: Date | null;
+      videoMutedAt?: Date | null;
+    }
+  ): Promise<void> {
+    const data: Record<string, unknown> = {};
+
+    if (typeof updates.isAudioMuted === 'boolean') {
+      data.audioMuted = updates.isAudioMuted;
+      data.audioMutedAt = updates.audioMutedAt ?? new Date();
+    }
+
+    if (typeof updates.isVideoMuted === 'boolean') {
+      data.videoMuted = updates.isVideoMuted;
+      data.videoMutedAt = updates.videoMutedAt ?? new Date();
+    }
+
+    if (Object.keys(data).length === 0) {
+      return;
+    }
+
+    const columnsAvailable = await areMuteColumnsAvailable();
+    if (!columnsAvailable) {
+      return;
+    }
+
+    try {
+      const result = await prisma.participant.updateMany({
+        where: {
+          roomId,
+          userId,
+          leftAt: null,
+        },
+        data,
+      });
+
+      if (result.count === 0) {
+        logger.warn('No active participant found to update mute state', { roomId, userId });
+      }
+    } catch (error: any) {
+      if (isMuteColumnMissingError(error)) {
+        logger.warn(
+          'Mute state columns missing in database, skipping participant mute update. Run latest migrations to enable persistence.',
+          { roomId, userId }
+        );
+        return;
+      }
+
+      throw error;
+    }
+  }
+
+  static async getParticipantMuteState(roomId: string, userId: string): Promise<{
+    isAudioMuted: boolean;
+    isVideoMuted: boolean;
+    audioMutedAt: Date | null;
+    videoMutedAt: Date | null;
+  } | null> {
+    const columnsAvailable = await areMuteColumnsAvailable();
+    if (!columnsAvailable) {
+      return null;
+    }
+
+    try {
+      const participant = await prisma.participant.findFirst({
+        where: {
+          roomId,
+          userId,
+          leftAt: null,
+        },
+        select: {
+          audioMuted: true,
+          videoMuted: true,
+          audioMutedAt: true,
+          videoMutedAt: true,
+        },
+      });
+
+      if (!participant) {
+        return null;
+      }
+
+      return {
+        isAudioMuted: participant.audioMuted,
+        isVideoMuted: participant.videoMuted,
+        audioMutedAt: participant.audioMutedAt,
+        videoMutedAt: participant.videoMutedAt,
+      };
+    } catch (error: any) {
+      if (isMuteColumnMissingError(error)) {
+        logger.warn(
+          'Mute state columns missing in database, returning default mute state. Run latest migrations to enable persistence.',
+          { roomId, userId }
+        );
+        return null;
+      }
+
+      throw error;
+    }
+  }
+
+  static async getRoomParticipantMuteStates(roomId: string): Promise<Record<string, {
+    isAudioMuted: boolean;
+    isVideoMuted: boolean;
+    audioMutedAt: Date | null;
+    videoMutedAt: Date | null;
+  }>> {
+    const columnsAvailable = await areMuteColumnsAvailable();
+    if (!columnsAvailable) {
+      return {};
+    }
+
+    try {
+      const participants = await prisma.participant.findMany({
+        where: {
+          roomId,
+          leftAt: null,
+        },
+        select: {
+          userId: true,
+          audioMuted: true,
+          videoMuted: true,
+          audioMutedAt: true,
+          videoMutedAt: true,
+        },
+      });
+
+      return participants.reduce<Record<string, {
+        isAudioMuted: boolean;
+        isVideoMuted: boolean;
+        audioMutedAt: Date | null;
+        videoMutedAt: Date | null;
+      }>>((acc, participant) => {
+        acc[participant.userId] = {
+          isAudioMuted: participant.audioMuted,
+          isVideoMuted: participant.videoMuted,
+          audioMutedAt: participant.audioMutedAt,
+          videoMutedAt: participant.videoMutedAt,
+        };
+        return acc;
+      }, {});
+    } catch (error: any) {
+      if (isMuteColumnMissingError(error)) {
+        logger.warn(
+          'Mute state columns missing in database, returning empty mute state map. Run latest migrations to enable persistence.',
+          { roomId }
+        );
+        return {};
+      }
+
+      throw error;
+    }
   }
 
   static async requestRoomJoin(userId: string, roomCode: string) {

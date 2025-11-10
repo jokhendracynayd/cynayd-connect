@@ -56,6 +56,10 @@ model Participant {
   joinedAt  DateTime @default(now())
   leftAt    DateTime?
   role      String   @default("participant") // "admin" | "participant"
+  audioMuted     Boolean   @default(true)
+  videoMuted     Boolean   @default(true)
+  audioMutedAt   DateTime?
+  videoMutedAt   DateTime?
 
   @@unique([roomId, userId, joinedAt])
   @@index([roomId])

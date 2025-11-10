@@ -13,6 +13,7 @@ import { config } from '../config';
 export class RedisStateService {
   private static readonly KEY_PREFIX = 'connect:state';
   private static readonly TTL_SECONDS = 3600; // 1 hour default TTL
+  private static readonly MUTE_STATE_TTL_SECONDS = 3600; // 1 hour, refreshed on updates
 
   // Producer metadata storage
   static async storeProducerMetadata(
@@ -314,6 +315,136 @@ export class RedisStateService {
     }
 
     return producers;
+  }
+
+  // Participant mute state management
+  static async setParticipantMuteState(
+    roomCode: string,
+    userId: string,
+    state: {
+      isAudioMuted: boolean;
+      isVideoMuted: boolean;
+      audioMutedAt?: number | null;
+      videoMutedAt?: number | null;
+    }
+  ): Promise<void> {
+    const key = `${this.KEY_PREFIX}:room:${roomCode}:mute:${userId}`;
+    const setKey = `${this.KEY_PREFIX}:room:${roomCode}:mute:participants`;
+
+    const payload = {
+      roomCode,
+      userId,
+      isAudioMuted: state.isAudioMuted,
+      isVideoMuted: state.isVideoMuted,
+      audioMutedAt: state.audioMutedAt ?? null,
+      videoMutedAt: state.videoMutedAt ?? null,
+      updatedAt: Date.now(),
+    };
+
+    const client = redis._client as any;
+
+    if (client && typeof client.pipeline === 'function') {
+      await client
+        .pipeline()
+        .sadd(setKey, userId)
+        .set(key, JSON.stringify(payload), 'EX', this.MUTE_STATE_TTL_SECONDS)
+        .exec();
+    } else {
+      await redis.sadd(setKey, userId);
+      await redis.setex(key, this.MUTE_STATE_TTL_SECONDS, JSON.stringify(payload));
+    }
+  }
+
+  static async getParticipantMuteState(roomCode: string, userId: string): Promise<{
+    roomCode: string;
+    userId: string;
+    isAudioMuted: boolean;
+    isVideoMuted: boolean;
+    audioMutedAt: number | null;
+    videoMutedAt: number | null;
+    updatedAt: number;
+  } | null> {
+    const key = `${this.KEY_PREFIX}:room:${roomCode}:mute:${userId}`;
+    const data = await redis.get(key);
+    if (!data) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(data);
+    } catch (error) {
+      logger.warn('Failed to parse mute state from Redis', { roomCode, userId, error });
+      return null;
+    }
+  }
+
+  static async getRoomMuteStates(roomCode: string): Promise<Record<string, {
+    isAudioMuted: boolean;
+    isVideoMuted: boolean;
+    audioMutedAt: number | null;
+    videoMutedAt: number | null;
+    updatedAt: number;
+  }>> {
+    const setKey = `${this.KEY_PREFIX}:room:${roomCode}:mute:participants`;
+    const participantIds = await redis.smembers(setKey);
+
+    if (participantIds.length === 0) {
+      return {};
+    }
+
+    const keys = participantIds.map(userId => `${this.KEY_PREFIX}:room:${roomCode}:mute:${userId}`);
+    const client = redis._client as any;
+    const values: Array<string | null> = client && typeof client.mget === 'function'
+      ? await client.mget(...keys)
+      : await Promise.all(keys.map(key => redis.get(key)));
+
+    const results: Record<string, {
+      isAudioMuted: boolean;
+      isVideoMuted: boolean;
+      audioMutedAt: number | null;
+      videoMutedAt: number | null;
+      updatedAt: number;
+    }> = {};
+
+    participantIds.forEach((userId, index) => {
+      const value = values[index];
+      if (!value) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(value);
+        results[userId] = {
+          isAudioMuted: parsed.isAudioMuted,
+          isVideoMuted: parsed.isVideoMuted,
+          audioMutedAt: parsed.audioMutedAt ?? null,
+          videoMutedAt: parsed.videoMutedAt ?? null,
+          updatedAt: parsed.updatedAt ?? Date.now(),
+        };
+      } catch (error) {
+        logger.warn('Failed to parse mute state entry from Redis', { roomCode, userId, error });
+      }
+    });
+
+    return results;
+  }
+
+  static async clearParticipantMuteState(roomCode: string, userId: string): Promise<void> {
+    const key = `${this.KEY_PREFIX}:room:${roomCode}:mute:${userId}`;
+    const setKey = `${this.KEY_PREFIX}:room:${roomCode}:mute:participants`;
+
+    const client = redis._client as any;
+
+    if (client && typeof client.pipeline === 'function') {
+      await client
+        .pipeline()
+        .del(key)
+        .srem(setKey, userId)
+        .exec();
+    } else {
+      await redis.del(key);
+      await redis.srem(setKey, userId);
+    }
   }
 }
 
