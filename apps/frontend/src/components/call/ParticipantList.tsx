@@ -5,9 +5,20 @@ import { useAuthStore } from '../../store/authStore';
 interface ParticipantListProps {
   isOpen: boolean;
   onClose: () => void;
+  isHost?: boolean;
+  currentUserId?: string | null;
+  onForceMute?: (userId: string, targets: { audio?: boolean; video?: boolean }, mute: boolean) => void;
+  onRemoveParticipant?: (userId: string) => void;
 }
 
-export default function ParticipantList({ isOpen, onClose }: ParticipantListProps) {
+export default function ParticipantList({
+  isOpen,
+  onClose,
+  isHost = false,
+  currentUserId,
+  onForceMute,
+  onRemoveParticipant,
+}: ParticipantListProps) {
   const { participants, activeSpeakerId } = useCallStore();
   const { user } = useAuthStore();
   const isActiveSpeaker = (userId: string) => activeSpeakerId === userId;
@@ -99,12 +110,38 @@ export default function ParticipantList({ isOpen, onClose }: ParticipantListProp
                     Muted
                   </span>
                 )}
+                {participant.isAudioForceMuted && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-600">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M7 8V6a3 3 0 116 0v2m0 0v2a3 3 0 106 0V8m-6 0h6"
+                      />
+                    </svg>
+                    Host muted
+                  </span>
+                )}
                 {participant.isVideoMuted && (
                   <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500">
                     <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
                       <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
                     </svg>
                     Camera off
+                  </span>
+                )}
+                {participant.isVideoForceMuted && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-600">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M4 5a2 2 0 012-2h4a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V5zM16 7l3-2v10l-3-2"
+                      />
+                    </svg>
+                    Host disabled video
                   </span>
                 )}
                 {participant.hasRaisedHand && (
@@ -115,7 +152,81 @@ export default function ParticipantList({ isOpen, onClose }: ParticipantListProp
                     Raised hand
                   </span>
                 )}
+                {participant.forceMuteReason && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16h-1v-4h1m-2 0h-1v4h1M5 8h10M6 5h8M5 11h10" />
+                    </svg>
+                    {participant.forceMuteReason}
+                  </span>
+                )}
               </div>
+              {isHost && participant.userId !== currentUserId && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() =>
+                      onForceMute?.(
+                        participant.userId,
+                        { audio: true },
+                        !participant.isAudioForceMuted
+                      )
+                    }
+                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                      participant.isAudioForceMuted
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:border-emerald-300 hover:text-emerald-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-cyan-200 hover:text-cyan-600'
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M7 8V6a3 3 0 116 0v2m0 0v2a3 3 0 106 0V8m-6 0h6"
+                      />
+                    </svg>
+                    {participant.isAudioForceMuted ? 'Release mic' : 'Force mute'}
+                  </button>
+                  <button
+                    onClick={() =>
+                      onForceMute?.(
+                        participant.userId,
+                        { video: true },
+                        !participant.isVideoForceMuted
+                      )
+                    }
+                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                      participant.isVideoForceMuted
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:border-emerald-300 hover:text-emerald-700'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-cyan-200 hover:text-cyan-600'
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M4 5a2 2 0 012-2h4a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V5zM16 7l3-2v10l-3-2"
+                      />
+                    </svg>
+                    {participant.isVideoForceMuted ? 'Enable video' : 'Disable video'}
+                  </button>
+                  <button
+                    onClick={() => onRemoveParticipant?.(participant.userId)}
+                    className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-600 transition hover:border-rose-300 hover:text-rose-700"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M6 18L14 6m0 0v6m0-6H8"
+                      />
+                    </svg>
+                    Remove
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}

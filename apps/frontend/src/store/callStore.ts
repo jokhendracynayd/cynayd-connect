@@ -192,9 +192,16 @@ interface Participant {
   picture?: string;
   isAudioMuted: boolean;
   isVideoMuted: boolean;
+  isAudioForceMuted: boolean;
+  isVideoForceMuted: boolean;
   isSpeaking: boolean;
   isAdmin: boolean;
   hasRaisedHand: boolean;
+  audioForceMutedAt?: string | null;
+  videoForceMutedAt?: string | null;
+  audioForceMutedBy?: string | null;
+  videoForceMutedBy?: string | null;
+  forceMuteReason?: string | null;
 }
 
 type ParticipantInput = {
@@ -204,9 +211,16 @@ type ParticipantInput = {
   picture?: string;
   isAudioMuted?: boolean;
   isVideoMuted?: boolean;
+  isAudioForceMuted?: boolean;
+  isVideoForceMuted?: boolean;
   isSpeaking?: boolean;
   isAdmin?: boolean;
   hasRaisedHand?: boolean;
+  audioForceMutedAt?: string | null;
+  videoForceMutedAt?: string | null;
+  audioForceMutedBy?: string | null;
+  videoForceMutedBy?: string | null;
+  forceMuteReason?: string | null;
 };
 
 interface CallState {
@@ -243,6 +257,21 @@ interface CallState {
     messages: Map<string, ChatMessage[]>;
   };
   networkQuality: Map<string, NetworkQualityAggregate>;
+  hostControls: {
+    locked: boolean;
+    lockedBy: string | null;
+    lockedReason: string | null;
+    audioForceAll: boolean;
+    audioForcedBy: string | null;
+    audioForceReason: string | null;
+    videoForceAll: boolean;
+    videoForcedBy: string | null;
+    videoForceReason: string | null;
+    chatForceAll: boolean;
+    chatForcedBy: string | null;
+    chatForceReason: string | null;
+    updatedAt: string | null;
+  };
   setRoomCode: (code: string) => void;
   setIsConnected: (connected: boolean) => void;
   setLocalStream: (stream: MediaStream | null) => void;
@@ -283,6 +312,26 @@ interface CallState {
   ensureChatConversation: (conversation: ChatConversation) => void;
   updateNetworkQuality: (samples: NetworkSample[]) => void;
   clearNetworkQuality: () => void;
+  setHostControls: (controls: Partial<CallState['hostControls']>) => void;
+  applyParticipantForceState: (
+    userId: string,
+    state: {
+      audio?: {
+        muted?: boolean;
+        forced: boolean;
+        reason?: string | null;
+        forcedBy?: string | null;
+        timestamp?: string | null;
+      };
+      video?: {
+        muted?: boolean;
+        forced: boolean;
+        reason?: string | null;
+        forcedBy?: string | null;
+        timestamp?: string | null;
+      };
+    }
+  ) => void;
   resetCallState: () => void;
 }
 
@@ -293,9 +342,16 @@ const withParticipantDefaults = (participant: ParticipantInput): Participant => 
   picture: participant.picture,
   isAudioMuted: participant.isAudioMuted ?? true,
   isVideoMuted: participant.isVideoMuted ?? true,
+  isAudioForceMuted: participant.isAudioForceMuted ?? false,
+  isVideoForceMuted: participant.isVideoForceMuted ?? false,
   isSpeaking: participant.isSpeaking ?? false,
   isAdmin: participant.isAdmin ?? false,
   hasRaisedHand: participant.hasRaisedHand ?? false,
+  audioForceMutedAt: participant.audioForceMutedAt ?? null,
+  videoForceMutedAt: participant.videoForceMutedAt ?? null,
+  audioForceMutedBy: participant.audioForceMutedBy ?? null,
+  videoForceMutedBy: participant.videoForceMutedBy ?? null,
+  forceMuteReason: participant.forceMuteReason ?? null,
 });
 
 const mergeParticipantWithUpdates = (existing: Participant, updates: ParticipantInput): Participant => ({
@@ -305,9 +361,21 @@ const mergeParticipantWithUpdates = (existing: Participant, updates: Participant
   picture: updates.picture ?? existing.picture,
   isAudioMuted: updates.isAudioMuted ?? existing.isAudioMuted,
   isVideoMuted: updates.isVideoMuted ?? existing.isVideoMuted,
+  isAudioForceMuted: updates.isAudioForceMuted ?? existing.isAudioForceMuted,
+  isVideoForceMuted: updates.isVideoForceMuted ?? existing.isVideoForceMuted,
   isSpeaking: updates.isSpeaking ?? existing.isSpeaking,
   isAdmin: updates.isAdmin ?? existing.isAdmin,
   hasRaisedHand: updates.hasRaisedHand ?? existing.hasRaisedHand,
+  audioForceMutedAt:
+    updates.audioForceMutedAt !== undefined ? updates.audioForceMutedAt : existing.audioForceMutedAt ?? null,
+  videoForceMutedAt:
+    updates.videoForceMutedAt !== undefined ? updates.videoForceMutedAt : existing.videoForceMutedAt ?? null,
+  audioForceMutedBy:
+    updates.audioForceMutedBy !== undefined ? updates.audioForceMutedBy : existing.audioForceMutedBy ?? null,
+  videoForceMutedBy:
+    updates.videoForceMutedBy !== undefined ? updates.videoForceMutedBy : existing.videoForceMutedBy ?? null,
+  forceMuteReason:
+    updates.forceMuteReason !== undefined ? updates.forceMuteReason : existing.forceMuteReason ?? null,
 });
 
 export const useCallStore = create<CallState>((set) => ({
@@ -348,6 +416,21 @@ export const useCallStore = create<CallState>((set) => ({
     ]),
   },
   networkQuality: new Map<string, NetworkQualityAggregate>(),
+  hostControls: {
+    locked: false,
+    lockedBy: null,
+    lockedReason: null,
+    audioForceAll: false,
+    audioForcedBy: null,
+    audioForceReason: null,
+    videoForceAll: false,
+    videoForcedBy: null,
+    videoForceReason: null,
+    chatForceAll: false,
+    chatForcedBy: null,
+    chatForceReason: null,
+    updatedAt: null,
+  },
   
   setRoomCode: (code) => set({ roomCode: code }),
   setIsConnected: (connected) => set({ isConnected: connected }),
@@ -638,7 +721,7 @@ export const useCallStore = create<CallState>((set) => ({
 
     const updatedMessages = messages.map((msg) =>
       msg.clientMessageId === clientMessageId
-        ? { ...msg, status: 'failed' }
+        ? { ...msg, status: 'failed' as const }
         : msg
     );
 
@@ -779,6 +862,72 @@ export const useCallStore = create<CallState>((set) => ({
     ...state,
     networkQuality: new Map<string, NetworkQualityAggregate>(),
   })),
+  setHostControls: (controls) => set((state) => ({
+    ...state,
+    hostControls: {
+      ...state.hostControls,
+      ...controls,
+      updatedAt: controls.updatedAt ?? new Date().toISOString(),
+    },
+  })),
+  applyParticipantForceState: (userId, state) => set((existingState) => {
+    const participant = existingState.participants.find(p => p.userId === userId);
+    if (!participant) {
+      return existingState;
+    }
+
+    const audioForced = state.audio ? state.audio.forced : participant.isAudioForceMuted;
+    const videoForced = state.video ? state.video.forced : participant.isVideoForceMuted;
+
+    const updatedParticipant: Participant = {
+      ...participant,
+      isAudioMuted:
+        state.audio && typeof state.audio.muted === 'boolean'
+          ? state.audio.muted
+          : participant.isAudioMuted,
+      isVideoMuted:
+        state.video && typeof state.video.muted === 'boolean'
+          ? state.video.muted
+          : participant.isVideoMuted,
+      isAudioForceMuted: audioForced,
+      isVideoForceMuted: videoForced,
+      audioForceMutedAt:
+        state.audio && state.audio.timestamp !== undefined
+          ? state.audio.timestamp
+          : participant.audioForceMutedAt ?? null,
+      videoForceMutedAt:
+        state.video && state.video.timestamp !== undefined
+          ? state.video.timestamp
+          : participant.videoForceMutedAt ?? null,
+      audioForceMutedBy:
+        state.audio && state.audio.forcedBy !== undefined
+          ? state.audio.forcedBy ?? null
+          : participant.audioForceMutedBy ?? null,
+      videoForceMutedBy:
+        state.video && state.video.forcedBy !== undefined
+          ? state.video.forcedBy ?? null
+          : participant.videoForceMutedBy ?? null,
+      forceMuteReason:
+        state.audio?.reason ??
+        state.video?.reason ??
+        (!audioForced && !videoForced ? null : participant.forceMuteReason ?? null),
+    };
+
+    const updatedParticipants = existingState.participants.map(p =>
+      p.userId === userId ? updatedParticipant : p
+    );
+
+    const updatedScreenShares = new Map(existingState.screenShares);
+    if (videoForced && existingState.screenShares.has(userId)) {
+      updatedScreenShares.delete(userId);
+    }
+
+    return {
+      ...existingState,
+      participants: updatedParticipants,
+      screenShares: updatedScreenShares,
+    };
+  }),
   resetCallState: () => set({
     isConnected: false,
     roomCode: null,
@@ -817,6 +966,21 @@ export const useCallStore = create<CallState>((set) => ({
       ]),
     },
     networkQuality: new Map<string, NetworkQualityAggregate>(),
+    hostControls: {
+      locked: false,
+      lockedBy: null,
+      lockedReason: null,
+      audioForceAll: false,
+      audioForcedBy: null,
+      audioForceReason: null,
+      videoForceAll: false,
+      videoForcedBy: null,
+      videoForceReason: null,
+      chatForceAll: false,
+      chatForcedBy: null,
+      chatForceReason: null,
+      updatedAt: null,
+    },
   }),
 }));
 

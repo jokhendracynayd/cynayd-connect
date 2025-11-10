@@ -54,6 +54,39 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
           ? data.recipientId.trim()
           : null;
 
+      const isAdmin = Boolean(socket.data.isAdmin);
+
+      if (!isAdmin) {
+        let chatForceAll = false;
+        let chatForceReason: string | null = null;
+
+        const redisState = await RedisStateService.getRoomControlState(roomCode);
+        if (redisState) {
+          chatForceAll = redisState.chatForceAll;
+          chatForceReason = redisState.chatForceReason ?? null;
+        }
+
+        if (!chatForceAll) {
+          const hostState = await RoomService.getRoomHostState(roomId);
+          if (hostState) {
+            chatForceAll = hostState.chatForceAll;
+            chatForceReason = hostState.chatForceReason ?? chatForceReason;
+          }
+        }
+
+        if (chatForceAll) {
+          callback?.({
+            success: false,
+            error:
+              chatForceReason && chatForceReason.length > 0
+                ? `Chat disabled by host: ${chatForceReason}`
+                : 'Chat is currently disabled by the host.',
+            code: 'CHAT_MUTED',
+          });
+          return;
+        }
+      }
+
       let messageType: ChatMessageType = ChatMessageType.BROADCAST;
       let directRecipientSockets: Socket[] = [];
 
@@ -231,6 +264,26 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
         videoMutedAt = redisState.videoMutedAt ?? null;
       }
 
+      const controlState =
+        roomId && targetUserId
+          ? await RoomService.getParticipantControlState(roomId, targetUserId)
+          : null;
+
+      const forcedAudioActive =
+        (redisState?.forcedAudio ?? false) || (controlState?.forcedAudio ?? false);
+
+      if (forcedAudioActive && !normalizedAudioMuted) {
+        socket.emit('host-control:participant-state', {
+          userId: targetUserId,
+          audio: { muted: true, forced: true },
+          video: undefined,
+          reason: controlState?.forcedReason ?? redisState?.forcedReason ?? null,
+          actorUserId: controlState?.forcedBy ?? redisState?.forcedBy ?? null,
+          timestamp,
+        });
+        return;
+      }
+
       if (typeof isVideoMuted !== 'boolean' && roomId) {
         const dbState = await RoomService.getParticipantMuteState(roomId, targetUserId);
         if (dbState) {
@@ -249,6 +302,14 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
         isVideoMuted,
         audioMutedAt: timestamp,
         videoMutedAt: videoMutedAt ?? null,
+        forcedAudio: forcedAudioActive,
+        forcedAudioAt: forcedAudioActive ? timestamp : undefined,
+        forcedBy: forcedAudioActive
+          ? controlState?.forcedBy ?? redisState?.forcedBy ?? null
+          : undefined,
+        forcedReason: forcedAudioActive
+          ? controlState?.forcedReason ?? redisState?.forcedReason ?? null
+          : undefined,
       });
 
       if (roomId) {
@@ -268,6 +329,7 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
         ...data,
         isAudioMuted: normalizedAudioMuted,
         userId: targetUserId,
+        forced: forcedAudioActive,
       });
     } catch (error: any) {
       logger.error('Error handling audio mute:', {
@@ -305,6 +367,26 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
         audioMutedAt = redisState.audioMutedAt ?? null;
       }
 
+      const controlState =
+        roomId && targetUserId
+          ? await RoomService.getParticipantControlState(roomId, targetUserId)
+          : null;
+
+      const forcedVideoActive =
+        (redisState?.forcedVideo ?? false) || (controlState?.forcedVideo ?? false);
+
+      if (forcedVideoActive && !normalizedVideoMuted) {
+        socket.emit('host-control:participant-state', {
+          userId: targetUserId,
+          video: { muted: true, forced: true },
+          audio: undefined,
+          reason: controlState?.forcedReason ?? redisState?.forcedReason ?? null,
+          actorUserId: controlState?.forcedBy ?? redisState?.forcedBy ?? null,
+          timestamp,
+        });
+        return;
+      }
+
       if (typeof isAudioMuted !== 'boolean' && roomId) {
         const dbState = await RoomService.getParticipantMuteState(roomId, targetUserId);
         if (dbState) {
@@ -323,6 +405,14 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
         isVideoMuted: normalizedVideoMuted,
         audioMutedAt: audioMutedAt ?? null,
         videoMutedAt: timestamp,
+        forcedVideo: forcedVideoActive,
+        forcedVideoAt: forcedVideoActive ? timestamp : undefined,
+        forcedBy: forcedVideoActive
+          ? controlState?.forcedBy ?? redisState?.forcedBy ?? null
+          : undefined,
+        forcedReason: forcedVideoActive
+          ? controlState?.forcedReason ?? redisState?.forcedReason ?? null
+          : undefined,
       });
 
       if (roomId) {
@@ -342,6 +432,7 @@ export function chatHandler(io: SocketIOServer, socket: Socket) {
         ...data,
         isVideoMuted: normalizedVideoMuted,
         userId: targetUserId,
+        forced: forcedVideoActive,
       });
     } catch (error: any) {
       logger.error('Error handling video mute:', {

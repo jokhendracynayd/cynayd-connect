@@ -56,6 +56,8 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
   const activeConversationId = useCallStore(state => state.chat.activeConversationId);
   const conversations = useCallStore(state => state.chat.conversations);
   const messagesMap = useCallStore(state => state.chat.messages);
+  const hostControls = useCallStore(state => state.hostControls);
+  const isAdmin = useCallStore(state => state.isAdmin);
   const setChatActiveConversation = useCallStore(state => state.setChatActiveConversation);
   const addPendingChatMessage = useCallStore(state => state.addPendingChatMessage);
   const resolvePendingChatMessage = useCallStore(state => state.resolvePendingChatMessage);
@@ -70,6 +72,14 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
   const [loadingHistory, setLoadingHistory] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const lastCountRef = useRef(0);
+
+  const chatForceMuted = hostControls.chatForceAll;
+  const isChatMuted = chatForceMuted && !isAdmin;
+  const chatMuteReason = hostControls.chatForceReason ?? null;
+  const chatDisabledMessage =
+    chatMuteReason && chatMuteReason.length > 0
+      ? `Chat disabled by host: ${chatMuteReason}`
+      : 'Chat is currently disabled by the host.';
 
   const directParticipants = useMemo(
     () => participants.filter(participant => participant.userId !== currentUser.id),
@@ -217,6 +227,11 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
   const sendMessage = async () => {
     const trimmed = draft.trim();
     if (!trimmed) {
+      return;
+    }
+
+    if (isChatMuted) {
+      toast.error(chatDisabledMessage);
       return;
     }
 
@@ -451,9 +466,17 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
           </span>
           <span>{draft.length}/2000</span>
         </div>
+        {isChatMuted && (
+          <div className="mb-3 rounded-2xl bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-600">
+            {chatDisabledMessage}
+          </div>
+        )}
         <textarea
           value={draft}
           onChange={event => {
+            if (isChatMuted) {
+              return;
+            }
             if (event.target.value.length <= 2000) {
               setDraft(event.target.value);
             }
@@ -464,8 +487,10 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
               void sendMessage();
             }
           }}
-          placeholder="Type a message…"
-          className="h-24 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:bg-white"
+          placeholder={isChatMuted ? chatDisabledMessage : 'Type a message…'}
+          disabled={isChatMuted}
+          aria-disabled={isChatMuted}
+          className="h-24 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
         />
         <div className="mt-3 flex items-center justify-between">
           <span className="text-xs text-slate-400">
@@ -473,7 +498,7 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
           </span>
           <button
             type="submit"
-            disabled={!draft.trim()}
+            disabled={!draft.trim() || isChatMuted}
             className="rounded-full bg-blue-600 px-5 py-2 text-xs font-semibold uppercase tracking-[0.3em] text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
           >
             Send

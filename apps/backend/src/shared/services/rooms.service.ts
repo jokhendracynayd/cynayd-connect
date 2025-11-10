@@ -1,11 +1,39 @@
 import prisma from '../database/prisma';
-import { Prisma } from '@prisma/client';
+import { Prisma, RoomControlState } from '@prisma/client';
 import { NotFoundError, ForbiddenError, ConflictError } from '../utils/errors';
 import { logger } from '../utils/logger';
 
 let muteColumnsAvailable: boolean | null = null;
 let lastMuteColumnCheck: number | null = null;
 const MUTE_COLUMN_CHECK_INTERVAL_MS = 60_000; // 1 minute cache
+
+export interface ParticipantControlState {
+  forcedAudio: boolean;
+  forcedVideo: boolean;
+  forcedAudioAt: Date | null;
+  forcedVideoAt: Date | null;
+  forcedBy: string | null;
+  forcedReason: string | null;
+}
+
+export interface RoomHostControlState {
+  locked: boolean;
+  lockedBy: string | null;
+  lockedAt: Date | null;
+  lockedReason: string | null;
+  audioForceAll: boolean;
+  audioForcedBy: string | null;
+  audioForcedAt: Date | null;
+  audioForceReason: string | null;
+  videoForceAll: boolean;
+  videoForcedBy: string | null;
+  videoForcedAt: Date | null;
+  videoForceReason: string | null;
+  chatForceAll: boolean;
+  chatForcedBy: string | null;
+  chatForcedAt: Date | null;
+  chatForceReason: string | null;
+}
 
 async function areMuteColumnsAvailable(): Promise<boolean> {
   const now = Date.now();
@@ -484,6 +512,492 @@ export class RoomService {
 
       throw error;
     }
+  }
+
+  static async setParticipantControlState(
+    roomId: string,
+    userId: string,
+    state: {
+      forcedAudio?: boolean;
+      forcedVideo?: boolean;
+      forcedAudioAt?: Date | null;
+      forcedVideoAt?: Date | null;
+      forcedBy?: string | null;
+      forcedReason?: string | null;
+    }
+  ): Promise<RoomControlState | null> {
+    const existing = await prisma.roomControlState.findUnique({
+      where: {
+        roomId_userId: {
+          roomId,
+          userId,
+        },
+      },
+    });
+
+    const nextForcedAudio =
+      state.forcedAudio !== undefined ? state.forcedAudio : existing?.forcedAudio ?? false;
+    const nextForcedVideo =
+      state.forcedVideo !== undefined ? state.forcedVideo : existing?.forcedVideo ?? false;
+
+    const nextForcedAudioAt =
+      state.forcedAudio !== undefined
+        ? state.forcedAudio
+          ? state.forcedAudioAt ?? new Date()
+          : null
+        : existing?.forcedAudioAt ?? null;
+
+    const nextForcedVideoAt =
+      state.forcedVideo !== undefined
+        ? state.forcedVideo
+          ? state.forcedVideoAt ?? new Date()
+          : null
+        : existing?.forcedVideoAt ?? null;
+
+    const hasForcedBy = Object.prototype.hasOwnProperty.call(state, 'forcedBy');
+    const nextForcedBy = hasForcedBy ? state.forcedBy ?? null : existing?.forcedBy ?? null;
+
+    const hasForcedReason = Object.prototype.hasOwnProperty.call(state, 'forcedReason');
+    const nextForcedReason = hasForcedReason
+      ? state.forcedReason ?? null
+      : existing?.forcedReason ?? null;
+
+    if (!nextForcedAudio && !nextForcedVideo) {
+      if (existing) {
+        await prisma.roomControlState.delete({
+          where: {
+            roomId_userId: {
+              roomId,
+              userId,
+            },
+          },
+        });
+      }
+
+      return null;
+    }
+
+    return prisma.roomControlState.upsert({
+      where: {
+        roomId_userId: {
+          roomId,
+          userId,
+        },
+      },
+      create: {
+        roomId,
+        userId,
+        forcedAudio: nextForcedAudio,
+        forcedVideo: nextForcedVideo,
+        forcedAudioAt: nextForcedAudioAt,
+        forcedVideoAt: nextForcedVideoAt,
+        forcedBy: nextForcedBy,
+        forcedReason: nextForcedReason,
+      },
+      update: {
+        forcedAudio: nextForcedAudio,
+        forcedVideo: nextForcedVideo,
+        forcedAudioAt: nextForcedAudioAt,
+        forcedVideoAt: nextForcedVideoAt,
+        forcedBy: nextForcedBy,
+        forcedReason: nextForcedReason,
+      },
+    });
+  }
+
+  static async getParticipantControlState(
+    roomId: string,
+    userId: string
+  ): Promise<ParticipantControlState | null> {
+    const state = await prisma.roomControlState.findUnique({
+      where: {
+        roomId_userId: {
+          roomId,
+          userId,
+        },
+      },
+    });
+
+    if (!state) {
+      return null;
+    }
+
+    return {
+      forcedAudio: state.forcedAudio,
+      forcedVideo: state.forcedVideo,
+      forcedAudioAt: state.forcedAudioAt,
+      forcedVideoAt: state.forcedVideoAt,
+      forcedBy: state.forcedBy ?? null,
+      forcedReason: state.forcedReason ?? null,
+    };
+  }
+
+  static async getRoomControlStates(roomId: string): Promise<Record<string, ParticipantControlState>> {
+    const states = await prisma.roomControlState.findMany({
+      where: {
+        roomId,
+      },
+    });
+
+    return states.reduce<Record<string, ParticipantControlState>>((acc, state) => {
+      acc[state.userId] = {
+        forcedAudio: state.forcedAudio,
+        forcedVideo: state.forcedVideo,
+        forcedAudioAt: state.forcedAudioAt,
+        forcedVideoAt: state.forcedVideoAt,
+        forcedBy: state.forcedBy ?? null,
+        forcedReason: state.forcedReason ?? null,
+      };
+      return acc;
+    }, {});
+  }
+
+  static async clearParticipantControlState(roomId: string, userId: string): Promise<void> {
+    await prisma.roomControlState.deleteMany({
+      where: {
+        roomId,
+        userId,
+      },
+    });
+  }
+
+  static async getRoomHostState(roomId: string): Promise<RoomHostControlState | null> {
+    const state = await prisma.roomHostState.findUnique({
+      where: { roomId },
+    });
+
+    if (!state) {
+      return null;
+    }
+
+    return {
+      locked: state.locked,
+      lockedBy: state.lockedBy ?? null,
+      lockedAt: state.lockedAt ?? null,
+      lockedReason: state.lockedReason ?? null,
+      audioForceAll: state.audioForceAll,
+      audioForcedBy: state.audioForcedBy ?? null,
+      audioForcedAt: state.audioForcedAt ?? null,
+      audioForceReason: state.audioForceReason ?? null,
+      videoForceAll: state.videoForceAll,
+      videoForcedBy: state.videoForcedBy ?? null,
+      videoForcedAt: state.videoForcedAt ?? null,
+      videoForceReason: state.videoForceReason ?? null,
+      chatForceAll: state.chatForceAll,
+      chatForcedBy: state.chatForcedBy ?? null,
+      chatForcedAt: state.chatForcedAt ?? null,
+      chatForceReason: state.chatForceReason ?? null,
+    };
+  }
+
+  static async upsertRoomHostState(
+    roomId: string,
+    updates: Partial<RoomHostControlState>
+  ): Promise<RoomHostControlState> {
+    const existing = await prisma.roomHostState.findUnique({
+      where: { roomId },
+    });
+
+    const now = new Date();
+
+    const lockedUpdateProvided = Object.prototype.hasOwnProperty.call(updates, 'locked');
+    const lockedByUpdateProvided = Object.prototype.hasOwnProperty.call(updates, 'lockedBy');
+    const lockedAtUpdateProvided = Object.prototype.hasOwnProperty.call(updates, 'lockedAt');
+
+    const nextLocked = lockedUpdateProvided ? Boolean(updates.locked) : existing?.locked ?? false;
+
+    const nextLockedBy = lockedUpdateProvided
+      ? nextLocked
+        ? lockedByUpdateProvided
+          ? updates.lockedBy ?? null
+          : existing?.lockedBy ?? null
+        : null
+      : lockedByUpdateProvided
+      ? updates.lockedBy ?? null
+      : existing?.lockedBy ?? null;
+
+    let nextLockedAt: Date | null;
+    if (lockedUpdateProvided) {
+      if (nextLocked) {
+        if (lockedAtUpdateProvided) {
+          nextLockedAt = updates.lockedAt ?? null;
+        } else if (existing?.lockedAt) {
+          nextLockedAt = existing.lockedAt;
+        } else {
+          nextLockedAt = now;
+        }
+      } else {
+        nextLockedAt = null;
+      }
+    } else if (lockedAtUpdateProvided) {
+      nextLockedAt = updates.lockedAt ?? null;
+    } else {
+      nextLockedAt = existing?.lockedAt ?? null;
+    }
+
+    const lockedReasonUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'lockedReason'
+    );
+
+    const nextLockedReason = lockedUpdateProvided
+      ? nextLocked
+        ? lockedReasonUpdateProvided
+          ? updates.lockedReason ?? null
+          : existing?.lockedReason ?? null
+        : null
+      : lockedReasonUpdateProvided
+      ? updates.lockedReason ?? null
+      : existing?.lockedReason ?? null;
+
+    const audioForceUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'audioForceAll'
+    );
+    const audioForcedByUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'audioForcedBy'
+    );
+    const audioForcedAtUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'audioForcedAt'
+    );
+
+    const nextAudioForceAll = audioForceUpdateProvided
+      ? Boolean(updates.audioForceAll)
+      : existing?.audioForceAll ?? false;
+
+    const nextAudioForcedBy = audioForceUpdateProvided
+      ? nextAudioForceAll
+        ? audioForcedByUpdateProvided
+          ? updates.audioForcedBy ?? null
+          : existing?.audioForcedBy ?? null
+        : null
+      : audioForcedByUpdateProvided
+      ? updates.audioForcedBy ?? null
+      : existing?.audioForcedBy ?? null;
+
+    let nextAudioForcedAt: Date | null;
+    if (audioForceUpdateProvided) {
+      if (nextAudioForceAll) {
+        if (audioForcedAtUpdateProvided) {
+          nextAudioForcedAt = updates.audioForcedAt ?? null;
+        } else if (existing?.audioForcedAt) {
+          nextAudioForcedAt = existing.audioForcedAt;
+        } else {
+          nextAudioForcedAt = now;
+        }
+      } else {
+        nextAudioForcedAt = null;
+      }
+    } else if (audioForcedAtUpdateProvided) {
+      nextAudioForcedAt = updates.audioForcedAt ?? null;
+    } else {
+      nextAudioForcedAt = existing?.audioForcedAt ?? null;
+    }
+
+    const audioForceReasonUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'audioForceReason'
+    );
+
+    const nextAudioForceReason = audioForceUpdateProvided
+      ? nextAudioForceAll
+        ? audioForceReasonUpdateProvided
+          ? updates.audioForceReason ?? null
+          : existing?.audioForceReason ?? null
+        : null
+      : audioForceReasonUpdateProvided
+      ? updates.audioForceReason ?? null
+      : existing?.audioForceReason ?? null;
+
+    const videoForceUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'videoForceAll'
+    );
+    const videoForcedByUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'videoForcedBy'
+    );
+    const videoForcedAtUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'videoForcedAt'
+    );
+
+    const nextVideoForceAll = videoForceUpdateProvided
+      ? Boolean(updates.videoForceAll)
+      : existing?.videoForceAll ?? false;
+
+    const nextVideoForcedBy = videoForceUpdateProvided
+      ? nextVideoForceAll
+        ? videoForcedByUpdateProvided
+          ? updates.videoForcedBy ?? null
+          : existing?.videoForcedBy ?? null
+        : null
+      : videoForcedByUpdateProvided
+      ? updates.videoForcedBy ?? null
+      : existing?.videoForcedBy ?? null;
+
+    let nextVideoForcedAt: Date | null;
+    if (videoForceUpdateProvided) {
+      if (nextVideoForceAll) {
+        if (videoForcedAtUpdateProvided) {
+          nextVideoForcedAt = updates.videoForcedAt ?? null;
+        } else if (existing?.videoForcedAt) {
+          nextVideoForcedAt = existing.videoForcedAt;
+        } else {
+          nextVideoForcedAt = now;
+        }
+      } else {
+        nextVideoForcedAt = null;
+      }
+    } else if (videoForcedAtUpdateProvided) {
+      nextVideoForcedAt = updates.videoForcedAt ?? null;
+    } else {
+      nextVideoForcedAt = existing?.videoForcedAt ?? null;
+    }
+
+    const videoForceReasonUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'videoForceReason'
+    );
+
+    const nextVideoForceReason = videoForceUpdateProvided
+      ? nextVideoForceAll
+        ? videoForceReasonUpdateProvided
+          ? updates.videoForceReason ?? null
+          : existing?.videoForceReason ?? null
+        : null
+      : videoForceReasonUpdateProvided
+      ? updates.videoForceReason ?? null
+      : existing?.videoForceReason ?? null;
+
+    const chatForceUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'chatForceAll'
+    );
+    const chatForcedByUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'chatForcedBy'
+    );
+    const chatForcedAtUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'chatForcedAt'
+    );
+
+    const nextChatForceAll = chatForceUpdateProvided
+      ? Boolean(updates.chatForceAll)
+      : existing?.chatForceAll ?? false;
+
+    const nextChatForcedBy = chatForceUpdateProvided
+      ? nextChatForceAll
+        ? chatForcedByUpdateProvided
+          ? updates.chatForcedBy ?? null
+          : existing?.chatForcedBy ?? null
+        : null
+      : chatForcedByUpdateProvided
+      ? updates.chatForcedBy ?? null
+      : existing?.chatForcedBy ?? null;
+
+    let nextChatForcedAt: Date | null;
+    if (chatForceUpdateProvided) {
+      if (nextChatForceAll) {
+        if (chatForcedAtUpdateProvided) {
+          nextChatForcedAt = updates.chatForcedAt ?? null;
+        } else if (existing?.chatForcedAt) {
+          nextChatForcedAt = existing.chatForcedAt;
+        } else {
+          nextChatForcedAt = now;
+        }
+      } else {
+        nextChatForcedAt = null;
+      }
+    } else if (chatForcedAtUpdateProvided) {
+      nextChatForcedAt = updates.chatForcedAt ?? null;
+    } else {
+      nextChatForcedAt = existing?.chatForcedAt ?? null;
+    }
+
+    const chatForceReasonUpdateProvided = Object.prototype.hasOwnProperty.call(
+      updates,
+      'chatForceReason'
+    );
+
+    const nextChatForceReason = chatForceUpdateProvided
+      ? nextChatForceAll
+        ? chatForceReasonUpdateProvided
+          ? updates.chatForceReason ?? null
+          : existing?.chatForceReason ?? null
+        : null
+      : chatForceReasonUpdateProvided
+      ? updates.chatForceReason ?? null
+      : existing?.chatForceReason ?? null;
+
+    const record = await prisma.roomHostState.upsert({
+      where: { roomId },
+      create: {
+        roomId,
+        locked: nextLocked,
+        lockedBy: nextLockedBy,
+        lockedAt: nextLockedAt,
+        lockedReason: nextLockedReason,
+        audioForceAll: nextAudioForceAll,
+        audioForcedBy: nextAudioForcedBy,
+        audioForcedAt: nextAudioForcedAt,
+        audioForceReason: nextAudioForceReason,
+        videoForceAll: nextVideoForceAll,
+        videoForcedBy: nextVideoForcedBy,
+        videoForcedAt: nextVideoForcedAt,
+        videoForceReason: nextVideoForceReason,
+        chatForceAll: nextChatForceAll,
+        chatForcedBy: nextChatForcedBy,
+        chatForcedAt: nextChatForcedAt,
+        chatForceReason: nextChatForceReason,
+      },
+      update: {
+        locked: nextLocked,
+        lockedBy: nextLockedBy,
+        lockedAt: nextLockedAt,
+        lockedReason: nextLockedReason,
+        audioForceAll: nextAudioForceAll,
+        audioForcedBy: nextAudioForcedBy,
+        audioForcedAt: nextAudioForcedAt,
+        audioForceReason: nextAudioForceReason,
+        videoForceAll: nextVideoForceAll,
+        videoForcedBy: nextVideoForcedBy,
+        videoForcedAt: nextVideoForcedAt,
+        videoForceReason: nextVideoForceReason,
+        chatForceAll: nextChatForceAll,
+        chatForcedBy: nextChatForcedBy,
+        chatForcedAt: nextChatForcedAt,
+        chatForceReason: nextChatForceReason,
+      },
+    });
+
+    return {
+      locked: record.locked,
+      lockedBy: record.lockedBy ?? null,
+      lockedAt: record.lockedAt ?? null,
+      lockedReason: record.lockedReason ?? null,
+      audioForceAll: record.audioForceAll,
+      audioForcedBy: record.audioForcedBy ?? null,
+      audioForcedAt: record.audioForcedAt ?? null,
+      audioForceReason: record.audioForceReason ?? null,
+      videoForceAll: record.videoForceAll,
+      videoForcedBy: record.videoForcedBy ?? null,
+      videoForcedAt: record.videoForcedAt ?? null,
+      videoForceReason: record.videoForceReason ?? null,
+      chatForceAll: record.chatForceAll,
+      chatForcedBy: record.chatForcedBy ?? null,
+      chatForcedAt: record.chatForcedAt ?? null,
+      chatForceReason: record.chatForceReason ?? null,
+    };
+  }
+
+  static async clearRoomHostState(roomId: string): Promise<void> {
+    await prisma.roomHostState.deleteMany({
+      where: { roomId },
+    });
   }
 
   static async requestRoomJoin(userId: string, roomCode: string) {

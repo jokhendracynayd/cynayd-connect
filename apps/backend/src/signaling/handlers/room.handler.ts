@@ -1,12 +1,13 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { RouterManager } from '../../media/Router';
-import { RoomService } from '../../shared/services/rooms.service';
+import { RoomService, type RoomHostControlState } from '../../shared/services/rooms.service';
 import { ProducerManager } from '../../media/Producer';
 import { ConsumerManager } from '../../media/Consumer';
 import { TransportManager } from '../../media/Transport';
 import { logger } from '../../shared/utils/logger';
+import { ForbiddenError } from '../../shared/utils/errors';
 import redis from '../../shared/database/redis';
-import { RedisStateService } from '../../shared/services/state.redis';
+import { RedisStateService, type RedisRoomControlStatePayload } from '../../shared/services/state.redis';
 import { RoomRoutingService } from '../../shared/services/room-routing.service';
 import { config } from '../../shared/config';
 import prisma from '../../shared/database/prisma';
@@ -22,11 +23,18 @@ export interface ParticipantRosterEntry {
   isAdmin: boolean;
   isAudioMuted: boolean;
   isVideoMuted: boolean;
+  isAudioForceMuted: boolean;
+  isVideoForceMuted: boolean;
   isSpeaking: boolean;
   hasRaisedHand: boolean;
   joinedAt: string;
   audioMutedAt?: string | null;
   videoMutedAt?: string | null;
+  audioForceMutedAt?: string | null;
+  videoForceMutedAt?: string | null;
+  audioForceMutedBy?: string | null;
+  videoForceMutedBy?: string | null;
+  forceMuteReason?: string | null;
 }
 
 function normalizeDate(value?: Date | string | null): string {
@@ -43,6 +51,12 @@ type PersistedMuteState = {
   audioMutedAt?: number | null;
   videoMutedAt?: number | null;
   updatedAt?: number;
+  forcedAudio?: boolean;
+  forcedVideo?: boolean;
+  forcedAudioAt?: number | null;
+  forcedVideoAt?: number | null;
+  forcedBy?: string | null;
+  forcedReason?: string | null;
 };
 
 function buildParticipantRoster(
@@ -65,6 +79,8 @@ function buildParticipantRoster(
     const override = muteStateOverrides[user.id];
     const audioMutedAtMs = override?.audioMutedAt ?? participant.audioMutedAt?.getTime() ?? null;
     const videoMutedAtMs = override?.videoMutedAt ?? participant.videoMutedAt?.getTime() ?? null;
+    const audioForceMutedAtMs = override?.forcedAudioAt ?? null;
+    const videoForceMutedAtMs = override?.forcedVideoAt ?? null;
 
     const entry: ParticipantRosterEntry = {
       userId: user.id,
@@ -74,11 +90,18 @@ function buildParticipantRoster(
       isAdmin: participant.role === 'admin' || room.adminId === user.id,
       isAudioMuted: override?.isAudioMuted ?? participant.audioMuted ?? true,
       isVideoMuted: override?.isVideoMuted ?? participant.videoMuted ?? true,
+      isAudioForceMuted: override?.forcedAudio ?? false,
+      isVideoForceMuted: override?.forcedVideo ?? false,
       isSpeaking: false,
       hasRaisedHand: false,
       joinedAt: joinedAtIso,
       audioMutedAt: audioMutedAtMs ? new Date(audioMutedAtMs).toISOString() : null,
       videoMutedAt: videoMutedAtMs ? new Date(videoMutedAtMs).toISOString() : null,
+      audioForceMutedAt: audioForceMutedAtMs ? new Date(audioForceMutedAtMs).toISOString() : null,
+      videoForceMutedAt: videoForceMutedAtMs ? new Date(videoForceMutedAtMs).toISOString() : null,
+      audioForceMutedBy: override?.forcedBy ?? null,
+      videoForceMutedBy: override?.forcedBy ?? null,
+      forceMuteReason: override?.forcedReason ?? null,
     };
 
     const existing = deduped.get(user.id);
@@ -359,6 +382,274 @@ interface JoinRoomData {
 }
 
 export function roomHandler(io: SocketIOServer, socket: Socket) {
+  const resolveHostContext = () => {
+    const roomCode: string | undefined = socket.data.roomCode;
+    const roomId: string | undefined = socket.data.roomId;
+    const actorUserId: string | undefined = socket.data.userId;
+
+    if (!roomCode || !roomId || !actorUserId) {
+      throw new Error('Host control requires active room context.');
+    }
+
+    if (!socket.data.isAdmin) {
+      throw new ForbiddenError('Only the room host can perform this action.');
+    }
+
+    return { roomCode, roomId, actorUserId };
+  };
+
+  const emitRoomHostState = async (roomCode: string, roomId: string) => {
+    try {
+      const [hostState, redisState] = await Promise.all([
+        RoomService.getRoomHostState(roomId),
+        RedisStateService.getRoomControlState(roomCode),
+      ]);
+
+      io.to(roomCode).emit('host-control:room-state', {
+        locked: hostState?.locked ?? redisState?.locked ?? false,
+        lockedBy: hostState?.lockedBy ?? redisState?.lockedBy ?? null,
+        lockedReason: hostState?.lockedReason ?? redisState?.lockedReason ?? null,
+        audioForceAll: hostState?.audioForceAll ?? redisState?.audioForceAll ?? false,
+        audioForcedBy: hostState?.audioForcedBy ?? redisState?.audioForcedBy ?? null,
+        audioForceReason:
+          hostState?.audioForceReason ?? redisState?.audioForceReason ?? null,
+        videoForceAll: hostState?.videoForceAll ?? redisState?.videoForceAll ?? false,
+        videoForcedBy: hostState?.videoForcedBy ?? redisState?.videoForcedBy ?? null,
+        videoForceReason:
+          hostState?.videoForceReason ?? redisState?.videoForceReason ?? null,
+        chatForceAll: hostState?.chatForceAll ?? redisState?.chatForceAll ?? false,
+        chatForcedBy: hostState?.chatForcedBy ?? redisState?.chatForcedBy ?? null,
+        chatForceReason:
+          hostState?.chatForceReason ?? redisState?.chatForceReason ?? null,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      logger.error('Failed to emit room host state', { roomCode, roomId, error });
+    }
+  };
+
+  const enforceParticipantMute = async ({
+    targetUserId,
+    roomCode,
+    roomId,
+    actorUserId,
+    targets,
+    mute,
+    reason,
+    timestamp,
+    roomSockets,
+  }: {
+    targetUserId: string;
+    roomCode: string;
+    roomId: string;
+    actorUserId: string;
+    targets: Set<'audio' | 'video'>;
+    mute: boolean;
+    reason: string | null;
+    timestamp: number;
+    roomSockets: Array<any>;
+  }) => {
+    const targetSockets = roomSockets.filter(
+      participantSocket => participantSocket.data.userId === targetUserId
+    );
+
+    const redisState = await RedisStateService.getParticipantMuteState(
+      roomCode,
+      targetUserId
+    );
+
+    let currentAudioMuted = redisState?.isAudioMuted;
+    let currentVideoMuted = redisState?.isVideoMuted;
+
+    let existingAudioMutedAt =
+      typeof redisState?.audioMutedAt === 'number' ? redisState.audioMutedAt : null;
+    let existingVideoMutedAt =
+      typeof redisState?.videoMutedAt === 'number' ? redisState.videoMutedAt : null;
+
+    if (
+      roomId &&
+      (typeof currentAudioMuted !== 'boolean' ||
+        typeof currentVideoMuted !== 'boolean' ||
+        existingAudioMutedAt === null ||
+        existingVideoMutedAt === null)
+    ) {
+      const dbState = await RoomService.getParticipantMuteState(roomId, targetUserId);
+      if (dbState) {
+        if (typeof currentAudioMuted !== 'boolean') {
+          currentAudioMuted = dbState.isAudioMuted;
+        }
+        if (typeof currentVideoMuted !== 'boolean') {
+          currentVideoMuted = dbState.isVideoMuted;
+        }
+        if (existingAudioMutedAt === null && dbState.audioMutedAt) {
+          existingAudioMutedAt = dbState.audioMutedAt.getTime();
+        }
+        if (existingVideoMutedAt === null && dbState.videoMutedAt) {
+          existingVideoMutedAt = dbState.videoMutedAt.getTime();
+        }
+      }
+    }
+
+    if (typeof currentAudioMuted !== 'boolean') {
+      currentAudioMuted = true;
+    }
+    if (typeof currentVideoMuted !== 'boolean') {
+      currentVideoMuted = true;
+    }
+
+    let nextAudioMuted = currentAudioMuted;
+    let nextVideoMuted = currentVideoMuted;
+
+    if (targets.has('audio')) {
+      nextAudioMuted = mute;
+    }
+    if (targets.has('video')) {
+      nextVideoMuted = mute;
+    }
+
+    const nextAudioMutedAtMs = targets.has('audio')
+      ? mute
+        ? timestamp
+        : null
+      : existingAudioMutedAt;
+    const nextVideoMutedAtMs = targets.has('video')
+      ? mute
+        ? timestamp
+        : null
+      : existingVideoMutedAt;
+
+    for (const targetSocket of targetSockets) {
+      if (targets.has('audio')) {
+        if (mute) {
+          ProducerManager.pauseProducerByKind(targetSocket.id, 'audio');
+        } else if (!nextAudioMuted) {
+          ProducerManager.resumeProducerByKind(targetSocket.id, 'audio');
+        }
+      }
+
+      if (targets.has('video')) {
+        if (mute) {
+          ProducerManager.pauseProducerByKind(targetSocket.id, 'video');
+        } else if (!nextVideoMuted) {
+          ProducerManager.resumeProducerByKind(targetSocket.id, 'video');
+        }
+      }
+    }
+
+    await RedisStateService.setParticipantMuteState(roomCode, targetUserId, {
+      isAudioMuted: nextAudioMuted,
+      isVideoMuted: nextVideoMuted,
+      audioMutedAt: nextAudioMutedAtMs ?? null,
+      videoMutedAt: nextVideoMutedAtMs ?? null,
+      forcedAudio: targets.has('audio') ? mute : redisState?.forcedAudio ?? false,
+      forcedVideo: targets.has('video') ? mute : redisState?.forcedVideo ?? false,
+      forcedAudioAt:
+        targets.has('audio') && mute
+          ? timestamp
+          : targets.has('audio') && !mute
+          ? null
+          : redisState?.forcedAudioAt,
+      forcedVideoAt:
+        targets.has('video') && mute
+          ? timestamp
+          : targets.has('video') && !mute
+          ? null
+          : redisState?.forcedVideoAt,
+      forcedBy:
+        targets.has('audio') || targets.has('video')
+          ? mute
+            ? actorUserId
+            : null
+          : redisState?.forcedBy ?? null,
+      forcedReason:
+        targets.has('audio') || targets.has('video')
+          ? mute
+            ? reason ?? null
+            : null
+          : redisState?.forcedReason ?? null,
+      updatedAt: timestamp,
+    });
+
+    if (targets.has('audio')) {
+      await RoomService.updateParticipantMuteState(roomId, targetUserId, {
+        isAudioMuted: nextAudioMuted,
+        audioMutedAt: nextAudioMutedAtMs ? new Date(nextAudioMutedAtMs) : null,
+      });
+    }
+
+    if (targets.has('video')) {
+      await RoomService.updateParticipantMuteState(roomId, targetUserId, {
+        isVideoMuted: nextVideoMuted,
+        videoMutedAt: nextVideoMutedAtMs ? new Date(nextVideoMutedAtMs) : null,
+      });
+    }
+
+    await RoomService.setParticipantControlState(roomId, targetUserId, {
+      forcedAudio: targets.has('audio') ? mute : undefined,
+      forcedVideo: targets.has('video') ? mute : undefined,
+      forcedAudioAt:
+        targets.has('audio') && mute
+          ? new Date(timestamp)
+          : targets.has('audio') && !mute
+          ? null
+          : undefined,
+      forcedVideoAt:
+        targets.has('video') && mute
+          ? new Date(timestamp)
+          : targets.has('video') && !mute
+          ? null
+          : undefined,
+      forcedBy:
+        targets.has('audio') || targets.has('video')
+          ? mute
+            ? actorUserId
+            : null
+          : undefined,
+      forcedReason:
+        targets.has('audio') || targets.has('video')
+          ? mute
+            ? reason ?? null
+            : null
+          : undefined,
+    });
+
+    if (targets.has('audio')) {
+      io.to(roomCode).emit('audio-mute', {
+        userId: targetUserId,
+        isAudioMuted: nextAudioMuted,
+        forced: mute,
+        forcedBy: mute ? actorUserId : null,
+        reason: mute ? reason ?? null : null,
+        enforced: true,
+        timestamp,
+      });
+    }
+
+    if (targets.has('video')) {
+      io.to(roomCode).emit('video-mute', {
+        userId: targetUserId,
+        isVideoMuted: nextVideoMuted,
+        forced: mute,
+        forcedBy: mute ? actorUserId : null,
+        reason: mute ? reason ?? null : null,
+        enforced: true,
+        timestamp,
+      });
+    }
+
+    io.to(roomCode).emit('host-control:participant-state', {
+      userId: targetUserId,
+      audio: targets.has('audio')
+        ? { muted: nextAudioMuted, forced: mute }
+        : undefined,
+      video: targets.has('video')
+        ? { muted: nextVideoMuted, forced: mute }
+        : undefined,
+      reason: mute ? reason ?? null : null,
+      actorUserId,
+      timestamp,
+    });
+  };
   
   socket.on('joinRoom', async (data: JoinRoomData, callback) => {
     // Get userId outside try block so it's available in catch block
@@ -390,6 +681,25 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
 
       // First get room info to check privacy
       const room = await RoomService.getRoomByCode(normalizedRoomCode);
+
+      const [roomHostState, redisRoomControlState] = await Promise.all([
+        RoomService.getRoomHostState(room.id),
+        RedisStateService.getRoomControlState(normalizedRoomCode),
+      ]);
+
+      const isRoomLocked =
+        (roomHostState?.locked ?? false) || (redisRoomControlState?.locked ?? false);
+
+      if (isRoomLocked && room.adminId !== userId) {
+        logger.info(
+          `Blocking user ${userId} from joining locked room ${normalizedRoomCode}`
+        );
+        return callback({
+          success: false,
+          error: 'Room is currently locked by the host.',
+          locked: true,
+        });
+      }
 
       // Check if room is private and user is not admin
       if (!room.isPublic && room.adminId !== userId) {
@@ -602,6 +912,8 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       socket.data.userEmail = email;
       socket.data.userPicture = picture;
       socket.data.hasLeftRoom = false;
+      socket.data.isAdmin = updatedRoom.adminId === userId;
+      socket.data.roomAdminId = updatedRoom.adminId;
 
       // Publish join event to Redis (for multi-server)
       await redis.publish('room:join', JSON.stringify({
@@ -615,55 +927,282 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
 
       const redisMuteStates = await RedisStateService.getRoomMuteStates(normalizedRoomCode);
       const dbMuteStates = await RoomService.getRoomParticipantMuteStates(roomId);
+      const controlStates = await RoomService.getRoomControlStates(roomId);
+
+      const allUserIds = new Set<string>([
+        ...Object.keys(dbMuteStates),
+        ...Object.keys(redisMuteStates),
+        ...Object.keys(controlStates),
+      ]);
+
+      if (!allUserIds.has(userId)) {
+        allUserIds.add(userId);
+      }
 
       const combinedMuteStates: Record<string, PersistedMuteState> = {};
+      const usersNeedingRedisSync: Array<{ userId: string; state: PersistedMuteState }> = [];
+      const controlStatePersistenceQueue: Array<{
+        userId: string;
+        forcedAudio: boolean;
+        forcedVideo: boolean;
+        forcedAudioAt: number | null;
+        forcedVideoAt: number | null;
+        forcedBy: string | null;
+        forcedReason: string | null;
+      }> = [];
 
-      for (const [userIdKey, state] of Object.entries(dbMuteStates)) {
-        combinedMuteStates[userIdKey] = {
-          isAudioMuted: state.isAudioMuted,
-          isVideoMuted: state.isVideoMuted,
-          audioMutedAt: state.audioMutedAt ? state.audioMutedAt.getTime() : null,
-          videoMutedAt: state.videoMutedAt ? state.videoMutedAt.getTime() : null,
-          updatedAt: Math.max(
-            state.audioMutedAt ? state.audioMutedAt.getTime() : 0,
-            state.videoMutedAt ? state.videoMutedAt.getTime() : 0
-          ) || undefined,
+      for (const userIdKey of allUserIds) {
+        const dbState = dbMuteStates[userIdKey];
+        const redisState = redisMuteStates[userIdKey];
+        const controlState = controlStates[userIdKey];
+
+        const redisAudioMutedAt =
+          typeof redisState?.audioMutedAt === 'number' ? redisState.audioMutedAt : null;
+        const redisVideoMutedAt =
+          typeof redisState?.videoMutedAt === 'number' ? redisState.videoMutedAt : null;
+
+        const audioMutedAtMs =
+          redisAudioMutedAt ??
+          (dbState?.audioMutedAt ? dbState.audioMutedAt.getTime() : null);
+        const videoMutedAtMs =
+          redisVideoMutedAt ??
+          (dbState?.videoMutedAt ? dbState.videoMutedAt.getTime() : null);
+
+        const isAudioMuted =
+          typeof redisState?.isAudioMuted === 'boolean'
+            ? redisState.isAudioMuted
+            : dbState?.isAudioMuted ?? true;
+        const isVideoMuted =
+          typeof redisState?.isVideoMuted === 'boolean'
+            ? redisState.isVideoMuted
+            : dbState?.isVideoMuted ?? true;
+
+        let forcedAudio =
+          controlState?.forcedAudio ??
+          (typeof redisState?.forcedAudio === 'boolean' ? redisState.forcedAudio : undefined) ??
+          false;
+        let forcedVideo =
+          controlState?.forcedVideo ??
+          (typeof redisState?.forcedVideo === 'boolean' ? redisState.forcedVideo : undefined) ??
+          false;
+
+        let forcedAudioAt =
+          forcedAudio
+            ? controlState?.forcedAudioAt?.getTime() ??
+              (typeof redisState?.forcedAudioAt === 'number'
+                ? redisState.forcedAudioAt
+                : null)
+            : null;
+        let forcedVideoAt =
+          forcedVideo
+            ? controlState?.forcedVideoAt?.getTime() ??
+              (typeof redisState?.forcedVideoAt === 'number'
+                ? redisState.forcedVideoAt
+                : null)
+            : null;
+
+        let forcedBy =
+          controlState?.forcedBy ??
+          (redisState && Object.prototype.hasOwnProperty.call(redisState, 'forcedBy')
+            ? redisState.forcedBy ?? null
+            : null);
+        let forcedReason = controlState?.forcedReason ?? redisState?.forcedReason ?? null;
+
+        const globalAudioForce =
+          roomHostState?.audioForceAll ??
+          redisRoomControlState?.audioForceAll ??
+          false;
+        const globalVideoForce =
+          roomHostState?.videoForceAll ??
+          redisRoomControlState?.videoForceAll ??
+          false;
+
+        if (!forcedAudio && globalAudioForce && userIdKey !== room.adminId) {
+          forcedAudio = true;
+          forcedAudioAt =
+            roomHostState?.audioForcedAt?.getTime() ??
+            (typeof redisRoomControlState?.audioForcedAt === 'number'
+              ? redisRoomControlState.audioForcedAt
+              : forcedAudioAt ?? Date.now());
+          forcedBy =
+            roomHostState?.audioForcedBy ??
+            redisRoomControlState?.audioForcedBy ??
+            forcedBy ??
+            room.adminId;
+          if (!forcedReason) {
+            forcedReason =
+              roomHostState?.audioForceReason ??
+              redisRoomControlState?.audioForceReason ??
+              null;
+          }
+        }
+
+        if (!forcedVideo && globalVideoForce && userIdKey !== room.adminId) {
+          forcedVideo = true;
+          forcedVideoAt =
+            roomHostState?.videoForcedAt?.getTime() ??
+            (typeof redisRoomControlState?.videoForcedAt === 'number'
+              ? redisRoomControlState.videoForcedAt
+              : forcedVideoAt ?? Date.now());
+          forcedBy =
+            roomHostState?.videoForcedBy ??
+            redisRoomControlState?.videoForcedBy ??
+            forcedBy ??
+            room.adminId;
+          if (!forcedReason) {
+            forcedReason =
+              roomHostState?.videoForceReason ??
+              redisRoomControlState?.videoForceReason ??
+              null;
+          }
+        }
+
+        const updatedAtCandidate = Math.max(
+          audioMutedAtMs ?? 0,
+          videoMutedAtMs ?? 0,
+          forcedAudioAt ?? 0,
+          forcedVideoAt ?? 0
+        );
+
+        const combined: PersistedMuteState = {
+          isAudioMuted,
+          isVideoMuted,
+          audioMutedAt: audioMutedAtMs,
+          videoMutedAt: videoMutedAtMs,
+          updatedAt: updatedAtCandidate > 0 ? updatedAtCandidate : undefined,
+          forcedAudio,
+          forcedVideo,
+          forcedAudioAt,
+          forcedVideoAt,
+          forcedBy: forcedBy ?? null,
+          forcedReason: forcedReason ?? null,
         };
+
+        if (
+          (forcedAudio || forcedVideo) &&
+          (!controlState ||
+            controlState.forcedAudio !== forcedAudio ||
+            controlState.forcedVideo !== forcedVideo ||
+            (forcedAudio && !controlState.forcedAudioAt) ||
+            (forcedVideo && !controlState.forcedVideoAt))
+        ) {
+          controlStatePersistenceQueue.push({
+            userId: userIdKey,
+            forcedAudio,
+            forcedVideo,
+            forcedAudioAt: forcedAudio ? forcedAudioAt ?? Date.now() : null,
+            forcedVideoAt: forcedVideo ? forcedVideoAt ?? Date.now() : null,
+            forcedBy: forcedBy ?? room.adminId,
+            forcedReason: forcedReason ?? null,
+          });
+        }
+
+        combinedMuteStates[userIdKey] = combined;
+
+        const normalizedRedis = redisState
+          ? {
+              isAudioMuted: redisState.isAudioMuted,
+              isVideoMuted: redisState.isVideoMuted,
+              audioMutedAt: redisAudioMutedAt,
+              videoMutedAt: redisVideoMutedAt,
+              forcedAudio: redisState.forcedAudio ?? false,
+              forcedVideo: redisState.forcedVideo ?? false,
+              forcedAudioAt:
+                redisState.forcedAudioAt !== undefined && redisState.forcedAudioAt !== null
+                  ? redisState.forcedAudioAt
+                  : null,
+              forcedVideoAt:
+                redisState.forcedVideoAt !== undefined && redisState.forcedVideoAt !== null
+                  ? redisState.forcedVideoAt
+                  : null,
+              forcedBy: Object.prototype.hasOwnProperty.call(redisState, 'forcedBy')
+                ? redisState.forcedBy ?? null
+                : null,
+              forcedReason: Object.prototype.hasOwnProperty.call(redisState, 'forcedReason')
+                ? redisState.forcedReason ?? null
+                : null,
+            }
+          : null;
+
+        const targetForComparison = {
+          isAudioMuted,
+          isVideoMuted,
+          audioMutedAt: audioMutedAtMs ?? null,
+          videoMutedAt: videoMutedAtMs ?? null,
+          forcedAudio,
+          forcedVideo,
+          forcedAudioAt: forcedAudio ? forcedAudioAt ?? null : null,
+          forcedVideoAt: forcedVideo ? forcedVideoAt ?? null : null,
+          forcedBy:
+            forcedAudio || forcedVideo
+              ? forcedBy ?? null
+              : null,
+          forcedReason: forcedReason ?? null,
+        };
+
+        const needsSync =
+          !normalizedRedis ||
+          normalizedRedis.isAudioMuted !== targetForComparison.isAudioMuted ||
+          normalizedRedis.isVideoMuted !== targetForComparison.isVideoMuted ||
+          (normalizedRedis.audioMutedAt ?? null) !== targetForComparison.audioMutedAt ||
+          (normalizedRedis.videoMutedAt ?? null) !== targetForComparison.videoMutedAt ||
+          (normalizedRedis.forcedAudio ?? false) !== targetForComparison.forcedAudio ||
+          (normalizedRedis.forcedVideo ?? false) !== targetForComparison.forcedVideo ||
+          (normalizedRedis.forcedAudioAt ?? null) !== targetForComparison.forcedAudioAt ||
+          (normalizedRedis.forcedVideoAt ?? null) !== targetForComparison.forcedVideoAt ||
+          (normalizedRedis.forcedBy ?? null) !== targetForComparison.forcedBy ||
+          (normalizedRedis.forcedReason ?? null) !== targetForComparison.forcedReason;
+
+        if (needsSync) {
+          usersNeedingRedisSync.push({ userId: userIdKey, state: combined });
+        }
       }
-
-      for (const [userIdKey, state] of Object.entries(redisMuteStates)) {
-        const existing = combinedMuteStates[userIdKey] ?? {
-          isAudioMuted: true,
-          isVideoMuted: true,
-          audioMutedAt: null,
-          videoMutedAt: null,
-          updatedAt: undefined,
-        };
-
-        combinedMuteStates[userIdKey] = {
-          isAudioMuted: typeof state.isAudioMuted === 'boolean' ? state.isAudioMuted : existing.isAudioMuted,
-          isVideoMuted: typeof state.isVideoMuted === 'boolean' ? state.isVideoMuted : existing.isVideoMuted,
-          audioMutedAt: state.audioMutedAt ?? existing.audioMutedAt ?? null,
-          videoMutedAt: state.videoMutedAt ?? existing.videoMutedAt ?? null,
-          updatedAt: state.updatedAt ?? existing.updatedAt,
-        };
-      }
-
-      const usersNeedingRedisSync = Object.keys(combinedMuteStates).filter(
-        userIdKey => !redisMuteStates[userIdKey]
-      );
 
       if (usersNeedingRedisSync.length > 0) {
         await Promise.all(
-          usersNeedingRedisSync.map(userIdKey => {
-            const state = combinedMuteStates[userIdKey];
-            return RedisStateService.setParticipantMuteState(normalizedRoomCode, userIdKey, {
+          usersNeedingRedisSync.map(({ userId: targetUserId, state }) =>
+            RedisStateService.setParticipantMuteState(normalizedRoomCode, targetUserId, {
               isAudioMuted: state.isAudioMuted,
               isVideoMuted: state.isVideoMuted,
               audioMutedAt: state.audioMutedAt ?? null,
               videoMutedAt: state.videoMutedAt ?? null,
-            });
-          })
+              forcedAudio: state.forcedAudio ?? false,
+              forcedVideo: state.forcedVideo ?? false,
+              forcedAudioAt:
+                state.forcedAudio ?? false ? state.forcedAudioAt ?? null : null,
+              forcedVideoAt:
+                state.forcedVideo ?? false ? state.forcedVideoAt ?? null : null,
+              forcedBy:
+                state.forcedAudio || state.forcedVideo ? state.forcedBy ?? null : null,
+              forcedReason: state.forcedReason ?? null,
+              updatedAt: state.updatedAt ?? Date.now(),
+            })
+          )
+        );
+      }
+
+      if (controlStatePersistenceQueue.length > 0) {
+        await Promise.all(
+          controlStatePersistenceQueue.map(entry =>
+            RoomService.setParticipantControlState(roomId, entry.userId, {
+              forcedAudio: entry.forcedAudio,
+              forcedVideo: entry.forcedVideo,
+              forcedAudioAt:
+                entry.forcedAudio && entry.forcedAudioAt
+                  ? new Date(entry.forcedAudioAt)
+                  : entry.forcedAudio
+                  ? new Date()
+                  : null,
+              forcedVideoAt:
+                entry.forcedVideo && entry.forcedVideoAt
+                  ? new Date(entry.forcedVideoAt)
+                  : entry.forcedVideo
+                  ? new Date()
+                  : null,
+              forcedBy: entry.forcedBy,
+              forcedReason: entry.forcedReason,
+            })
+          )
         );
       }
 
@@ -679,6 +1218,8 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
           isAdmin: updatedRoom.adminId === userId,
           isAudioMuted: joiningMuteState?.isAudioMuted ?? true,
           isVideoMuted: joiningMuteState?.isVideoMuted ?? true,
+          isAudioForceMuted: joiningMuteState?.forcedAudio ?? false,
+          isVideoForceMuted: joiningMuteState?.forcedVideo ?? false,
           isSpeaking: false,
           hasRaisedHand: false,
           joinedAt: new Date().toISOString(),
@@ -688,6 +1229,15 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
           videoMutedAt: joiningMuteState?.videoMutedAt
             ? new Date(joiningMuteState.videoMutedAt).toISOString()
             : null,
+          audioForceMutedAt: joiningMuteState?.forcedAudioAt
+            ? new Date(joiningMuteState.forcedAudioAt).toISOString()
+            : null,
+          videoForceMutedAt: joiningMuteState?.forcedVideoAt
+            ? new Date(joiningMuteState.forcedVideoAt).toISOString()
+            : null,
+          audioForceMutedBy: joiningMuteState?.forcedBy ?? null,
+          videoForceMutedBy: joiningMuteState?.forcedBy ?? null,
+          forceMuteReason: joiningMuteState?.forcedReason ?? null,
         };
 
       // Notify other participants with normalized payload
@@ -801,6 +1351,32 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         }
       }
 
+      const hostControlState = {
+        locked: roomHostState?.locked ?? redisRoomControlState?.locked ?? false,
+        lockedBy: roomHostState?.lockedBy ?? redisRoomControlState?.lockedBy ?? null,
+        lockedReason:
+          roomHostState?.lockedReason ?? redisRoomControlState?.lockedReason ?? null,
+        audioForceAll:
+          roomHostState?.audioForceAll ?? redisRoomControlState?.audioForceAll ?? false,
+        audioForcedBy:
+          roomHostState?.audioForcedBy ?? redisRoomControlState?.audioForcedBy ?? null,
+        audioForceReason:
+          roomHostState?.audioForceReason ?? redisRoomControlState?.audioForceReason ?? null,
+        videoForceAll:
+          roomHostState?.videoForceAll ?? redisRoomControlState?.videoForceAll ?? false,
+        videoForcedBy:
+          roomHostState?.videoForcedBy ?? redisRoomControlState?.videoForcedBy ?? null,
+        videoForceReason:
+          roomHostState?.videoForceReason ?? redisRoomControlState?.videoForceReason ?? null,
+        chatForceAll:
+          roomHostState?.chatForceAll ?? redisRoomControlState?.chatForceAll ?? false,
+        chatForcedBy:
+          roomHostState?.chatForcedBy ?? redisRoomControlState?.chatForcedBy ?? null,
+        chatForceReason:
+          roomHostState?.chatForceReason ?? redisRoomControlState?.chatForceReason ?? null,
+        updatedAt: new Date().toISOString(),
+      };
+
       callback({
         success: true,
         rtpCapabilities: router.rtpCapabilities,
@@ -814,6 +1390,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         participants: participantRoster,
         isAdmin: updatedRoom.adminId === userId,
         isPublic: updatedRoom.isPublic,
+        hostControls: hostControlState,
       });
     } catch (error: any) {
       logger.error('Error joining room:', {
@@ -838,6 +1415,419 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       });
     }
   });
+
+  socket.on(
+    'host-control:mute-all',
+    async (
+      data: { targets?: Array<'audio' | 'video'>; mute?: boolean; reason?: string },
+      callback?: (result: { success: boolean; error?: string }) => void
+    ) => {
+      try {
+        const { roomCode, roomId, actorUserId } = resolveHostContext();
+        const targetsInput = Array.isArray(data?.targets) ? data.targets : undefined;
+
+        const targets = new Set<'audio' | 'video'>();
+        if (targetsInput && targetsInput.length > 0) {
+          targetsInput.forEach(target => {
+            if (target === 'audio' || target === 'video') {
+              targets.add(target);
+            }
+          });
+        }
+
+        if (targets.size === 0) {
+          targets.add('audio');
+        }
+
+        const mute = data?.mute !== false;
+        const reason =
+          typeof data?.reason === 'string' ? data.reason.trim().slice(0, 256) : null;
+
+        const roomSockets = await io.in(roomCode).fetchSockets();
+        const participantUserIds = Array.from(
+          new Set(
+            roomSockets
+              .map((participantSocket: any) => participantSocket.data.userId)
+              .filter(
+                (participantUserId: string | undefined) =>
+                  participantUserId && participantUserId !== actorUserId
+              )
+          )
+        ) as string[];
+
+        const timestamp = Date.now();
+
+        await Promise.all(
+          participantUserIds.map(targetUserId =>
+            enforceParticipantMute({
+              targetUserId,
+              roomCode,
+              roomId,
+              actorUserId,
+              targets,
+              mute,
+              reason,
+              timestamp,
+              roomSockets,
+            })
+          )
+        );
+
+        const hostUpdates: Partial<RoomHostControlState> = {};
+        const redisUpdates: Partial<Omit<RedisRoomControlStatePayload, 'roomCode' | 'updatedAt'>> =
+          {};
+
+        if (targets.has('audio')) {
+          hostUpdates.audioForceAll = mute;
+          hostUpdates.audioForcedBy = mute ? actorUserId : null;
+          hostUpdates.audioForcedAt = mute ? new Date(timestamp) : null;
+          hostUpdates.audioForceReason = mute ? reason : null;
+          redisUpdates.audioForceAll = mute;
+          redisUpdates.audioForcedBy = mute ? actorUserId : null;
+          redisUpdates.audioForcedAt = mute ? timestamp : null;
+          redisUpdates.audioForceReason = mute ? reason ?? null : null;
+        }
+
+        if (targets.has('video')) {
+          hostUpdates.videoForceAll = mute;
+          hostUpdates.videoForcedBy = mute ? actorUserId : null;
+          hostUpdates.videoForcedAt = mute ? new Date(timestamp) : null;
+          hostUpdates.videoForceReason = mute ? reason : null;
+          redisUpdates.videoForceAll = mute;
+          redisUpdates.videoForcedBy = mute ? actorUserId : null;
+          redisUpdates.videoForcedAt = mute ? timestamp : null;
+          redisUpdates.videoForceReason = mute ? reason ?? null : null;
+        }
+
+        if (Object.keys(hostUpdates).length > 0) {
+          await RoomService.upsertRoomHostState(roomId, hostUpdates);
+        }
+
+        if (Object.keys(redisUpdates).length > 0) {
+          await RedisStateService.setRoomControlState(roomCode, {
+            ...redisUpdates,
+            updatedAt: timestamp,
+          });
+        }
+
+        await emitRoomHostState(roomCode, roomId);
+
+        callback?.({ success: true });
+      } catch (error: any) {
+        logger.error('host-control:mute-all failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({
+          success: false,
+          error:
+            error instanceof ForbiddenError
+              ? error.message
+              : 'Failed to update mute state for participants.',
+        });
+      }
+    }
+  );
+
+  socket.on(
+    'host-control:mute-participant',
+    async (
+      data: {
+        targetUserId?: string;
+        targetUserIds?: string[];
+        audio?: boolean;
+        video?: boolean;
+        mute?: boolean;
+        reason?: string;
+      },
+      callback?: (result: { success: boolean; error?: string }) => void
+    ) => {
+      try {
+        const { roomCode, roomId, actorUserId } = resolveHostContext();
+        const targets = new Set<'audio' | 'video'>();
+
+        if (data?.audio || (!data?.audio && !data?.video)) {
+          targets.add('audio');
+        }
+
+        if (data?.video) {
+          targets.add('video');
+        }
+
+        if (targets.size === 0) {
+          targets.add('audio');
+        }
+
+        const mute = data?.mute !== false;
+        const reason =
+          typeof data?.reason === 'string' ? data.reason.trim().slice(0, 256) : null;
+
+        const roomSockets = await io.in(roomCode).fetchSockets();
+        const requestedTargets = Array.isArray(data?.targetUserIds)
+          ? data.targetUserIds
+          : data?.targetUserId
+          ? [data.targetUserId]
+          : [];
+
+        const uniqueTargets = Array.from(
+          new Set(
+            requestedTargets.filter(
+              (targetUserId): targetUserId is string =>
+                typeof targetUserId === 'string' && targetUserId !== actorUserId
+            )
+          )
+        );
+
+        if (uniqueTargets.length === 0) {
+          throw new Error('No target participant specified for host control mute.');
+        }
+
+        const timestamp = Date.now();
+
+        await Promise.all(
+          uniqueTargets.map(targetUserId =>
+            enforceParticipantMute({
+              targetUserId,
+              roomCode,
+              roomId,
+              actorUserId,
+              targets,
+              mute,
+              reason,
+              timestamp,
+              roomSockets,
+            })
+          )
+        );
+
+        callback?.({ success: true });
+      } catch (error: any) {
+        logger.error('host-control:mute-participant failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({
+          success: false,
+          error:
+            error instanceof ForbiddenError
+              ? error.message
+              : 'Failed to update participant mute state.',
+        });
+      }
+    }
+  );
+
+  socket.on(
+    'host-control:remove-participant',
+    async (
+      data: { targetUserId?: string; targetUserIds?: string[]; reason?: string },
+      callback?: (result: { success: boolean; error?: string }) => void
+    ) => {
+      try {
+        const { roomCode, actorUserId } = resolveHostContext();
+        const requestedTargets = Array.isArray(data?.targetUserIds)
+          ? data.targetUserIds
+          : data?.targetUserId
+          ? [data.targetUserId]
+          : [];
+
+        const uniqueTargets = Array.from(
+          new Set(
+            requestedTargets.filter(
+              (targetUserId): targetUserId is string =>
+                typeof targetUserId === 'string' && targetUserId !== actorUserId
+            )
+          )
+        );
+
+        if (uniqueTargets.length === 0) {
+          throw new Error('No target participant specified for removal.');
+        }
+
+        const reason =
+          typeof data?.reason === 'string' ? data.reason.trim().slice(0, 256) : null;
+
+        const roomSockets = await io.in(roomCode).fetchSockets();
+
+        await Promise.all(
+          uniqueTargets.map(async targetUserId => {
+            const targetSockets = roomSockets.filter(
+              (participantSocket: any) => participantSocket.data.userId === targetUserId
+            );
+
+            const removalPayload = {
+              userId: targetUserId,
+              reason: reason ?? null,
+              actorUserId,
+              timestamp: new Date().toISOString(),
+            };
+
+            targetSockets.forEach(targetSocket => {
+              try {
+                targetSocket.emit('host-control:participant-removed', removalPayload);
+              } catch (error) {
+                logger.warn('Failed to emit removal payload to target socket', {
+                  targetUserId,
+                  socketId: targetSocket?.id,
+                  roomCode,
+                  error,
+                });
+              }
+            });
+
+            await Promise.all(
+              targetSockets.map(targetSocket =>
+                (async () => {
+                  const concreteSocket = io.sockets.sockets.get(
+                    (targetSocket as any).id
+                  ) as Socket | undefined;
+                  if (concreteSocket) {
+                    await handleSocketLeave(io, concreteSocket, {
+                      reason: reason ?? 'host-removed',
+                    });
+                    try {
+                      await new Promise(resolve => setImmediate(resolve));
+                      if (concreteSocket.connected) {
+                        concreteSocket.disconnect(true);
+                      }
+                    } catch (error) {
+                      logger.warn('Failed to disconnect removed participant socket', {
+                        targetUserId,
+                        socketId: concreteSocket.id,
+                        roomCode,
+                        error,
+                      });
+                    }
+                  } else if (typeof targetSocket.disconnect === 'function') {
+                    await targetSocket.disconnect(true);
+                  }
+                })()
+              )
+            );
+
+            io.to(roomCode).emit('host-control:participant-removed', removalPayload);
+          })
+        );
+
+        callback?.({ success: true });
+      } catch (error: any) {
+        logger.error('host-control:remove-participant failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({
+          success: false,
+          error:
+            error instanceof ForbiddenError
+              ? error.message
+              : 'Failed to remove participant from room.',
+        });
+      }
+    }
+  );
+
+  socket.on(
+    'host-control:mute-chat',
+    async (
+      data: { mute?: boolean; reason?: string },
+      callback?: (result: { success: boolean; error?: string }) => void
+    ) => {
+      try {
+        const { roomCode, roomId, actorUserId } = resolveHostContext();
+        const mute = data?.mute !== false;
+        const reason =
+          typeof data?.reason === 'string' ? data.reason.trim().slice(0, 256) : null;
+        const timestamp = Date.now();
+
+        await RoomService.upsertRoomHostState(roomId, {
+          chatForceAll: mute,
+          chatForcedBy: mute ? actorUserId : null,
+          chatForcedAt: mute ? new Date(timestamp) : null,
+          chatForceReason: mute ? reason : null,
+        });
+
+        await RedisStateService.setRoomControlState(roomCode, {
+          chatForceAll: mute,
+          chatForcedBy: mute ? actorUserId : null,
+          chatForcedAt: mute ? timestamp : null,
+          chatForceReason: mute ? reason ?? null : null,
+          updatedAt: timestamp,
+        });
+
+        io.to(roomCode).emit('host-control:chat-state', {
+          chatForceAll: mute,
+          chatForcedBy: mute ? actorUserId : null,
+          chatForceReason: mute ? reason ?? null : null,
+          actorUserId,
+          timestamp,
+        });
+
+        await emitRoomHostState(roomCode, roomId);
+
+        callback?.({ success: true });
+      } catch (error: any) {
+        logger.error('host-control:mute-chat failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({
+          success: false,
+          error:
+            error instanceof ForbiddenError
+              ? error.message
+              : 'Failed to update chat mute state.',
+        });
+      }
+    }
+  );
+
+  socket.on(
+    'host-control:lock-room',
+    async (
+      data: { locked?: boolean; reason?: string },
+      callback?: (result: { success: boolean; error?: string }) => void
+    ) => {
+      try {
+        const { roomCode, roomId, actorUserId } = resolveHostContext();
+        const locked = data?.locked !== false;
+        const reason =
+          typeof data?.reason === 'string' ? data.reason.trim().slice(0, 256) : null;
+
+        const timestamp = Date.now();
+
+        await RoomService.upsertRoomHostState(roomId, {
+          locked,
+          lockedBy: locked ? actorUserId : null,
+          lockedAt: locked ? new Date(timestamp) : null,
+          lockedReason: locked ? reason : null,
+        });
+
+        await RedisStateService.setRoomControlState(roomCode, {
+          locked,
+          lockedBy: locked ? actorUserId : null,
+          lockedAt: locked ? timestamp : null,
+          lockedReason: locked ? reason ?? null : null,
+          updatedAt: timestamp,
+        });
+
+        await emitRoomHostState(roomCode, roomId);
+
+        callback?.({ success: true });
+      } catch (error: any) {
+        logger.error('host-control:lock-room failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({
+          success: false,
+          error:
+            error instanceof ForbiddenError
+              ? error.message
+              : 'Failed to update room lock state.',
+        });
+      }
+    }
+  );
 
   socket.on('leaveRoom', async (_data, callback?: (result: HandleSocketLeaveResult) => void) => {
     try {

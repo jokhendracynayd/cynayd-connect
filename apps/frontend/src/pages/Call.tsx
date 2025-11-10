@@ -32,7 +32,11 @@ type SocketEventKey =
   | 'join-request'
   | 'pending-requests-loaded'
   | 'screen-share-started'
-  | 'screen-share-stopped';
+  | 'screen-share-stopped'
+  | 'host-control:participant-state'
+  | 'host-control:room-state'
+  | 'host-control:chat-state'
+  | 'host-control:participant-removed';
 
 type ServerParticipant = {
   userId: string;
@@ -42,11 +46,18 @@ type ServerParticipant = {
   isAdmin?: boolean;
   isAudioMuted?: boolean;
   isVideoMuted?: boolean;
+  isAudioForceMuted?: boolean;
+  isVideoForceMuted?: boolean;
   isSpeaking?: boolean;
   hasRaisedHand?: boolean;
   joinedAt?: string;
   audioMutedAt?: string | null;
   videoMutedAt?: string | null;
+  audioForceMutedAt?: string | null;
+  videoForceMutedAt?: string | null;
+  audioForceMutedBy?: string | null;
+  videoForceMutedBy?: string | null;
+  forceMuteReason?: string | null;
 };
 
 interface ParticipantTile {
@@ -110,6 +121,9 @@ export default function Call() {
     setChatActiveConversation,
     updateNetworkQuality,
     clearNetworkQuality,
+    hostControls,
+    setHostControls,
+    applyParticipantForceState,
   } = useCallStore();
   
   const navigate = useNavigate();
@@ -133,12 +147,28 @@ export default function Call() {
   const [showWaitingRoom, setShowWaitingRoom] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const previousHostControlsRef = useRef(hostControls);
   const isLeavingRef = useRef(false); // Prevent double cleanup
   const isLoadingPendingRequestsRef = useRef(false); // Track API call in progress
   const [showParticipantList, setShowParticipantList] = useState(false);
   const [showChatPanel, setShowChatPanel] = useState(false);
   const [permissionBannerDismissed, setPermissionBannerDismissed] = useState(false);
   const showChatPanelRef = useRef(showChatPanel);
+  const [localForceState, setLocalForceState] = useState<{
+    audio: boolean;
+    video: boolean;
+    audioReason: string | null;
+    videoReason: string | null;
+  }>({
+    audio: false,
+    video: false,
+    audioReason: null,
+    videoReason: null,
+  });
+
+  useEffect(() => {
+    previousHostControlsRef.current = hostControls;
+  }, [hostControls]);
 
   const hasPermissionIssue = permissionErrors.audio || permissionErrors.video;
 
@@ -151,6 +181,11 @@ export default function Call() {
     });
     return total;
   }, [chat]);
+
+  const audioForceActive =
+    (!isAdmin && hostControls.audioForceAll) || localForceState.audio;
+  const videoForceActive =
+    (!isAdmin && hostControls.videoForceAll) || localForceState.video;
 
   useEffect(() => {
     showChatPanelRef.current = showChatPanel;
@@ -719,6 +754,16 @@ export default function Call() {
         effectiveVideoMuted = selfRosterEntry.isVideoMuted;
         setLocalVideoMuted(selfRosterEntry.isVideoMuted);
       }
+      setLocalForceState(prev => ({
+        audio: selfRosterEntry.isAudioForceMuted ?? prev.audio,
+        video: selfRosterEntry.isVideoForceMuted ?? prev.video,
+        audioReason: selfRosterEntry.isAudioForceMuted
+          ? selfRosterEntry.forceMuteReason ?? null
+          : null,
+        videoReason: selfRosterEntry.isVideoForceMuted
+          ? selfRosterEntry.forceMuteReason ?? null
+          : null,
+      }));
     }
 
       // Initialize Mediasoup device
@@ -854,6 +899,13 @@ export default function Call() {
           isAdmin: participantInfo.isAdmin,
           isAudioMuted: participantInfo.isAudioMuted,
           isVideoMuted: participantInfo.isVideoMuted,
+          isAudioForceMuted: participantInfo.isAudioForceMuted,
+          isVideoForceMuted: participantInfo.isVideoForceMuted,
+          audioForceMutedAt: participantInfo.audioForceMutedAt ?? null,
+          videoForceMutedAt: participantInfo.videoForceMutedAt ?? null,
+          audioForceMutedBy: participantInfo.audioForceMutedBy ?? null,
+          videoForceMutedBy: participantInfo.videoForceMutedBy ?? null,
+          forceMuteReason: participantInfo.forceMuteReason ?? null,
           isSpeaking: participantInfo.isSpeaking,
           hasRaisedHand: participantInfo.hasRaisedHand,
         });
@@ -879,6 +931,13 @@ export default function Call() {
             isAdmin: participantInfo.isAdmin ?? false,
             isAudioMuted: true,
             isVideoMuted: true,
+            isAudioForceMuted: (participantInfo as any).isAudioForceMuted ?? false,
+            isVideoForceMuted: (participantInfo as any).isVideoForceMuted ?? false,
+            audioForceMutedAt: (participantInfo as any).audioForceMutedAt ?? null,
+            videoForceMutedAt: (participantInfo as any).videoForceMutedAt ?? null,
+            audioForceMutedBy: (participantInfo as any).audioForceMutedBy ?? null,
+            videoForceMutedBy: (participantInfo as any).videoForceMutedBy ?? null,
+            forceMuteReason: (participantInfo as any).forceMuteReason ?? null,
             isSpeaking: false,
             hasRaisedHand: participantInfo.hasRaisedHand ?? false,
           });
@@ -943,6 +1002,20 @@ export default function Call() {
         setIsAdmin(response.isAdmin);
         if (response?.isPublic !== undefined) {
           setRoomIsPublic(response.isPublic);
+        }
+        if (response?.hostControls) {
+          setHostControls({
+            locked: response.hostControls.locked ?? false,
+            lockedBy: response.hostControls.lockedBy ?? null,
+            lockedReason: response.hostControls.lockedReason ?? null,
+            audioForceAll: response.hostControls.audioForceAll ?? false,
+            audioForcedBy: response.hostControls.audioForcedBy ?? null,
+            audioForceReason: response.hostControls.audioForceReason ?? null,
+            videoForceAll: response.hostControls.videoForceAll ?? false,
+            videoForcedBy: response.hostControls.videoForcedBy ?? null,
+            videoForceReason: response.hostControls.videoForceReason ?? null,
+            updatedAt: response.hostControls.updatedAt ?? new Date().toISOString(),
+          });
         }
       } else {
         // Fallback: check via API if response doesn't include admin status
@@ -1012,6 +1085,13 @@ export default function Call() {
         isAdmin: participant.isAdmin,
         isAudioMuted: participant.isAudioMuted,
         isVideoMuted: participant.isVideoMuted,
+         isAudioForceMuted: participant.isAudioForceMuted,
+         isVideoForceMuted: participant.isVideoForceMuted,
+         audioForceMutedAt: participant.audioForceMutedAt ?? null,
+         videoForceMutedAt: participant.videoForceMutedAt ?? null,
+         audioForceMutedBy: participant.audioForceMutedBy ?? null,
+         videoForceMutedBy: participant.videoForceMutedBy ?? null,
+         forceMuteReason: participant.forceMuteReason ?? null,
         isSpeaking: participant.isSpeaking,
         hasRaisedHand: participant.hasRaisedHand,
       });
@@ -1177,22 +1257,279 @@ export default function Call() {
     eventListenersRef.current['chat'] = handleLegacyChat;
 
     // Audio mute event
-    const handleAudioMute = (data: { userId: string; isAudioMuted: boolean }) => {
+    const handleAudioMute = (data: {
+      userId: string;
+      isAudioMuted: boolean;
+      forced?: boolean;
+      forcedBy?: string | null;
+      reason?: string | null;
+      timestamp?: number;
+    }) => {
       runOrQueueParticipantUpdate(data.userId, () => {
-        updateParticipant(data.userId, { isAudioMuted: data.isAudioMuted });
+        const timestampIso =
+          typeof data.timestamp === 'number'
+            ? new Date(data.timestamp).toISOString()
+            : new Date().toISOString();
+        updateParticipant(data.userId, {
+          isAudioMuted: data.isAudioMuted,
+          isAudioForceMuted: Boolean(data.forced),
+          audioForceMutedBy: data.forced ? data.forcedBy ?? null : null,
+          audioForceMutedAt: data.forced ? timestampIso : null,
+          forceMuteReason: data.forced ? data.reason ?? null : null,
+        });
       });
     };
     socketManager.on('audio-mute', handleAudioMute);
     eventListenersRef.current['audio-mute'] = handleAudioMute;
 
     // Video mute event
-    const handleVideoMute = (data: { userId: string; isVideoMuted: boolean }) => {
+    const handleVideoMute = (data: {
+      userId: string;
+      isVideoMuted: boolean;
+      forced?: boolean;
+      forcedBy?: string | null;
+      reason?: string | null;
+      timestamp?: number;
+    }) => {
       runOrQueueParticipantUpdate(data.userId, () => {
-        updateParticipant(data.userId, { isVideoMuted: data.isVideoMuted });
+        const timestampIso =
+          typeof data.timestamp === 'number'
+            ? new Date(data.timestamp).toISOString()
+            : new Date().toISOString();
+        updateParticipant(data.userId, {
+          isVideoMuted: data.isVideoMuted,
+          isVideoForceMuted: Boolean(data.forced),
+          videoForceMutedBy: data.forced ? data.forcedBy ?? null : null,
+          videoForceMutedAt: data.forced ? timestampIso : null,
+          forceMuteReason: data.forced ? data.reason ?? null : null,
+        });
       });
     };
     socketManager.on('video-mute', handleVideoMute);
     eventListenersRef.current['video-mute'] = handleVideoMute;
+
+    const handleHostParticipantState = (payload: {
+      userId: string;
+      audio?: {
+        muted?: boolean;
+        forced: boolean;
+        reason?: string | null;
+        forcedBy?: string | null;
+        timestamp?: number | string | null;
+      };
+      video?: {
+        muted?: boolean;
+        forced: boolean;
+        reason?: string | null;
+        forcedBy?: string | null;
+        timestamp?: number | string | null;
+      };
+      reason?: string | null;
+      actorUserId?: string | null;
+      timestamp?: number | string | null;
+    }) => {
+      const isoTimestamp =
+        typeof payload.timestamp === 'number'
+          ? new Date(payload.timestamp).toISOString()
+          : typeof payload.timestamp === 'string'
+          ? payload.timestamp
+          : new Date().toISOString();
+
+      applyParticipantForceState(payload.userId, {
+        audio: payload.audio
+          ? {
+              muted: payload.audio.muted,
+              forced: payload.audio.forced,
+              reason: payload.audio.forced
+                ? payload.audio.reason ?? payload.reason ?? null
+                : null,
+              forcedBy: payload.audio.forced
+                ? payload.audio.forcedBy ?? payload.actorUserId ?? null
+                : null,
+              timestamp:
+                payload.audio.timestamp !== undefined && payload.audio.timestamp !== null
+                  ? typeof payload.audio.timestamp === 'number'
+                    ? new Date(payload.audio.timestamp).toISOString()
+                    : payload.audio.timestamp
+                  : isoTimestamp,
+            }
+          : undefined,
+        video: payload.video
+          ? {
+              muted: payload.video.muted,
+              forced: payload.video.forced,
+              reason: payload.video.forced
+                ? payload.video.reason ?? payload.reason ?? null
+                : null,
+              forcedBy: payload.video.forced
+                ? payload.video.forcedBy ?? payload.actorUserId ?? null
+                : null,
+              timestamp:
+                payload.video.timestamp !== undefined && payload.video.timestamp !== null
+                  ? typeof payload.video.timestamp === 'number'
+                    ? new Date(payload.video.timestamp).toISOString()
+                    : payload.video.timestamp
+                  : isoTimestamp,
+            }
+          : undefined,
+      });
+
+      if (payload.userId === user?.id) {
+        if (payload.audio && typeof payload.audio.muted === 'boolean') {
+          setLocalAudioMuted(payload.audio.muted);
+        }
+        if (payload.video && typeof payload.video.muted === 'boolean') {
+          setLocalVideoMuted(payload.video.muted);
+        }
+        setLocalForceState(prev => ({
+          audio:
+            payload.audio?.forced !== undefined ? payload.audio.forced : prev.audio,
+          video:
+            payload.video?.forced !== undefined ? payload.video.forced : prev.video,
+          audioReason:
+            payload.audio?.forced !== undefined
+              ? payload.audio.forced
+                ? payload.audio.reason ?? payload.reason ?? null
+                : null
+              : prev.audioReason,
+          videoReason:
+            payload.video?.forced !== undefined
+              ? payload.video.forced
+                ? payload.video.reason ?? payload.reason ?? null
+                : null
+              : prev.videoReason,
+        }));
+        if (payload.audio?.forced) {
+          toast.error('The host muted your microphone.');
+        } else if (payload.audio && !payload.audio.forced && payload.audio.muted === false) {
+          toast.success('The host unmuted your microphone.');
+        }
+
+        if (payload.video?.forced) {
+          toast.error('The host disabled your camera.');
+        } else if (payload.video && !payload.video.forced && payload.video.muted === false) {
+          toast.success('The host enabled your camera.');
+        }
+      }
+    };
+    socketManager.on('host-control:participant-state', handleHostParticipantState);
+    eventListenersRef.current['host-control:participant-state'] = handleHostParticipantState;
+
+    const handleHostRoomState = (payload: {
+      locked?: boolean;
+      lockedBy?: string | null;
+      lockedReason?: string | null;
+      audioForceAll?: boolean;
+      audioForcedBy?: string | null;
+      audioForceReason?: string | null;
+      videoForceAll?: boolean;
+      videoForcedBy?: string | null;
+      videoForceReason?: string | null;
+      chatForceAll?: boolean;
+      chatForcedBy?: string | null;
+      chatForceReason?: string | null;
+      updatedAt?: string;
+    }) => {
+      const previous = previousHostControlsRef.current;
+      const nextChatForceAll = payload.chatForceAll ?? previous.chatForceAll ?? false;
+      setHostControls({
+        locked: payload.locked ?? previous.locked ?? false,
+        lockedBy: payload.lockedBy ?? null,
+        lockedReason: payload.lockedReason ?? null,
+        audioForceAll: payload.audioForceAll ?? previous.audioForceAll ?? false,
+        audioForcedBy: payload.audioForcedBy ?? null,
+        audioForceReason: payload.audioForceReason ?? null,
+        videoForceAll: payload.videoForceAll ?? previous.videoForceAll ?? false,
+        videoForcedBy: payload.videoForcedBy ?? null,
+        videoForceReason: payload.videoForceReason ?? null,
+        chatForceAll: nextChatForceAll,
+        chatForcedBy: payload.chatForcedBy ?? (nextChatForceAll ? previous.chatForcedBy ?? null : null),
+        chatForceReason: nextChatForceAll
+          ? payload.chatForceReason ?? previous.chatForceReason ?? null
+          : null,
+        updatedAt: payload.updatedAt ?? new Date().toISOString(),
+      });
+
+      if (!previous.locked && payload.locked) {
+        toast.error('The host locked the room.');
+      } else if (previous.locked && payload.locked === false) {
+        toast.success('The host unlocked the room.');
+      }
+
+      if (!previous.audioForceAll && payload.audioForceAll) {
+        toast.error('The host muted everyone\'s microphones.');
+      } else if (previous.audioForceAll && payload.audioForceAll === false) {
+        toast.success('The host unmuted microphones.');
+      }
+
+      if (!previous.videoForceAll && payload.videoForceAll) {
+        toast.error('The host disabled all cameras.');
+      } else if (previous.videoForceAll && payload.videoForceAll === false) {
+        toast.success('The host enabled cameras.');
+      }
+    };
+    socketManager.on('host-control:room-state', handleHostRoomState);
+    eventListenersRef.current['host-control:room-state'] = handleHostRoomState;
+
+    const handleHostChatState = (payload: {
+      chatForceAll: boolean;
+      chatForcedBy?: string | null;
+      chatForceReason?: string | null;
+      actorUserId?: string | null;
+      timestamp?: number;
+    }) => {
+      const previous = previousHostControlsRef.current;
+      const nextForced = Boolean(payload.chatForceAll);
+      const timestampIso =
+        typeof payload.timestamp === 'number'
+          ? new Date(payload.timestamp).toISOString()
+          : new Date().toISOString();
+
+      setHostControls({
+        chatForceAll: nextForced,
+        chatForcedBy: nextForced
+          ? payload.chatForcedBy ?? payload.actorUserId ?? null
+          : null,
+        chatForceReason: nextForced ? payload.chatForceReason ?? null : null,
+        updatedAt: timestampIso,
+      });
+
+      if (!previous.chatForceAll && nextForced) {
+        toast.error(
+          payload.chatForceReason && payload.chatForceReason.length > 0
+            ? `The host disabled chat: ${payload.chatForceReason}`
+            : 'The host disabled chat.'
+        );
+      } else if (previous.chatForceAll && !nextForced) {
+        toast.success('The host re-enabled chat.');
+      }
+    };
+    socketManager.on('host-control:chat-state', handleHostChatState);
+    eventListenersRef.current['host-control:chat-state'] = handleHostChatState;
+
+    const handleHostParticipantRemoved = async (payload: {
+      userId: string;
+      reason?: string | null;
+      actorUserId?: string | null;
+    }) => {
+      if (payload.userId === user?.id) {
+        toast.error(payload.reason ?? 'The host removed you from the room.');
+        try {
+          await leaveRoom({ skipSuccessToast: true });
+        } catch (error) {
+          console.error('Error during forced leave:', error);
+        }
+      } else {
+        runOrQueueParticipantUpdate(payload.userId, () => {
+          removeParticipant(payload.userId);
+        });
+        toast(payload.reason ?? 'A participant was removed by the host.', {
+          icon: '⚠️',
+        });
+      }
+    };
+    socketManager.on('host-control:participant-removed', handleHostParticipantRemoved);
+    eventListenersRef.current['host-control:participant-removed'] = handleHostParticipantRemoved;
 
     // Active speaker event
     const handleActiveSpeaker = (data: { userId: string; isActiveSpeaker: boolean }) => {
@@ -1632,7 +1969,7 @@ export default function Call() {
     }
   };
 
-  const leaveRoom = async () => {
+  const leaveRoom = async (options?: { skipSuccessToast?: boolean }) => {
     // Prevent double execution
     if (isLeavingRef.current) {
       console.log('Leave already in progress, ignoring duplicate call');
@@ -1647,6 +1984,12 @@ export default function Call() {
     }
     clearNetworkQuality();
     setShowChatPanel(false);
+    setLocalForceState({
+      audio: false,
+      video: false,
+      audioReason: null,
+      videoReason: null,
+    });
     
     try {
       console.log('Leaving room, starting cleanup...');
@@ -1774,7 +2117,11 @@ export default function Call() {
       resetCallState();
       
       // Step 10: Show success and navigate
+      if (options?.skipSuccessToast) {
+        toast.dismiss('leaving');
+      } else {
       toast.success('Left room successfully', { id: 'leaving' });
+      }
       
       // Small delay to ensure toast is visible before navigation
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -1866,6 +2213,12 @@ export default function Call() {
   };
 
   const handleToggleAudio = async () => {
+    const desiredMutedState = !isAudioMuted;
+    if (audioForceActive && !desiredMutedState) {
+      toast.error('The host has muted your microphone.');
+      return;
+    }
+
     if (permissionErrors.audio) {
       try {
         const newAudioTrack = await mediaManager.getSingleTrack('audio', selectedDevices.audioInput);
@@ -1927,7 +2280,7 @@ export default function Call() {
     }
 
     const wasMuted = isAudioMuted; // Store BEFORE toggle
-    const newMuted = !isAudioMuted;
+    const newMuted = desiredMutedState;
     toggleAudio();
     
     // Emit mute event to other participants
@@ -1989,9 +2342,16 @@ export default function Call() {
   };
 
   const handleToggleVideo = async () => {
+    const desiredMutedState = !isVideoMuted;
+    if (videoForceActive && !desiredMutedState) {
+      toast.error('The host has disabled your camera.');
+      return;
+    }
+
     if (permissionErrors.video) {
       try {
         const newVideoTrack = await mediaManager.getSingleTrack('video', selectedDevices.videoInput);
+        const targetMuted = desiredMutedState;
 
         if (localStream) {
           localStream.getVideoTracks().forEach(track => {
@@ -2005,7 +2365,7 @@ export default function Call() {
           setLocalStream(newStream);
         }
 
-        newVideoTrack.enabled = !isVideoMuted;
+        newVideoTrack.enabled = !targetMuted;
 
         const existingProducer = webrtcManager.getProducer('video');
         if (existingProducer) {
@@ -2014,7 +2374,7 @@ export default function Call() {
           await webrtcManager.produceVideo(newVideoTrack);
         }
 
-        if (isVideoMuted) {
+        if (targetMuted) {
           newVideoTrack.enabled = false;
           try {
             await webrtcManager.pauseProducer('video');
@@ -2022,6 +2382,7 @@ export default function Call() {
             console.warn('Failed to pause video producer after replacing track:', pauseError);
           }
         } else {
+          newVideoTrack.enabled = true;
           try {
             await webrtcManager.resumeProducer('video');
           } catch (resumeError) {
@@ -2029,6 +2390,7 @@ export default function Call() {
           }
         }
 
+        setLocalVideoMuted(targetMuted);
         setPermissionError('video', false);
         toast.success('Camera ready');
       } catch (error: any) {
@@ -2151,6 +2513,119 @@ export default function Call() {
       }
     }
   };
+
+  const emitHostControl = useCallback(
+    (
+      event: string,
+      payload: Record<string, unknown>,
+      successMessage?: string,
+      fallbackErrorMessage: string = 'Host action failed'
+    ) => {
+      const socket = socketManager.getSocket
+        ? socketManager.getSocket()
+        : (socketManager as any).socket;
+      if (!socket) {
+        toast.error('Not connected to signaling server.');
+        return;
+      }
+
+      socket.emit(event, payload, (response?: { success?: boolean; error?: string }) => {
+        if (response && response.success === false) {
+          toast.error(response.error ?? fallbackErrorMessage);
+          return;
+        }
+        if (successMessage) {
+          toast.success(successMessage);
+        }
+      });
+    },
+    []
+  );
+
+  const handleHostMuteAllAudio = useCallback(() => {
+    emitHostControl(
+      'host-control:mute-all',
+      { targets: ['audio'], mute: true },
+      'Muted all microphones',
+      'Failed to mute microphones'
+    );
+  }, [emitHostControl]);
+
+  const handleHostUnmuteAllAudio = useCallback(() => {
+    emitHostControl(
+      'host-control:mute-all',
+      { targets: ['audio'], mute: false },
+      'Released microphones',
+      'Failed to unmute microphones'
+    );
+  }, [emitHostControl]);
+
+  const handleHostMuteAllVideo = useCallback(() => {
+    emitHostControl(
+      'host-control:mute-all',
+      { targets: ['video'], mute: true },
+      'Disabled all cameras',
+      'Failed to disable cameras'
+    );
+  }, [emitHostControl]);
+
+  const handleHostUnmuteAllVideo = useCallback(() => {
+    emitHostControl(
+      'host-control:mute-all',
+      { targets: ['video'], mute: false },
+      'Enabled cameras',
+      'Failed to enable cameras'
+    );
+  }, [emitHostControl]);
+
+  const handleHostToggleChat = useCallback(() => {
+    const shouldMute = !hostControls.chatForceAll;
+    emitHostControl(
+      'host-control:mute-chat',
+      { mute: shouldMute },
+      shouldMute ? 'Muted chat for everyone' : 'Chat reopened for participants',
+      shouldMute ? 'Failed to mute chat' : 'Failed to reopen chat'
+    );
+  }, [emitHostControl, hostControls.chatForceAll]);
+
+  const handleHostToggleLock = useCallback(() => {
+    const nextLocked = !hostControls.locked;
+    emitHostControl(
+      'host-control:lock-room',
+      { locked: nextLocked },
+      nextLocked ? 'Room locked' : 'Room unlocked',
+      'Failed to update room lock'
+    );
+  }, [emitHostControl, hostControls.locked]);
+
+  const handleHostControlParticipant = useCallback(
+    (userId: string, targets: { audio?: boolean; video?: boolean }, mute: boolean) => {
+      emitHostControl(
+        'host-control:mute-participant',
+        {
+          targetUserId: userId,
+          audio: targets.audio ?? false,
+          video: targets.video ?? false,
+          mute,
+        },
+        mute ? 'Participant muted' : 'Participant unmuted',
+        'Failed to update participant state'
+      );
+    },
+    [emitHostControl]
+  );
+
+  const handleHostRemoveParticipant = useCallback(
+    (userId: string) => {
+      emitHostControl(
+        'host-control:remove-participant',
+        { targetUserId: userId },
+        'Participant removed',
+        'Failed to remove participant'
+      );
+    },
+    [emitHostControl]
+  );
 
   const handleStartScreenShare = async () => {
     console.log('handleStartScreenShare called, current state:', {
@@ -2735,7 +3210,7 @@ export default function Call() {
                   </svg>
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-amber-800">You’re in listen-only mode</p>
+                  <p className="text-sm font-semibold text-amber-800">You're in listen-only mode</p>
                   <p className="mt-1 text-sm text-amber-700">
                     Your browser blocked access to {permissionErrors.audio && permissionErrors.video ? 'the microphone and camera' : permissionErrors.audio ? 'the microphone' : 'the camera'}. Use the controls below to grant permission and re-enable them.
                   </p>
@@ -2772,6 +3247,106 @@ export default function Call() {
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {isAdmin && (
+        <div
+          className="fixed right-6 z-40 flex flex-col items-end gap-3"
+          style={{
+            bottom: 0,
+            paddingBottom: `calc(12px + env(safe-area-inset-bottom))`,
+          }}
+        >
+          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-white/60 bg-white/90 px-3 py-2 shadow-[0_22px_45px_-28px_rgba(14,165,233,0.45)] sm:gap-3 sm:px-6 sm:py-3">
+            <button
+              onClick={
+                hostControls.audioForceAll
+                  ? handleHostUnmuteAllAudio
+                  : handleHostMuteAllAudio
+              }
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
+                hostControls.audioForceAll ? 'bg-rose-500 text-white' : 'bg-white/90 text-slate-600'
+              }`}
+              aria-pressed={hostControls.audioForceAll}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M7 8V6a3 3 0 116 0v2m0 0v2a3 3 0 106 0V8m-6 0h6"
+                />
+              </svg>
+              <span className="hidden sm:inline">Mic</span>
+              <span className="sm:hidden">M</span>
+            </button>
+
+            <button
+              onClick={
+                hostControls.videoForceAll
+                  ? handleHostUnmuteAllVideo
+                  : handleHostMuteAllVideo
+              }
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
+                hostControls.videoForceAll
+                  ? 'bg-rose-500 text-white'
+                  : 'bg-white/90 text-slate-600'
+              }`}
+              aria-pressed={hostControls.videoForceAll}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M4 5a2 2 0 012-2h4a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V5zM16 7l3-2v10l-3-2"
+                />
+              </svg>
+              <span className="hidden sm:inline">Camera</span>
+              <span className="sm:hidden">Cam</span>
+            </button>
+
+            <button
+              onClick={handleHostToggleChat}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
+                hostControls.chatForceAll
+                  ? 'bg-rose-500 text-white'
+                  : 'bg-white/90 text-slate-600'
+              }`}
+              aria-pressed={hostControls.chatForceAll}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M17 8c0 3.866-3.582 7-8 7-1.01 0-1.98-.152-2.878-.432L3 15l.646-3.227C3.232 10.868 3 9.959 3 9c0-3.866 3.582-7 8-7s8 3.134 8 7z"
+                />
+              </svg>
+              <span className="hidden sm:inline">Chat</span>
+              <span className="sm:hidden">Chat</span>
+            </button>
+
+            <button
+              onClick={handleHostToggleLock}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
+                hostControls.locked ? 'bg-rose-500 text-white' : 'bg-white/90 text-slate-600'
+              }`}
+              aria-pressed={hostControls.locked}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M7 9V7a3 3 0 016 0v2m-6 0h6a2 2 0 012 2v5a2 2 0 01-2 2H7a2 2 0 01-2-2v-5a2 2 0 012-2z"
+                />
+              </svg>
+              <span className="hidden sm:inline">Lock</span>
+              <span className="sm:hidden">L</span>
+            </button>
           </div>
         </div>
       )}
@@ -3040,12 +3615,23 @@ export default function Call() {
           >
             <button
               onClick={handleToggleAudio}
+              disabled={audioForceActive}
               className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
-                isAudioMuted
+                audioForceActive
+                  ? 'bg-rose-600/80 cursor-not-allowed opacity-70'
+                  : isAudioMuted
                   ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
                   : 'bg-slate-800 hover:bg-slate-900'
               }`}
-              title={isAudioMuted ? 'Unmute microphone' : 'Mute microphone'}
+              title={
+                audioForceActive
+                  ? hostControls.audioForceAll
+                    ? 'Host muted all microphones'
+                    : 'Host has muted your microphone'
+                  : isAudioMuted
+                  ? 'Unmute microphone'
+                  : 'Mute microphone'
+              }
             >
               {isAudioMuted ? (
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3061,12 +3647,23 @@ export default function Call() {
 
             <button
               onClick={handleToggleVideo}
+              disabled={videoForceActive}
               className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
-                isVideoMuted
+                videoForceActive
+                  ? 'bg-rose-600/80 cursor-not-allowed opacity-70'
+                  : isVideoMuted
                   ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
                   : 'bg-slate-800 hover:bg-slate-900'
               }`}
-              title={isVideoMuted ? 'Turn camera on' : 'Turn camera off'}
+              title={
+                videoForceActive
+                  ? hostControls.videoForceAll
+                    ? 'Host disabled all cameras'
+                    : 'Host has disabled your camera'
+                  : isVideoMuted
+                  ? 'Turn camera on'
+                  : 'Turn camera off'
+              }
             >
               {isVideoMuted ? (
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3177,7 +3774,9 @@ export default function Call() {
             )}
 
             <button
-              onClick={leaveRoom}
+              onClick={() => {
+                void leaveRoom();
+              }}
               disabled={isLeaving}
               className="flex items-center gap-2 rounded-full bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_18px_40px_-24px_rgba(244,63,94,0.65)] transition hover:from-rose-600 hover:via-rose-700 hover:to-rose-800 disabled:cursor-not-allowed disabled:opacity-60"
               title={isLeaving ? 'Leaving room...' : 'Leave room'}
@@ -3197,7 +3796,14 @@ export default function Call() {
         </div>
       </div>
 
-      <ParticipantList isOpen={showParticipantList} onClose={() => setShowParticipantList(false)} />
+      <ParticipantList
+        isOpen={showParticipantList}
+        onClose={() => setShowParticipantList(false)}
+        isHost={isAdmin}
+        currentUserId={user?.id ?? null}
+        onForceMute={handleHostControlParticipant}
+        onRemoveParticipant={handleHostRemoveParticipant}
+      />
       {roomCode && (
         <>
           <PendingRequestsPanel

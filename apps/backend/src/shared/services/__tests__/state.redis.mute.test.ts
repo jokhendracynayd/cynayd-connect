@@ -18,6 +18,7 @@ vi.mock('../../database/redis', () => {
     mget: vi.fn(),
     del: vi.fn(),
     srem: vi.fn(),
+    setex: vi.fn(),
   };
 
   return {
@@ -52,6 +53,8 @@ const createPipeline = () => ({
   exec: vi.fn().mockResolvedValue([]),
 });
 
+let clientPipelineSpy: ReturnType<typeof vi.fn>;
+
 describe('RedisStateService mute state helpers', () => {
   beforeEach(() => {
     setPipeline(createPipeline());
@@ -61,6 +64,12 @@ describe('RedisStateService mute state helpers', () => {
     redisMock.mget.mockReset();
     redisMock.del.mockReset();
     redisMock.srem.mockReset();
+    redisMock.setex.mockReset();
+    clientPipelineSpy = vi.fn(() => getPipeline());
+    redisMock._client = {
+      pipeline: clientPipelineSpy,
+      mget: (...args: string[]) => redisMock.mget(...args),
+    };
   });
 
   it('persists participant mute state with TTL and set membership', async () => {
@@ -73,7 +82,7 @@ describe('RedisStateService mute state helpers', () => {
       videoMutedAt: 456,
     });
 
-    expect(redisMock.pipeline).toHaveBeenCalledTimes(1);
+    expect(clientPipelineSpy).toHaveBeenCalledTimes(1);
     expect(pipeline.sadd).toHaveBeenCalledWith(
       'connect:state:room:room-code:mute:participants',
       'user-123'
@@ -87,6 +96,25 @@ describe('RedisStateService mute state helpers', () => {
     expect(pipeline.exec).toHaveBeenCalled();
   });
 
+  it('persists forced mute metadata when provided', async () => {
+    const pipeline = getPipeline();
+
+    await RedisStateService.setParticipantMuteState('room-code', 'user-forced', {
+      isAudioMuted: true,
+      isVideoMuted: false,
+      forcedAudio: true,
+      forcedAudioAt: 111,
+      forcedBy: 'host-1',
+      forcedReason: 'background noise',
+    });
+
+    const payload = JSON.parse(pipeline.set.mock.calls[0][1]);
+    expect(payload.forcedAudio).toBe(true);
+    expect(payload.forcedAudioAt).toBe(111);
+    expect(payload.forcedBy).toBe('host-1');
+    expect(payload.forcedReason).toBe('background noise');
+  });
+
   it('deserializes participant mute state from Redis', async () => {
     redisMock.get.mockResolvedValueOnce(
       JSON.stringify({
@@ -97,6 +125,12 @@ describe('RedisStateService mute state helpers', () => {
         audioMutedAt: 1,
         videoMutedAt: 2,
         updatedAt: 3,
+        forcedAudio: true,
+        forcedVideo: false,
+        forcedAudioAt: 10,
+        forcedVideoAt: null,
+        forcedBy: 'host-1',
+        forcedReason: 'test',
       })
     );
 
@@ -113,6 +147,12 @@ describe('RedisStateService mute state helpers', () => {
       audioMutedAt: 1,
       videoMutedAt: 2,
       updatedAt: 3,
+      forcedAudio: true,
+      forcedVideo: false,
+      forcedAudioAt: 10,
+      forcedVideoAt: undefined,
+      forcedBy: 'host-1',
+      forcedReason: 'test',
     });
   });
 
@@ -125,6 +165,11 @@ describe('RedisStateService mute state helpers', () => {
         audioMutedAt: 100,
         videoMutedAt: 200,
         updatedAt: 300,
+        forcedAudio: true,
+        forcedVideo: false,
+        forcedAudioAt: 150,
+        forcedBy: 'host-2',
+        forcedReason: 'global mute',
       }),
       null,
     ]);
@@ -140,11 +185,19 @@ describe('RedisStateService mute state helpers', () => {
     );
     expect(result).toEqual({
       'user-1': {
+        roomCode: 'room-code',
+        userId: 'user-1',
         isAudioMuted: true,
         isVideoMuted: false,
         audioMutedAt: 100,
         videoMutedAt: 200,
         updatedAt: 300,
+        forcedAudio: true,
+        forcedVideo: false,
+        forcedAudioAt: 150,
+        forcedVideoAt: undefined,
+        forcedBy: 'host-2',
+        forcedReason: 'global mute',
       },
     });
   });
@@ -154,7 +207,7 @@ describe('RedisStateService mute state helpers', () => {
 
     await RedisStateService.clearParticipantMuteState('room-code', 'user-123');
 
-    expect(redisMock.pipeline).toHaveBeenCalledTimes(1);
+    expect(clientPipelineSpy).toHaveBeenCalledTimes(1);
     expect(pipeline.del).toHaveBeenCalledWith('connect:state:room:room-code:mute:user-123');
     expect(pipeline.srem).toHaveBeenCalledWith(
       'connect:state:room:room-code:mute:participants',
@@ -162,5 +215,73 @@ describe('RedisStateService mute state helpers', () => {
     );
     expect(pipeline.exec).toHaveBeenCalled();
   });
-});
 
+  describe('room control state helpers', () => {
+    it('persists room control state with TTL', async () => {
+      await RedisStateService.setRoomControlState('room-code', {
+        locked: true,
+        lockedBy: 'host-1',
+        lockedReason: 'security',
+      });
+
+      expect(redisMock.setex).toHaveBeenCalledWith(
+        'connect:state:room:room-code:control',
+        3600,
+        expect.stringContaining('"locked":true')
+      );
+    });
+
+    it('deserializes room control state from Redis', async () => {
+      redisMock.get.mockResolvedValueOnce(
+        JSON.stringify({
+          roomCode: 'room-code',
+          locked: true,
+          lockedBy: 'host-1',
+          lockedAt: 123,
+          lockedReason: 'security',
+          audioForceAll: true,
+          audioForcedBy: 'host-1',
+          audioForcedAt: 456,
+          audioForceReason: 'noise',
+          videoForceAll: false,
+          videoForcedBy: null,
+          videoForcedAt: null,
+          videoForceReason: null,
+          chatForceAll: true,
+          chatForcedBy: 'host-2',
+          chatForcedAt: 987,
+          chatForceReason: 'spam',
+          updatedAt: 789,
+        })
+      );
+
+      const state = await RedisStateService.getRoomControlState('room-code');
+
+      expect(state).toEqual({
+        roomCode: 'room-code',
+        locked: true,
+        lockedBy: 'host-1',
+        lockedAt: 123,
+        lockedReason: 'security',
+        audioForceAll: true,
+        audioForcedBy: 'host-1',
+        audioForcedAt: 456,
+        audioForceReason: 'noise',
+        videoForceAll: false,
+        videoForcedBy: null,
+        videoForcedAt: null,
+        videoForceReason: null,
+        chatForceAll: true,
+        chatForcedBy: 'host-2',
+        chatForcedAt: 987,
+        chatForceReason: 'spam',
+        updatedAt: 789,
+      });
+    });
+
+    it('clears room control state', async () => {
+      await RedisStateService.clearRoomControlState('room-code');
+      expect(redisMock.del).toHaveBeenCalledWith('connect:state:room:room-code:control');
+    });
+  });
+});

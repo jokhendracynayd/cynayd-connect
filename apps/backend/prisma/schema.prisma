@@ -21,6 +21,7 @@ model User {
   joinRequests     RoomJoinRequest[]
   sentMessages     ChatMessage[]     @relation("SentMessages")
   receivedMessages ChatMessage[]     @relation("ReceivedMessages")
+  controlStates    RoomControlState[]
 
   @@index([email])
 }
@@ -42,6 +43,8 @@ model Room {
   metrics         CallMetrics[]
   joinRequests    RoomJoinRequest[]
   chatMessages    ChatMessage[]
+  controlStates   RoomControlState[]
+  hostState       RoomHostState?
 
   @@index([roomCode])
   @@index([adminId])
@@ -96,6 +99,56 @@ model RoomJoinRequest {
   @@unique([roomId, userId])
   @@index([roomId, status])
   @@index([userId])
+}
+
+model RoomControlState {
+  id            String   @id @default(uuid())
+  roomId        String
+  room          Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  forcedAudio   Boolean  @default(false)
+  forcedVideo   Boolean  @default(false)
+  forcedAudioAt DateTime?
+  forcedVideoAt DateTime?
+  forcedBy      String?
+  forcedReason  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([roomId, userId])
+  @@index([roomId])
+  @@index([userId])
+  @@index([forcedBy])
+}
+
+model RoomHostState {
+  id             String   @id @default(uuid())
+  roomId         String   @unique
+  room           Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  locked         Boolean  @default(false)
+  lockedBy       String?
+  lockedAt       DateTime?
+  lockedReason   String?
+  audioForceAll  Boolean  @default(false)
+  audioForcedBy  String?
+  audioForcedAt  DateTime?
+  audioForceReason String?
+  videoForceAll  Boolean  @default(false)
+  videoForcedBy  String?
+  videoForcedAt  DateTime?
+  videoForceReason String?
+  chatForceAll   Boolean  @default(false)
+  chatForcedBy   String?
+  chatForcedAt   DateTime?
+  chatForceReason String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([locked])
+  @@index([audioForceAll])
+  @@index([videoForceAll])
+  @@index([chatForceAll])
 }
 
 enum ChatMessageType {

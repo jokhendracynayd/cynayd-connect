@@ -2,18 +2,56 @@ import { redisWithCircuitBreaker as redis } from '../database/redis';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 
+export interface RedisParticipantMuteStatePayload {
+  roomCode: string;
+  userId: string;
+  isAudioMuted: boolean;
+  isVideoMuted: boolean;
+  audioMutedAt: number | null;
+  videoMutedAt: number | null;
+  updatedAt: number;
+  forcedAudio?: boolean;
+  forcedVideo?: boolean;
+  forcedAudioAt?: number | null;
+  forcedVideoAt?: number | null;
+  forcedBy?: string | null;
+  forcedReason?: string | null;
+}
+
+export interface RedisRoomControlStatePayload {
+  roomCode: string;
+  locked: boolean;
+  lockedBy: string | null;
+  lockedAt: number | null;
+  lockedReason: string | null;
+  audioForceAll: boolean;
+  audioForcedBy: string | null;
+  audioForcedAt: number | null;
+  audioForceReason: string | null;
+  videoForceAll: boolean;
+  videoForcedBy: string | null;
+  videoForcedAt: number | null;
+  videoForceReason: string | null;
+  chatForceAll: boolean;
+  chatForcedBy: string | null;
+  chatForcedAt: number | null;
+  chatForceReason: string | null;
+  updatedAt: number;
+}
+
 /**
- * Redis-backed state management service
- * Stores metadata about Producers, Consumers, Transports, and Routers
- * for cross-server discovery in horizontal scaling setup.
- * 
- * Note: Actual Mediasoup objects stay in memory, but their metadata
- * (IDs, mappings, ownership) is stored in Redis.
- */
+* Redis-backed state management service
+* Stores metadata about Producers, Consumers, Transports, and Routers
+* for cross-server discovery in horizontal scaling setup.
+* 
+* Note: Actual Mediasoup objects stay in memory, but their metadata
+* (IDs, mappings, ownership) is stored in Redis.
+*/
 export class RedisStateService {
   private static readonly KEY_PREFIX = 'connect:state';
   private static readonly TTL_SECONDS = 3600; // 1 hour default TTL
   private static readonly MUTE_STATE_TTL_SECONDS = 3600; // 1 hour, refreshed on updates
+  private static readonly ROOM_CONTROL_TTL_SECONDS = 3600;
 
   // Producer metadata storage
   static async storeProducerMetadata(
@@ -326,20 +364,56 @@ export class RedisStateService {
       isVideoMuted: boolean;
       audioMutedAt?: number | null;
       videoMutedAt?: number | null;
+      forcedAudio?: boolean;
+      forcedVideo?: boolean;
+      forcedAudioAt?: number | null;
+      forcedVideoAt?: number | null;
+      forcedBy?: string | null;
+      forcedReason?: string | null;
+      updatedAt?: number;
     }
   ): Promise<void> {
     const key = `${this.KEY_PREFIX}:room:${roomCode}:mute:${userId}`;
     const setKey = `${this.KEY_PREFIX}:room:${roomCode}:mute:participants`;
 
-    const payload = {
+    const now = Date.now();
+    const payload: RedisParticipantMuteStatePayload = {
       roomCode,
       userId,
       isAudioMuted: state.isAudioMuted,
       isVideoMuted: state.isVideoMuted,
       audioMutedAt: state.audioMutedAt ?? null,
       videoMutedAt: state.videoMutedAt ?? null,
-      updatedAt: Date.now(),
+      updatedAt: state.updatedAt ?? now,
     };
+
+    if (typeof state.forcedAudio === 'boolean') {
+      payload.forcedAudio = state.forcedAudio;
+      payload.forcedAudioAt =
+        state.forcedAudioAt !== undefined
+          ? state.forcedAudioAt
+          : state.forcedAudio
+          ? now
+          : null;
+    }
+
+    if (typeof state.forcedVideo === 'boolean') {
+      payload.forcedVideo = state.forcedVideo;
+      payload.forcedVideoAt =
+        state.forcedVideoAt !== undefined
+          ? state.forcedVideoAt
+          : state.forcedVideo
+          ? now
+          : null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(state, 'forcedBy')) {
+      payload.forcedBy = state.forcedBy ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(state, 'forcedReason')) {
+      payload.forcedReason = state.forcedReason ?? null;
+    }
 
     const client = redis._client as any;
 
@@ -355,15 +429,10 @@ export class RedisStateService {
     }
   }
 
-  static async getParticipantMuteState(roomCode: string, userId: string): Promise<{
-    roomCode: string;
-    userId: string;
-    isAudioMuted: boolean;
-    isVideoMuted: boolean;
-    audioMutedAt: number | null;
-    videoMutedAt: number | null;
-    updatedAt: number;
-  } | null> {
+  static async getParticipantMuteState(
+    roomCode: string,
+    userId: string
+  ): Promise<RedisParticipantMuteStatePayload | null> {
     const key = `${this.KEY_PREFIX}:room:${roomCode}:mute:${userId}`;
     const data = await redis.get(key);
     if (!data) {
@@ -371,20 +440,47 @@ export class RedisStateService {
     }
 
     try {
-      return JSON.parse(data);
+      const parsed = JSON.parse(data) as RedisParticipantMuteStatePayload;
+      return {
+        roomCode: parsed.roomCode ?? roomCode,
+        userId: parsed.userId ?? userId,
+        isAudioMuted: typeof parsed.isAudioMuted === 'boolean' ? parsed.isAudioMuted : true,
+        isVideoMuted: typeof parsed.isVideoMuted === 'boolean' ? parsed.isVideoMuted : true,
+        audioMutedAt:
+          parsed.audioMutedAt !== undefined && parsed.audioMutedAt !== null
+            ? parsed.audioMutedAt
+            : null,
+        videoMutedAt:
+          parsed.videoMutedAt !== undefined && parsed.videoMutedAt !== null
+            ? parsed.videoMutedAt
+            : null,
+        updatedAt: parsed.updatedAt ?? Date.now(),
+        forcedAudio: parsed.forcedAudio,
+        forcedVideo: parsed.forcedVideo,
+        forcedAudioAt:
+          parsed.forcedAudioAt !== undefined && parsed.forcedAudioAt !== null
+            ? parsed.forcedAudioAt
+            : undefined,
+        forcedVideoAt:
+          parsed.forcedVideoAt !== undefined && parsed.forcedVideoAt !== null
+            ? parsed.forcedVideoAt
+            : undefined,
+        forcedBy: Object.prototype.hasOwnProperty.call(parsed, 'forcedBy')
+          ? parsed.forcedBy ?? null
+          : undefined,
+        forcedReason: Object.prototype.hasOwnProperty.call(parsed, 'forcedReason')
+          ? parsed.forcedReason ?? null
+          : undefined,
+      };
     } catch (error) {
       logger.warn('Failed to parse mute state from Redis', { roomCode, userId, error });
       return null;
     }
   }
 
-  static async getRoomMuteStates(roomCode: string): Promise<Record<string, {
-    isAudioMuted: boolean;
-    isVideoMuted: boolean;
-    audioMutedAt: number | null;
-    videoMutedAt: number | null;
-    updatedAt: number;
-  }>> {
+  static async getRoomMuteStates(
+    roomCode: string
+  ): Promise<Record<string, RedisParticipantMuteStatePayload>> {
     const setKey = `${this.KEY_PREFIX}:room:${roomCode}:mute:participants`;
     const participantIds = await redis.smembers(setKey);
 
@@ -398,13 +494,7 @@ export class RedisStateService {
       ? await client.mget(...keys)
       : await Promise.all(keys.map(key => redis.get(key)));
 
-    const results: Record<string, {
-      isAudioMuted: boolean;
-      isVideoMuted: boolean;
-      audioMutedAt: number | null;
-      videoMutedAt: number | null;
-      updatedAt: number;
-    }> = {};
+    const results: Record<string, RedisParticipantMuteStatePayload> = {};
 
     participantIds.forEach((userId, index) => {
       const value = values[index];
@@ -413,13 +503,31 @@ export class RedisStateService {
       }
 
       try {
-        const parsed = JSON.parse(value);
+        const parsed = JSON.parse(value) as RedisParticipantMuteStatePayload;
         results[userId] = {
-          isAudioMuted: parsed.isAudioMuted,
-          isVideoMuted: parsed.isVideoMuted,
-          audioMutedAt: parsed.audioMutedAt ?? null,
-          videoMutedAt: parsed.videoMutedAt ?? null,
+          roomCode: parsed.roomCode ?? roomCode,
+          userId: parsed.userId ?? userId,
+          isAudioMuted: typeof parsed.isAudioMuted === 'boolean' ? parsed.isAudioMuted : true,
+          isVideoMuted: typeof parsed.isVideoMuted === 'boolean' ? parsed.isVideoMuted : true,
+          audioMutedAt:
+            parsed.audioMutedAt !== undefined && parsed.audioMutedAt !== null
+              ? parsed.audioMutedAt
+              : null,
+          videoMutedAt:
+            parsed.videoMutedAt !== undefined && parsed.videoMutedAt !== null
+              ? parsed.videoMutedAt
+              : null,
           updatedAt: parsed.updatedAt ?? Date.now(),
+          forcedAudio: parsed.forcedAudio,
+          forcedVideo: parsed.forcedVideo,
+          forcedAudioAt: parsed.forcedAudioAt,
+          forcedVideoAt: parsed.forcedVideoAt,
+          forcedBy: Object.prototype.hasOwnProperty.call(parsed, 'forcedBy')
+            ? parsed.forcedBy ?? null
+            : undefined,
+          forcedReason: Object.prototype.hasOwnProperty.call(parsed, 'forcedReason')
+            ? parsed.forcedReason ?? null
+            : undefined,
         };
       } catch (error) {
         logger.warn('Failed to parse mute state entry from Redis', { roomCode, userId, error });
@@ -445,6 +553,231 @@ export class RedisStateService {
       await redis.del(key);
       await redis.srem(setKey, userId);
     }
+  }
+
+  static async setRoomControlState(
+    roomCode: string,
+    updates: Partial<Omit<RedisRoomControlStatePayload, 'roomCode' | 'updatedAt'>> & {
+      updatedAt?: number;
+    }
+  ): Promise<RedisRoomControlStatePayload> {
+    const key = `${this.KEY_PREFIX}:room:${roomCode}:control`;
+    const existing = await this.getRoomControlState(roomCode);
+    const base: RedisRoomControlStatePayload =
+      existing ?? {
+        roomCode,
+        locked: false,
+        lockedBy: null,
+        lockedAt: null,
+        lockedReason: null,
+        audioForceAll: false,
+        audioForcedBy: null,
+        audioForcedAt: null,
+        audioForceReason: null,
+        videoForceAll: false,
+        videoForcedBy: null,
+        videoForcedAt: null,
+        videoForceReason: null,
+        chatForceAll: false,
+        chatForcedBy: null,
+        chatForcedAt: null,
+        chatForceReason: null,
+        updatedAt: Date.now(),
+      };
+
+    const now = updates.updatedAt ?? Date.now();
+
+    const nextLocked = updates.locked ?? base.locked;
+    const lockedBy =
+      updates.locked !== undefined
+        ? nextLocked
+          ? updates.lockedBy ?? base.lockedBy ?? null
+          : null
+        : updates.lockedBy ?? base.lockedBy ?? null;
+    const lockedAt =
+      updates.locked !== undefined
+        ? nextLocked
+          ? updates.lockedAt ?? now
+          : null
+        : updates.lockedAt ?? base.lockedAt ?? null;
+
+    const lockedReason =
+      updates.locked !== undefined
+        ? nextLocked
+          ? Object.prototype.hasOwnProperty.call(updates, 'lockedReason')
+            ? updates.lockedReason ?? null
+            : base.lockedReason ?? null
+          : null
+        : Object.prototype.hasOwnProperty.call(updates, 'lockedReason')
+        ? updates.lockedReason ?? null
+        : base.lockedReason ?? null;
+
+    const nextAudioForceAll = updates.audioForceAll ?? base.audioForceAll;
+    const audioForcedBy =
+      updates.audioForceAll !== undefined
+        ? nextAudioForceAll
+          ? updates.audioForcedBy ?? base.audioForcedBy ?? null
+          : null
+        : updates.audioForcedBy ?? base.audioForcedBy ?? null;
+    const audioForcedAt =
+      updates.audioForceAll !== undefined
+        ? nextAudioForceAll
+          ? updates.audioForcedAt ?? now
+          : null
+        : updates.audioForcedAt ?? base.audioForcedAt ?? null;
+
+    const audioForceReason =
+      updates.audioForceAll !== undefined
+        ? nextAudioForceAll
+          ? Object.prototype.hasOwnProperty.call(updates, 'audioForceReason')
+            ? updates.audioForceReason ?? null
+            : base.audioForceReason ?? null
+          : null
+        : Object.prototype.hasOwnProperty.call(updates, 'audioForceReason')
+        ? updates.audioForceReason ?? null
+        : base.audioForceReason ?? null;
+
+    const nextVideoForceAll = updates.videoForceAll ?? base.videoForceAll;
+    const videoForcedBy =
+      updates.videoForceAll !== undefined
+        ? nextVideoForceAll
+          ? updates.videoForcedBy ?? base.videoForcedBy ?? null
+          : null
+        : updates.videoForcedBy ?? base.videoForcedBy ?? null;
+    const videoForcedAt =
+      updates.videoForceAll !== undefined
+        ? nextVideoForceAll
+          ? updates.videoForcedAt ?? now
+          : null
+        : updates.videoForcedAt ?? base.videoForcedAt ?? null;
+
+    const videoForceReason =
+      updates.videoForceAll !== undefined
+        ? nextVideoForceAll
+          ? Object.prototype.hasOwnProperty.call(updates, 'videoForceReason')
+            ? updates.videoForceReason ?? null
+            : base.videoForceReason ?? null
+          : null
+        : Object.prototype.hasOwnProperty.call(updates, 'videoForceReason')
+        ? updates.videoForceReason ?? null
+        : base.videoForceReason ?? null;
+
+    const nextChatForceAll = updates.chatForceAll ?? base.chatForceAll;
+    const chatForcedBy =
+      updates.chatForceAll !== undefined
+        ? nextChatForceAll
+          ? updates.chatForcedBy ?? base.chatForcedBy ?? null
+          : null
+        : updates.chatForcedBy ?? base.chatForcedBy ?? null;
+    const chatForcedAt =
+      updates.chatForceAll !== undefined
+        ? nextChatForceAll
+          ? updates.chatForcedAt ?? now
+          : null
+        : updates.chatForcedAt ?? base.chatForcedAt ?? null;
+
+    const chatForceReason =
+      updates.chatForceAll !== undefined
+        ? nextChatForceAll
+          ? Object.prototype.hasOwnProperty.call(updates, 'chatForceReason')
+            ? updates.chatForceReason ?? null
+            : base.chatForceReason ?? null
+          : null
+        : Object.prototype.hasOwnProperty.call(updates, 'chatForceReason')
+        ? updates.chatForceReason ?? null
+        : base.chatForceReason ?? null;
+
+    const next: RedisRoomControlStatePayload = {
+      roomCode,
+      locked: nextLocked,
+      lockedBy,
+      lockedAt,
+      lockedReason,
+      audioForceAll: nextAudioForceAll,
+      audioForcedBy,
+      audioForcedAt,
+      audioForceReason,
+      videoForceAll: nextVideoForceAll,
+      videoForcedBy,
+      videoForcedAt,
+      videoForceReason,
+      chatForceAll: nextChatForceAll,
+      chatForcedBy,
+      chatForcedAt,
+      chatForceReason,
+      updatedAt: now,
+    };
+
+    await redis.setex(key, this.ROOM_CONTROL_TTL_SECONDS, JSON.stringify(next));
+    return next;
+  }
+
+  static async getRoomControlState(
+    roomCode: string
+  ): Promise<RedisRoomControlStatePayload | null> {
+    const key = `${this.KEY_PREFIX}:room:${roomCode}:control`;
+    const data = await redis.get(key);
+    if (!data) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(data) as RedisRoomControlStatePayload;
+      return {
+        roomCode: parsed.roomCode ?? roomCode,
+        locked: typeof parsed.locked === 'boolean' ? parsed.locked : false,
+        lockedBy: Object.prototype.hasOwnProperty.call(parsed, 'lockedBy')
+          ? parsed.lockedBy ?? null
+          : null,
+        lockedAt:
+          parsed.lockedAt !== undefined && parsed.lockedAt !== null ? parsed.lockedAt : null,
+        lockedReason: Object.prototype.hasOwnProperty.call(parsed, 'lockedReason')
+          ? parsed.lockedReason ?? null
+          : null,
+        audioForceAll: typeof parsed.audioForceAll === 'boolean' ? parsed.audioForceAll : false,
+        audioForcedBy: Object.prototype.hasOwnProperty.call(parsed, 'audioForcedBy')
+          ? parsed.audioForcedBy ?? null
+          : null,
+        audioForcedAt:
+          parsed.audioForcedAt !== undefined && parsed.audioForcedAt !== null
+            ? parsed.audioForcedAt
+            : null,
+        audioForceReason: Object.prototype.hasOwnProperty.call(parsed, 'audioForceReason')
+          ? parsed.audioForceReason ?? null
+          : null,
+        videoForceAll: typeof parsed.videoForceAll === 'boolean' ? parsed.videoForceAll : false,
+        videoForcedBy: Object.prototype.hasOwnProperty.call(parsed, 'videoForcedBy')
+          ? parsed.videoForcedBy ?? null
+          : null,
+        videoForcedAt:
+          parsed.videoForcedAt !== undefined && parsed.videoForcedAt !== null
+            ? parsed.videoForcedAt
+            : null,
+        videoForceReason: Object.prototype.hasOwnProperty.call(parsed, 'videoForceReason')
+          ? parsed.videoForceReason ?? null
+          : null,
+        chatForceAll: typeof parsed.chatForceAll === 'boolean' ? parsed.chatForceAll : false,
+        chatForcedBy: Object.prototype.hasOwnProperty.call(parsed, 'chatForcedBy')
+          ? parsed.chatForcedBy ?? null
+          : null,
+        chatForcedAt:
+          parsed.chatForcedAt !== undefined && parsed.chatForcedAt !== null
+            ? parsed.chatForcedAt
+            : null,
+        chatForceReason: Object.prototype.hasOwnProperty.call(parsed, 'chatForceReason')
+          ? parsed.chatForceReason ?? null
+          : null,
+        updatedAt: parsed.updatedAt ?? Date.now(),
+      };
+    } catch (error) {
+      logger.warn('Failed to parse room control state from Redis', { roomCode, error });
+      return null;
+    }
+  }
+
+  static async clearRoomControlState(roomCode: string): Promise<void> {
+    const key = `${this.KEY_PREFIX}:room:${roomCode}:control`;
+    await redis.del(key);
   }
 }
 

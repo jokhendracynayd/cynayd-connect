@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ChatMessageType } from '@prisma/client';
 import { ChatService } from '../chat.service';
+import prisma from '../../database/prisma';
 
 vi.mock('../../database/prisma', () => {
   return {
@@ -22,8 +23,7 @@ vi.mock('../../utils/logger', () => ({
   },
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const prisma = require('../../database/prisma').default as {
+const prismaMock = prisma as unknown as {
   chatMessage: {
     create: ReturnType<typeof vi.fn>;
     findMany: ReturnType<typeof vi.fn>;
@@ -54,7 +54,7 @@ describe('ChatService', () => {
   });
 
   it('persists chat messages with metadata', async () => {
-    prisma.chatMessage.create.mockResolvedValue(baseMessage);
+    prismaMock.chatMessage.create.mockResolvedValue(baseMessage);
 
     const result = await ChatService.saveMessage({
       roomId: baseMessage.roomId,
@@ -64,7 +64,7 @@ describe('ChatService', () => {
       messageType: ChatMessageType.BROADCAST,
     });
 
-    expect(prisma.chatMessage.create).toHaveBeenCalledWith({
+    expect(prismaMock.chatMessage.create).toHaveBeenCalledWith({
       data: {
         roomId: baseMessage.roomId,
         senderId: baseMessage.senderId,
@@ -79,14 +79,14 @@ describe('ChatService', () => {
 
   it('returns broadcast messages in ascending order', async () => {
     const newer = { ...baseMessage, id: 'newer', createdAt: new Date('2025-11-09T11:00:00Z') };
-    prisma.chatMessage.findMany.mockResolvedValue([newer, baseMessage]);
+    prismaMock.chatMessage.findMany.mockResolvedValue([newer, baseMessage]);
 
     const messages = await ChatService.getBroadcastMessages({
       roomId: baseMessage.roomId,
       limit: 25,
     });
 
-    expect(prisma.chatMessage.findMany).toHaveBeenCalledWith(
+    expect(prismaMock.chatMessage.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           roomId: baseMessage.roomId,
@@ -107,7 +107,7 @@ describe('ChatService', () => {
       messageType: ChatMessageType.DIRECT,
       recipientId: 'user-b',
     };
-    prisma.chatMessage.findMany.mockResolvedValue([directMessage]);
+    prismaMock.chatMessage.findMany.mockResolvedValue([directMessage]);
 
     const messages = await ChatService.getDirectMessages({
       roomId: baseMessage.roomId,
@@ -116,7 +116,7 @@ describe('ChatService', () => {
       limit: 10,
     });
 
-    expect(prisma.chatMessage.findMany).toHaveBeenCalledWith(
+    expect(prismaMock.chatMessage.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           roomId: baseMessage.roomId,
