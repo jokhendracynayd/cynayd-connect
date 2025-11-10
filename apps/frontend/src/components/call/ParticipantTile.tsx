@@ -1,5 +1,4 @@
 import { useRef, useEffect } from 'react';
-import { shallow } from 'zustand/shallow';
 import { useCallStore, type ParticipantRole } from '../../store/callStore';
 import NetworkIndicator from './NetworkIndicator';
 
@@ -22,13 +21,10 @@ interface ParticipantTileProps {
 
 export default function ParticipantTile({ participant, stream, isLocal = false }: ParticipantTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { activeSpeakerId, qualityEntry } = useCallStore(
-    state => ({
-      activeSpeakerId: state.activeSpeakerId,
-      qualityEntry: state.networkQuality.get(participant.userId),
-    }),
-    shallow
-  );
+  const { activeSpeakerId, qualityEntry } = useCallStore(state => ({
+    activeSpeakerId: state.activeSpeakerId,
+    qualityEntry: state.networkQuality.get(participant.userId),
+  }));
   const isActiveSpeaker = activeSpeakerId === participant.userId;
   const upstreamSummary = qualityEntry?.upstream ?? null;
   const downstreamSummary = qualityEntry?.downstream ?? null;
@@ -56,7 +52,6 @@ export default function ParticipantTile({ participant, stream, isLocal = false }
 
   // Determine what to display
   const showVideo = !participant.isVideoMuted && stream?.getVideoTracks().some(t => t.readyState === 'live');
-  const showAvatar = participant.isVideoMuted || !showVideo;
 
   return (
     <div

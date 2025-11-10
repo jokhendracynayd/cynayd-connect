@@ -370,6 +370,7 @@ export async function handleSocketLeave(
   socket.data.participantRole = undefined;
   socket.data.isHost = false;
   socket.data.isAdmin = false;
+  socket.data.roomAdminId = undefined;
 
   logger.info('handleSocketLeave: user left room', {
     socketId: socket.id,

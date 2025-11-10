@@ -1,6 +1,7 @@
 # Host Controls Hardening Checklist
 
 ## Signaling & Backend
+- [x] Support co-host role promotion/demotion via signaling with database persistence and socket broadcasts.
 - [ ] Load-test simultaneous host actions (mute-all, lock, remove) at 50+ participants and capture Mediator/Redis latency metrics.
 - [ ] Verify Redis TTL refresh for participant control entries during hour-long sessions; alert if nearing expiry.
 - [ ] Confirm `RoomHostState` persistence survives process restarts and cross-node routing (assign room to alternate instance and rejoin).

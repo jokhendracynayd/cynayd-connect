@@ -26,7 +26,7 @@ Enhance the video calling experience with production-ready features including sc
 - [x] Users can select preferred devices ✅ **VERIFIED**: `src/pages/PreJoin.tsx`, `src/store/callStore.ts` - Device selection working
 - [x] Network quality shown to users ✅ **VERIFIED**: `networkMonitor.ts`, `callStore.ts`, `ParticipantTile.tsx`
 - [x] 5+ users can be in a room ✅ **VERIFIED**: Redis-backed scaling supports multiple users, horizontal scaling ready
-- [ ] Host can control participants ⏳ **TODO**: Host controls (mute all) not implemented
+- [x] Host can control participants ✅ **VERIFIED**: Host mute/lock/chat controls implemented (`room.handler.ts`, `callStore.ts`, `Call.tsx`)
 - [ ] Reconnection on network loss ⏳ **PARTIAL**: Basic reconnection in place, needs enhancement
 - [ ] Zero crashes during 1-hour call ⏳ **TODO**: Needs stress testing
 
@@ -521,7 +521,7 @@ export default function MuteAllControl({ isHost }: { isHost: boolean }) {
 - [x] Participant list enhanced ✅ **VERIFIED**: `Call.tsx` shows participants with remote streams, user info
 - [x] Device selection working ✅ **VERIFIED**: PreJoin page with device selection, Call.tsx with device switching
 - [x] Network indicators showing ✅ **VERIFIED**: Live metrics via `networkMonitor.ts`, `callStore.ts`, `NetworkIndicator.tsx`
-- [ ] Host controls working ⏳ **TODO**: Host controls (mute all, remove user) not implemented
+- [x] Host controls working ✅ **VERIFIED**: Global mute/chat lock, participant removal in `room.handler.ts`, UI wiring in `Call.tsx`
 - [x] Error handling improved ✅ **VERIFIED**: Toast-backed error flows in `Call.tsx`, media/socket managers
 - [ ] Reconnection logic working ⏳ **PARTIAL**: Socket auto-retry in `lib/socket.ts`, needs media/session restore
 

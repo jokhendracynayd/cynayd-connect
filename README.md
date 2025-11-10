@@ -141,6 +141,42 @@ pnpm db:studio     # Open Prisma Studio
 
 ---
 
+## CI/CD
+
+This repository ships with GitHub Actions workflows that automate production releases:
+
+- **Deploy Backend** – `.github/workflows/backend-deploy.yml`
+- **Deploy Frontend** – `.github/workflows/frontend-deploy.yml`
+
+Create the following repository secrets before enabling the pipelines:
+
+| Secret | Purpose |
+| --- | --- |
+| `EC2_HOST` | Public hostname or IP of the backend EC2 instance |
+| `EC2_USER` | SSH user (e.g. `ubuntu`, `ec2-user`) |
+| `EC2_SSH_KEY` | Private key with access to the instance (PEM contents) |
+| `EC2_DEPLOY_DIR` | Absolute path on the server where the backend should live (e.g. `/var/www/connect`) |
+| `VERCEL_TOKEN` | Vercel API token for the frontend project |
+| `VERCEL_ORG_ID` | Vercel organization ID |
+| `VERCEL_PROJECT_ID` | Vercel project ID for the frontend |
+
+### Backend deploy workflow
+1. Installs workspace dependencies with PNPM.
+2. Builds `apps/backend` to `dist/`.
+3. Packages the build artefacts and uploads `backend.tar.gz` to the EC2 host.
+4. Extracts the bundle on the server, installs production dependencies, and reloads the PM2 process `connect-backend` (starts it if missing).
+
+Ensure PNPM/Node and PM2 are available on the instance. If you manage the process differently (e.g. Docker or systemd), edit the SSH step accordingly.
+
+### Frontend deploy workflow
+1. Installs workspace deps and fetches Vercel environment configuration.
+2. Runs `vercel build` in `apps/frontend`.
+3. Deploys the prebuilt bundle to Vercel production.
+
+Running these workflows is safe either on pushes to `main` or manually via “Run workflow”.
+
+---
+
 ## Project Roadmap
 
 ### Phase 1: Monolithic Web App (10 weeks)

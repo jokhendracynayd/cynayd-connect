@@ -102,7 +102,7 @@ export default function ParticipantList({
                     Host
                   </span>
                 )}
-                {participant.role === 'COHOST' && participant.role !== 'HOST' && (
+                {participant.role === 'COHOST' && (
                   <span className="px-2 py-0.5 text-[11px] font-semibold text-indigo-700 bg-indigo-100 rounded-full tracking-wide uppercase">
                     Co-host
                   </span>

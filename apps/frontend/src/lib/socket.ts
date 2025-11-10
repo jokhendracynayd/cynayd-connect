@@ -139,13 +139,14 @@ class SocketManager {
   }
 
   leaveRoom(): Promise<any> {
-    return new Promise((resolve, reject) => {
+    return new Promise(resolve => {
       if (!this.socket || !this.socket.connected) {
         // If socket is not connected, resolve immediately (backend will cleanup on disconnect)
         console.log('Socket not connected, skipping leaveRoom emit');
-        return resolve({ success: true, skipped: true });
+        resolve({ success: true, skipped: true });
+        return;
       }
-      
+
       let resolved = false;
       const timeout = setTimeout(() => {
         if (!resolved) {
@@ -155,7 +156,7 @@ class SocketManager {
           resolve({ success: true, timeout: true });
         }
       }, 3000); // 3 second timeout
-      
+
       this.socket.emit('leaveRoom', {}, (response: any) => {
         if (!resolved) {
           resolved = true;
@@ -408,14 +409,8 @@ class SocketManager {
     });
   }
 
-  updateRoomSettings(settings: { isPublic: boolean }): Promise<any> {
-    return new Promise((resolve, reject) => {
-      if (!this.socket) return reject(new Error('Not connected'));
-      
-      // Room settings are updated via API, not socket
-      // This is a placeholder - actual implementation will use API client
-      reject(new Error('Use API client for room settings'));
-    });
+  updateRoomSettings(): Promise<any> {
+    return Promise.reject(new Error('Use API client for room settings'));
   }
 
   on(event: string, callback: Function) {

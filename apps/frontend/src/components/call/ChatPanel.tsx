@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import { socketManager } from '../../lib/socket';
 import { EVERYONE_CONVERSATION_ID, useCallStore } from '../../store/callStore';
