@@ -413,7 +413,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
 
     if (options?.requireHost) {
       if (!isHost) {
-        throw new ForbiddenError('Only the room host can perform this action.');
+      throw new ForbiddenError('Only the room host can perform this action.');
       }
     } else if (!isModerator) {
       throw new ForbiddenError('Only hosts or co-hosts can perform this action.');
@@ -583,13 +583,13 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       forcedAudioAt:
         targets.has('audio')
           ? shouldForceAudio
-            ? timestamp
+          ? timestamp
             : null
           : redisState?.forcedAudioAt,
       forcedVideoAt:
         targets.has('video')
           ? shouldForceVideo
-            ? timestamp
+          ? timestamp
             : null
           : redisState?.forcedVideoAt,
       forcedBy:
@@ -623,13 +623,13 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       forcedAudioAt:
         targets.has('audio')
           ? shouldForceAudio
-            ? new Date(timestamp)
+          ? new Date(timestamp)
             : null
           : undefined,
       forcedVideoAt:
         targets.has('video')
           ? shouldForceVideo
-            ? new Date(timestamp)
+          ? new Date(timestamp)
             : null
           : undefined,
       forcedBy:

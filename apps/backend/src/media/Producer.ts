@@ -1,7 +1,8 @@
-import { Producer } from 'mediasoup/node/lib/types';
+import * as mediasoup from 'mediasoup';
 import { logger } from '../shared/utils/logger';
 import { RedisStateService } from '../shared/services/state.redis';
 
+type Producer = mediasoup.types.Producer;
 type ProducerSource = 'microphone' | 'camera' | 'screen' | 'data' | 'unknown';
 
 export class ProducerManager {

@@ -146,7 +146,7 @@ class SocketManager {
         resolve({ success: true, skipped: true });
         return;
       }
-
+      
       let resolved = false;
       const timeout = setTimeout(() => {
         if (!resolved) {
@@ -156,7 +156,7 @@ class SocketManager {
           resolve({ success: true, timeout: true });
         }
       }, 3000); // 3 second timeout
-
+      
       this.socket.emit('leaveRoom', {}, (response: any) => {
         if (!resolved) {
           resolved = true;

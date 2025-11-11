@@ -374,28 +374,28 @@ const mergeParticipantWithUpdates = (existing: Participant, updates: Participant
       : nextRole === 'HOST' || nextRole === 'COHOST';
 
   return {
-    userId: existing.userId,
-    name: updates.name ?? existing.name,
-    email: updates.email ?? existing.email,
-    picture: updates.picture ?? existing.picture,
+  userId: existing.userId,
+  name: updates.name ?? existing.name,
+  email: updates.email ?? existing.email,
+  picture: updates.picture ?? existing.picture,
     role: nextRole,
-    isAudioMuted: updates.isAudioMuted ?? existing.isAudioMuted,
-    isVideoMuted: updates.isVideoMuted ?? existing.isVideoMuted,
-    isAudioForceMuted: updates.isAudioForceMuted ?? existing.isAudioForceMuted,
-    isVideoForceMuted: updates.isVideoForceMuted ?? existing.isVideoForceMuted,
-    isSpeaking: updates.isSpeaking ?? existing.isSpeaking,
+  isAudioMuted: updates.isAudioMuted ?? existing.isAudioMuted,
+  isVideoMuted: updates.isVideoMuted ?? existing.isVideoMuted,
+  isAudioForceMuted: updates.isAudioForceMuted ?? existing.isAudioForceMuted,
+  isVideoForceMuted: updates.isVideoForceMuted ?? existing.isVideoForceMuted,
+  isSpeaking: updates.isSpeaking ?? existing.isSpeaking,
     isAdmin: nextIsAdmin,
-    hasRaisedHand: updates.hasRaisedHand ?? existing.hasRaisedHand,
-    audioForceMutedAt:
-      updates.audioForceMutedAt !== undefined ? updates.audioForceMutedAt : existing.audioForceMutedAt ?? null,
-    videoForceMutedAt:
-      updates.videoForceMutedAt !== undefined ? updates.videoForceMutedAt : existing.videoForceMutedAt ?? null,
-    audioForceMutedBy:
-      updates.audioForceMutedBy !== undefined ? updates.audioForceMutedBy : existing.audioForceMutedBy ?? null,
-    videoForceMutedBy:
-      updates.videoForceMutedBy !== undefined ? updates.videoForceMutedBy : existing.videoForceMutedBy ?? null,
-    forceMuteReason:
-      updates.forceMuteReason !== undefined ? updates.forceMuteReason : existing.forceMuteReason ?? null,
+  hasRaisedHand: updates.hasRaisedHand ?? existing.hasRaisedHand,
+  audioForceMutedAt:
+    updates.audioForceMutedAt !== undefined ? updates.audioForceMutedAt : existing.audioForceMutedAt ?? null,
+  videoForceMutedAt:
+    updates.videoForceMutedAt !== undefined ? updates.videoForceMutedAt : existing.videoForceMutedAt ?? null,
+  audioForceMutedBy:
+    updates.audioForceMutedBy !== undefined ? updates.audioForceMutedBy : existing.audioForceMutedBy ?? null,
+  videoForceMutedBy:
+    updates.videoForceMutedBy !== undefined ? updates.videoForceMutedBy : existing.videoForceMutedBy ?? null,
+  forceMuteReason:
+    updates.forceMuteReason !== undefined ? updates.forceMuteReason : existing.forceMuteReason ?? null,
   };
 };
 

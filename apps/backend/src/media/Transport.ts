@@ -1,14 +1,15 @@
-import type { Router, WebRtcTransport } from 'mediasoup';
+import * as mediasoup from 'mediasoup';
 import { mediasoupConfig } from '../shared/config/mediasoup.config';
 import { logger } from '../shared/utils/logger';
 import { RedisStateService } from '../shared/services/state.redis';
 
+type Router = mediasoup.types.Router;
+type WebRtcTransport = mediasoup.types.WebRtcTransport;
+
 // Store event listeners for cleanup
 type TransportEventHandlers = {
   icestatechange: (iceState: string) => void;
-  icecandidate: (candidate: any) => void;
   dtlsstatechange: (dtlsState: string) => void;
-  close: () => void;
 };
 
 export class TransportManager {
@@ -28,16 +29,6 @@ export class TransportManager {
       icestatechange: (iceState: string) => {
         logger.debug(`Transport ${transport.id} ICE state: ${iceState}`);
       },
-      icecandidate: (candidate: any) => {
-        logger.debug(`Transport ${transport.id} ICE candidate:`, {
-          foundation: candidate?.foundation,
-          priority: candidate?.priority,
-          ip: candidate?.ip,
-          port: candidate?.port,
-          type: candidate?.type,
-          protocol: candidate?.protocol,
-        });
-      },
       dtlsstatechange: (dtlsState: string) => {
         logger.debug(`Transport ${transport.id} DTLS state: ${dtlsState}`);
         if (dtlsState === 'closed') {
@@ -46,19 +37,11 @@ export class TransportManager {
           transport.close();
         }
       },
-      close: () => {
-        // Remove from maps and clean up handlers
-        this.removeEventListeners(transport.id);
-        this.transports.delete(transport.id);
-        logger.debug(`Transport ${transport.id} closed`);
-      },
     };
 
     // Attach event listeners
     transport.on('icestatechange', handlers.icestatechange);
-    transport.on('icecandidate', handlers.icecandidate);
     transport.on('dtlsstatechange', handlers.dtlsstatechange);
-    transport.on('close', handlers.close);
 
     // Store handlers for cleanup
     this.eventHandlers.set(transport.id, handlers);
@@ -130,9 +113,7 @@ export class TransportManager {
     if (transport && handlers) {
       // Remove all event listeners
       transport.off('icestatechange', handlers.icestatechange);
-      transport.off('icecandidate', handlers.icecandidate);
       transport.off('dtlsstatechange', handlers.dtlsstatechange);
-      transport.off('close', handlers.close);
 
       // Remove handlers from map
       this.eventHandlers.delete(transportId);

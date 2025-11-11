@@ -54,3 +54,6 @@ Thumbs.db
 *.pid.lock
 
 certs/*
+.vercel
+apps/backend/deploy-backend.sh
+apps/frontend/deploy-frontend.sh

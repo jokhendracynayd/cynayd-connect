@@ -1,8 +1,9 @@
 import * as mediasoup from 'mediasoup';
-import { Worker } from 'mediasoup/node/lib/types';
 import { mediasoupConfig } from '../shared/config/mediasoup.config';
 import { logger } from '../shared/utils/logger';
 import os from 'os';
+
+type Worker = mediasoup.types.Worker;
 
 interface WorkerWithIndex {
   worker: Worker;

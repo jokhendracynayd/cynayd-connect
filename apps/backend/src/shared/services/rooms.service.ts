@@ -1,6 +1,5 @@
 import prisma from '../database/prisma';
 import { Prisma, RoomControlState, ParticipantRole } from '@prisma/client';
-import type { Participant as PrismaParticipant } from '@prisma/client';
 import { NotFoundError, ForbiddenError, ConflictError } from '../utils/errors';
 import { logger } from '../utils/logger';
 

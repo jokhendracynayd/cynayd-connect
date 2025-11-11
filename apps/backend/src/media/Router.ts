@@ -1,9 +1,11 @@
-import { Router } from 'mediasoup/node/lib/types';
+import * as mediasoup from 'mediasoup';
 import { WorkerManager } from './Worker';
 import { mediasoupConfig } from '../shared/config/mediasoup.config';
 import { logger } from '../shared/utils/logger';
 import { RedisStateService } from '../shared/services/state.redis';
 import { RoomRoutingService } from '../shared/services/room-routing.service';
+
+type Router = mediasoup.types.Router;
 
 export class RouterManager {
   private static routers: Map<string, Router> = new Map();
@@ -40,7 +42,7 @@ export class RouterManager {
 
     // Create router
     const router = await worker.createRouter({
-      mediaCodecs: mediasoupConfig.router.mediaCodecs,
+      mediaCodecs: mediasoupConfig.router.mediaCodecs as any,
     });
 
     logger.info(`Router created for room ${roomId} (Router ID: ${router.id}) on worker index ${workerIndex}`);

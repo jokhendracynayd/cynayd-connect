@@ -12,13 +12,13 @@ export class TokenService {
     const accessToken = jwt.sign(
       { userId, type: 'access' } as TokenPayload,
       config.jwt.secret,
-      { expiresIn: config.jwt.expiresIn }
+      { expiresIn: config.jwt.expiresIn } as any
     );
 
     const refreshToken = jwt.sign(
       { userId, type: 'refresh' } as TokenPayload,
       config.jwt.secret,
-      { expiresIn: config.jwt.refreshExpiresIn }
+      { expiresIn: config.jwt.refreshExpiresIn } as any
     );
 
     return { accessToken, refreshToken };

@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -59,8 +59,10 @@ export async function createServer() {
   await fastify.register(roomsRoutes, { prefix: '/api/rooms' });
 
   // Global error handler
-  fastify.setErrorHandler((error, request, reply) => {
+  fastify.setErrorHandler((error, _request, reply) => {
     logger.error('Error:', error);
+
+    const fastifyError = error as FastifyError & { validation?: unknown };
 
     if (error instanceof AppError) {
       return reply.code(error.statusCode).send({
@@ -71,18 +73,21 @@ export async function createServer() {
     }
 
     // Validation errors
-    if (error.validation) {
+    if (fastifyError.validation) {
       return reply.code(400).send({
         success: false,
         message: 'Validation error',
-        errors: error.validation,
+        errors: fastifyError.validation,
       });
     }
 
     // Unknown errors
     return reply.code(500).send({
       success: false,
-      message: config.env === 'production' ? 'Internal server error' : error.message,
+      message:
+        config.env === 'production'
+          ? 'Internal server error'
+          : fastifyError.message ?? 'Internal server error',
     });
   });
 

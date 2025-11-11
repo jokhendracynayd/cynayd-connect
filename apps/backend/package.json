@@ -1,7 +1,6 @@
 {
   "name": "@connect-sdk/backend",
   "version": "0.1.0",
-  "type": "module",
   "description": "Backend server for Connect SDK - REST API, WebSocket signaling, and Mediasoup SFU",
   "main": "dist/index.js",
   "scripts": {

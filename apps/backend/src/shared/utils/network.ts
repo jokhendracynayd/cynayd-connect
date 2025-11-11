@@ -7,7 +7,6 @@ import { logger } from './logger';
  */
 export function getLocalNetworkIP(): string | null {
   const interfaces = os.networkInterfaces();
-  const ipAddresses: string[] = [];
 
   // Priority order: prefer certain interface names
   const preferredInterfaces = ['Ethernet', 'Wi-Fi', 'WLAN', 'en0', 'eth0'];

@@ -3034,6 +3034,13 @@ export default function Call() {
     ? allParticipantTiles.find(tile => tile.userId === activeSpeakerId)
     : undefined;
   const activeSpeakerStream = activeSpeakerTile?.stream ?? null;
+  const activeSpeakerFirstVideoTrack = activeSpeakerStream?.getVideoTracks?.()[0];
+  const activeSpeakerTileFacingMode = activeSpeakerFirstVideoTrack?.getSettings?.().facingMode;
+  const activeSpeakerTrackLabel = activeSpeakerFirstVideoTrack?.label?.toLowerCase() ?? '';
+  const activeSpeakerIsProbableScreenShare =
+    activeSpeakerTrackLabel.includes('screen') ||
+    activeSpeakerTrackLabel.includes('display') ||
+    activeSpeakerTrackLabel.includes('window');
   const activeSpeakerHasLiveVideo = Boolean(
     activeSpeakerStream &&
     activeSpeakerStream.getVideoTracks().some(track => track.readyState === 'live' && track.enabled) &&
@@ -3163,6 +3170,14 @@ export default function Call() {
     const videoTracks = tileStream?.getVideoTracks() ?? [];
     const hasLiveVideo = videoTracks.some(track => track.readyState === 'live');
     const shouldShowVideo = Boolean(tileStream && !tile.isVideoMuted && hasLiveVideo);
+    const firstVideoTrack = videoTracks[0];
+    const facingMode = firstVideoTrack?.getSettings?.().facingMode;
+    const trackLabel = firstVideoTrack?.label?.toLowerCase() ?? '';
+    const isProbableScreenShare = trackLabel.includes('screen') || trackLabel.includes('display') || trackLabel.includes('window');
+    const isFrontFacingCamera =
+      facingMode === 'user' ||
+      (!facingMode && !isProbableScreenShare);
+    const shouldMirrorVideo = tile.isLocal || isFrontFacingCamera;
     const layoutTileBaseClass = !showSplitLayout ? nonSplitLayoutConfig?.tileBaseClass ?? '' : '';
     const layoutTileIndexClass =
       !showSplitLayout && nonSplitLayoutConfig?.tileClassForIndex
@@ -3188,7 +3203,7 @@ export default function Call() {
           autoPlay
           playsInline
           muted={tile.isLocal}
-          className="h-full w-full bg-slate-950/90 object-cover"
+          className={`h-full w-full bg-slate-950/90 object-cover ${shouldMirrorVideo ? 'mirror-video' : ''}`}
           style={{ visibility: shouldShowVideo ? 'visible' : 'hidden' }}
         />
 
@@ -3561,7 +3576,13 @@ export default function Call() {
                           autoPlay
                           muted
                           playsInline
-                          className="h-full w-full object-cover"
+                          className={`h-full w-full object-cover ${
+                            activeSpeakerTile?.isLocal ||
+                            activeSpeakerTileFacingMode === 'user' ||
+                            (!activeSpeakerTileFacingMode && !activeSpeakerIsProbableScreenShare)
+                              ? 'mirror-video'
+                              : ''
+                          }`}
                         />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center bg-slate-900/80 text-white/70">

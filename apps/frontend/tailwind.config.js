@@ -5,7 +5,12 @@ export default {
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      fontFamily: {
+        heading: ['"General Sans"', '"Inter"', 'ui-sans-serif', 'system-ui', '-apple-system'],
+        body: ['"Inter"', 'ui-sans-serif', 'system-ui', '-apple-system'],
+      },
+    },
   },
   plugins: [],
 }

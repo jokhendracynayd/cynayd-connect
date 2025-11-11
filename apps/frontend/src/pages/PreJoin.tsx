@@ -307,7 +307,7 @@ export default function PreJoin() {
                     autoPlay
                     muted
                     playsInline
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-cover mirror-video"
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-100 via-white to-slate-50">

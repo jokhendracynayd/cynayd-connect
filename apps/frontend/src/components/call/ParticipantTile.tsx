@@ -22,8 +22,8 @@ interface ParticipantTileProps {
 export default function ParticipantTile({ participant, stream, isLocal = false }: ParticipantTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { activeSpeakerId, qualityEntry } = useCallStore(state => ({
-    activeSpeakerId: state.activeSpeakerId,
-    qualityEntry: state.networkQuality.get(participant.userId),
+      activeSpeakerId: state.activeSpeakerId,
+      qualityEntry: state.networkQuality.get(participant.userId),
   }));
   const isActiveSpeaker = activeSpeakerId === participant.userId;
   const upstreamSummary = qualityEntry?.upstream ?? null;
@@ -52,6 +52,14 @@ export default function ParticipantTile({ participant, stream, isLocal = false }
 
   // Determine what to display
   const showVideo = !participant.isVideoMuted && stream?.getVideoTracks().some(t => t.readyState === 'live');
+  const firstVideoTrack = stream?.getVideoTracks()?.[0];
+  const facingMode = firstVideoTrack?.getSettings?.().facingMode;
+  const trackLabel = firstVideoTrack?.label?.toLowerCase() ?? '';
+  const isProbableScreenShare = trackLabel.includes('screen') || trackLabel.includes('display') || trackLabel.includes('window');
+  const isFrontFacingCamera =
+    facingMode === 'user' ||
+    (!facingMode && !isProbableScreenShare);
+  const shouldMirrorVideo = isLocal || isFrontFacingCamera;
 
   return (
     <div
@@ -66,7 +74,7 @@ export default function ParticipantTile({ participant, stream, isLocal = false }
           autoPlay
           playsInline
           muted={isLocal}
-          className="w-full h-full object-cover"
+          className={`w-full h-full object-cover ${shouldMirrorVideo ? 'mirror-video' : ''}`}
         />
       ) : (
         <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-indigo-500 to-purple-600">
@@ -97,8 +105,8 @@ export default function ParticipantTile({ participant, stream, isLocal = false }
               {participant.role === 'COHOST' && (
                 <span className="px-1.5 py-0.5 text-xs font-semibold text-white bg-indigo-500/80 rounded">
                   Co-host
-                </span>
-              )}
+              </span>
+            )}
           </div>
           <div className="flex items-center space-x-1">
             {/* Audio mute indicator */}

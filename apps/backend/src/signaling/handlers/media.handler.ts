@@ -87,7 +87,7 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
         return callback({ error: 'Transport not found' });
       }
 
-      await transport.connect({ dtlsParameters: validatedData.dtlsParameters });
+      await transport.connect({ dtlsParameters: validatedData.dtlsParameters as any });
       logger.debug(`Transport ${validatedData.transportId} connected`);
       callback({ success: true });
     } catch (error: unknown) {
@@ -214,9 +214,6 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
       // Store consumer with metadata
       await ConsumerManager.addConsumer(socket.id, consumer, validatedData.producerId);
 
-      // Get producer info
-      const producerInfo = ProducerManager.getProducerById(validatedData.producerId);
-
       callback({
         id: consumer.id,
         producerId: validatedData.producerId,
@@ -267,14 +264,14 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
   });
 
   // Screen share started (acknowledgment handler)
-  socket.on('screen-share-started', async (data: unknown, callback) => {
+  socket.on('screen-share-started', async (_data: unknown, callback) => {
     // This is mainly for acknowledgment
     // The actual producer was created via 'produce' event
     callback({ success: true });
   });
 
   // Screen share stopped (acknowledgment handler)
-  socket.on('screen-share-stopped', async (data: unknown, callback) => {
+  socket.on('screen-share-stopped', async (_data: unknown, callback) => {
     // Mainly for acknowledgment
     callback({ success: true });
   });

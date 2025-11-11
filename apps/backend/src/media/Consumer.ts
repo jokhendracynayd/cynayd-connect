@@ -1,6 +1,8 @@
-import { Consumer } from 'mediasoup/node/lib/types';
+import * as mediasoup from 'mediasoup';
 import { logger } from '../shared/utils/logger';
 import { RedisStateService } from '../shared/services/state.redis';
+
+type Consumer = mediasoup.types.Consumer;
 
 export class ConsumerManager {
   private static consumers: Map<string, Consumer[]> = new Map();
