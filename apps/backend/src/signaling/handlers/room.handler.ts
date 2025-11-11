@@ -525,24 +525,31 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
 
     let nextAudioMuted = currentAudioMuted;
     let nextVideoMuted = currentVideoMuted;
+    let nextAudioMutedAtMs = existingAudioMutedAt;
+    let nextVideoMutedAtMs = existingVideoMutedAt;
 
     if (targets.has('audio')) {
-      nextAudioMuted = mute;
+      if (mute) {
+        nextAudioMuted = true;
+        nextAudioMutedAtMs = timestamp;
+      } else {
+        nextAudioMuted = currentAudioMuted;
+        nextAudioMutedAtMs = nextAudioMuted
+          ? existingAudioMutedAt ?? timestamp
+          : null;
+      }
     }
     if (targets.has('video')) {
-      nextVideoMuted = mute;
+      if (mute) {
+        nextVideoMuted = true;
+        nextVideoMutedAtMs = timestamp;
+      } else {
+        nextVideoMuted = currentVideoMuted;
+        nextVideoMutedAtMs = nextVideoMuted
+          ? existingVideoMutedAt ?? timestamp
+          : null;
+      }
     }
-
-    const nextAudioMutedAtMs = targets.has('audio')
-      ? mute
-        ? timestamp
-        : null
-      : existingAudioMutedAt;
-    const nextVideoMutedAtMs = targets.has('video')
-      ? mute
-        ? timestamp
-        : null
-      : existingVideoMutedAt;
 
     const isTargetHost = roomAdminId ? targetUserId === roomAdminId : false;
     const shouldForceAudio = targets.has('audio') && mute && !isTargetHost;
