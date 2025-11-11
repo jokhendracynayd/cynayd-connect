@@ -16,12 +16,13 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  rooms            Room[]
-  participants     Participant[]
-  joinRequests     RoomJoinRequest[]
-  sentMessages     ChatMessage[]     @relation("SentMessages")
-  receivedMessages ChatMessage[]     @relation("ReceivedMessages")
-  controlStates    RoomControlState[]
+  rooms              Room[]
+  participants       Participant[]
+  joinRequests       RoomJoinRequest[]
+  sentMessages       ChatMessage[]     @relation("SentMessages")
+  receivedMessages   ChatMessage[]     @relation("ReceivedMessages")
+  controlStates      RoomControlState[]
+  recordingSessions  RecordingSession[]
 
   @@index([email])
 }
@@ -42,9 +43,10 @@ model Room {
   participants    Participant[]
   metrics         CallMetrics[]
   joinRequests    RoomJoinRequest[]
-  chatMessages    ChatMessage[]
-  controlStates   RoomControlState[]
-  hostState       RoomHostState?
+  chatMessages      ChatMessage[]
+  controlStates     RoomControlState[]
+  hostState         RoomHostState?
+  recordingSessions RecordingSession[]
 
   @@index([roomCode])
   @@index([adminId])
@@ -163,6 +165,22 @@ enum ChatMessageType {
   SYSTEM
 }
 
+enum RecordingStatus {
+  STARTING
+  RECORDING
+  UPLOADING
+  COMPLETED
+  FAILED
+}
+
+enum RecordingAssetType {
+  COMPOSITE
+  AUDIO_ONLY
+  VIDEO_ONLY
+  RAW_TRACK
+  METADATA
+}
+
 model ChatMessage {
   id           String          @id @default(uuid())
   roomId       String
@@ -180,5 +198,45 @@ model ChatMessage {
   @@index([roomId, messageType])
   @@index([senderId, createdAt])
   @@index([recipientId, createdAt])
+}
+
+model RecordingSession {
+  id               String           @id @default(uuid())
+  roomId           String
+  room             Room             @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  hostId           String
+  host             User             @relation(fields: [hostId], references: [id])
+  status           RecordingStatus  @default(STARTING)
+  startedAt        DateTime         @default(now())
+  endedAt          DateTime?
+  durationSeconds  Int?
+  failureReason    String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  assets           RecordingAsset[]
+
+  @@index([roomId, startedAt])
+  @@index([hostId, startedAt])
+}
+
+model RecordingAsset {
+  id               String             @id @default(uuid())
+  sessionId        String
+  session          RecordingSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type             RecordingAssetType
+  storageBucket    String
+  storageKey       String
+  storageRegion    String?
+  sizeBytes        BigInt?
+  durationSeconds  Int?
+  format           String?
+  checksum         String?
+  metadata         Json?
+  createdAt        DateTime           @default(now())
+  uploadedAt       DateTime?
+  urlExpiresAt     DateTime?
+
+  @@index([sessionId])
+  @@index([storageBucket, storageKey])
 }
 

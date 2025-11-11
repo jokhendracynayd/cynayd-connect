@@ -187,6 +187,25 @@ export interface RoomJoinRequest {
 
 export type ParticipantRole = 'HOST' | 'COHOST' | 'PARTICIPANT';
 
+export type RecordingStatus =
+  | 'STARTING'
+  | 'RECORDING'
+  | 'UPLOADING'
+  | 'COMPLETED'
+  | 'FAILED';
+
+export interface RecordingState {
+  active: boolean;
+  status: RecordingStatus | null;
+  sessionId: string | null;
+  hostId: string | null;
+  serverInstanceId: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  failureReason: string | null;
+  updatedAt: string | null;
+}
+
 interface Participant {
   userId: string;
   name: string;
@@ -278,6 +297,7 @@ interface CallState {
     chatForceReason: string | null;
     updatedAt: string | null;
   };
+  recording: RecordingState;
   setRoomCode: (code: string) => void;
   setIsConnected: (connected: boolean) => void;
   setLocalStream: (stream: MediaStream | null) => void;
@@ -340,6 +360,8 @@ interface CallState {
       };
     }
   ) => void;
+  setRecordingState: (state: Partial<RecordingState> | RecordingState) => void;
+  resetRecordingState: () => void;
   resetCallState: () => void;
 }
 
@@ -399,6 +421,18 @@ const mergeParticipantWithUpdates = (existing: Participant, updates: Participant
   };
 };
 
+const initialRecordingState: RecordingState = {
+  active: false,
+  status: null,
+  sessionId: null,
+  hostId: null,
+  serverInstanceId: null,
+  startedAt: null,
+  endedAt: null,
+  failureReason: null,
+  updatedAt: null,
+};
+
 export const useCallStore = create<CallState>((set) => ({
   isConnected: false,
   roomCode: null,
@@ -454,6 +488,7 @@ export const useCallStore = create<CallState>((set) => ({
     chatForceReason: null,
     updatedAt: null,
   },
+  recording: { ...initialRecordingState },
   
   setRoomCode: (code) => set({ roomCode: code }),
   setIsConnected: (connected) => set({ isConnected: connected }),
@@ -953,6 +988,27 @@ export const useCallStore = create<CallState>((set) => ({
       screenShares: updatedScreenShares,
     };
   }),
+  setRecordingState: (nextState) =>
+    set((state) => {
+      const partial =
+        typeof nextState === 'object' && nextState !== null
+          ? nextState
+          : {};
+      return {
+        recording: {
+          ...state.recording,
+          ...partial,
+          status:
+            'status' in partial
+              ? (partial.status ?? null)
+              : state.recording.status,
+        },
+      };
+    }),
+  resetRecordingState: () =>
+    set({
+      recording: { ...initialRecordingState },
+  }),
   resetCallState: () => set({
     isConnected: false,
     roomCode: null,
@@ -1008,6 +1064,7 @@ export const useCallStore = create<CallState>((set) => ({
       chatForceReason: null,
       updatedAt: null,
     },
+    recording: { ...initialRecordingState },
   }),
 }));
 

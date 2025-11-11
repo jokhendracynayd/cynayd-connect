@@ -91,6 +91,16 @@ export const mediasoupConfig = {
     maxSctpMessageSize: 262144,                 // 256 KB (data channels)
     maxIncomingBitrate: 2500000,               // 2.5 Mbps per producer (increased from 1.5 Mbps)
   },
+
+  plainTransport: {
+    listenIp: {
+      ip: config.recording.network.ip,
+      announcedIp:
+        config.recording.network.ip === '127.0.0.1' ? undefined : config.recording.network.ip,
+    },
+    rtcpMux: true,
+    comedia: false,
+  },
 };
 
 export type MediasoupConfig = typeof mediasoupConfig;

@@ -39,6 +39,18 @@ export interface RedisRoomControlStatePayload {
   updatedAt: number;
 }
 
+type RecordingStatusValue = 'STARTING' | 'RECORDING' | 'UPLOADING' | 'COMPLETED' | 'FAILED';
+
+export interface RedisRecordingStatePayload {
+  roomId: string;
+  sessionId: string;
+  status: RecordingStatusValue;
+  startedAt: number;
+  updatedAt: number;
+  hostId: string;
+  serverInstanceId?: string;
+}
+
 /**
 * Redis-backed state management service
 * Stores metadata about Producers, Consumers, Transports, and Routers
@@ -52,6 +64,7 @@ export class RedisStateService {
   private static readonly TTL_SECONDS = 3600; // 1 hour default TTL
   private static readonly MUTE_STATE_TTL_SECONDS = 3600; // 1 hour, refreshed on updates
   private static readonly ROOM_CONTROL_TTL_SECONDS = 3600;
+  private static readonly RECORDING_STATE_TTL_SECONDS = 900; // 15 minutes
 
   // Producer metadata storage
   static async storeProducerMetadata(
@@ -177,6 +190,43 @@ export class RedisStateService {
     await redis.srem(`${this.KEY_PREFIX}:socket:${socketId}:consumers`, consumerId);
     
     logger.debug(`Removed consumer metadata from Redis: ${consumerId}`);
+  }
+
+  // Recording state
+  static async storeRecordingState(payload: RedisRecordingStatePayload): Promise<void> {
+    const key = `${this.KEY_PREFIX}:recording:${payload.roomId}`;
+    const enriched = {
+      ...payload,
+      serverInstanceId: payload.serverInstanceId || config.server.instanceId,
+      updatedAt: Date.now(),
+    };
+
+    await redis.setex(key, this.RECORDING_STATE_TTL_SECONDS, JSON.stringify(enriched));
+    logger.debug(`Stored recording state in Redis for room ${payload.roomId}`, {
+      roomId: payload.roomId,
+      sessionId: payload.sessionId,
+      status: payload.status,
+    });
+  }
+
+  static async getRecordingState(roomId: string): Promise<RedisRecordingStatePayload | null> {
+    const key = `${this.KEY_PREFIX}:recording:${roomId}`;
+    const data = await redis.get(key);
+    if (!data) {
+      return null;
+    }
+    try {
+      return JSON.parse(data) as RedisRecordingStatePayload;
+    } catch (error) {
+      logger.error('Failed to parse recording state from Redis', { roomId, error });
+      return null;
+    }
+  }
+
+  static async removeRecordingState(roomId: string): Promise<void> {
+    const key = `${this.KEY_PREFIX}:recording:${roomId}`;
+    await redis.del(key);
+    logger.debug(`Removed recording state from Redis for room ${roomId}`);
   }
 
   static async getSocketConsumers(socketId: string): Promise<string[]> {

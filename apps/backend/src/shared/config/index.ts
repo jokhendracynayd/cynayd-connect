@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { randomUUID } from 'crypto';
+import path from 'path';
 import developmentConfig from './development';
 import productionConfig from './production';
 import defaultConfig from './default';
@@ -76,6 +77,35 @@ const baseConfig = {
     logTags: (process.env.MEDIASOUP_LOG_TAGS
       ? process.env.MEDIASOUP_LOG_TAGS.split(',')
       : ['info', 'ice', 'dtls', 'rtp', 'srtp', 'rtcp']) as any[],
+  },
+
+  recording: {
+    enabled: process.env.RECORDING_ENABLED === 'true',
+    tmpDir: process.env.RECORDING_TMP_DIR
+      ? path.resolve(process.cwd(), process.env.RECORDING_TMP_DIR)
+      : path.resolve(process.cwd(), 'tmp/recordings'),
+    ffmpegPath: process.env.RECORDING_FFMPEG_PATH || 'ffmpeg',
+    layout: process.env.RECORDING_LAYOUT || 'pip',
+    network: {
+      ip: process.env.RECORDING_BIND_IP || '127.0.0.1',
+      portRange: {
+        min: parseInt(process.env.RECORDING_PORT_MIN || '60000', 10),
+        max: parseInt(process.env.RECORDING_PORT_MAX || '60200', 10),
+      },
+    },
+    s3: {
+      region: process.env.AWS_REGION || 'us-east-1',
+      bucket: process.env.RECORDING_S3_BUCKET || '',
+      prefix: (() => {
+        const raw = process.env.RECORDING_S3_PREFIX || 'recordings/';
+        return raw.endsWith('/') ? raw : `${raw}/`;
+      })(),
+      serverSideEncryption: process.env.RECORDING_S3_SSE || 'aws:kms',
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
+    },
   },
 };
 

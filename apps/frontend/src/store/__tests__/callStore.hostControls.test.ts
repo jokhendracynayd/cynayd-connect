@@ -97,6 +97,11 @@ describe('callStore host control state', () => {
     expect(useCallStore.getState().chat.conversations.has(EVERYONE_CONVERSATION_ID)).toBe(
       true
     );
+    expect(useCallStore.getState().recording).toMatchObject({
+      active: false,
+      status: null,
+      sessionId: null,
+    });
   });
 });
 

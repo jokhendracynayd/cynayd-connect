@@ -1,6 +1,12 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { RouterManager } from '../../media/Router';
-import { RoomService, type RoomHostControlState } from '../../shared/services/rooms.service';
+import RecordingManager from '../../media/RecordingManager';
+import {
+  RoomService,
+  type RoomHostControlState,
+  RecordingStatus as RecordingStatusMap,
+} from '../../shared/services/rooms.service';
+import type { RecordingStatus as RecordingStatusValue } from '../../shared/services/rooms.service';
 import { ProducerManager } from '../../media/Producer';
 import { ConsumerManager } from '../../media/Consumer';
 import { TransportManager } from '../../media/Transport';
@@ -60,6 +66,131 @@ type PersistedMuteState = {
   forcedBy?: string | null;
   forcedReason?: string | null;
 };
+
+interface RecordingStateEvent {
+  active: boolean;
+  status: RecordingStatusValue | null;
+  sessionId?: string;
+  startedAt?: string;
+  hostId?: string;
+  serverInstanceId?: string;
+  endedAt?: string | null;
+  failureReason?: string | null;
+}
+
+const ACTIVE_RECORDING_STATUSES = new Set<RecordingStatusValue>([
+  RecordingStatusMap.STARTING,
+  RecordingStatusMap.RECORDING,
+  RecordingStatusMap.UPLOADING,
+]);
+
+let recordingEventsRegistered = false;
+
+async function resolveRecordingRoomCode(
+  io: SocketIOServer,
+  roomId: string,
+  fallback?: string
+): Promise<string | undefined> {
+  if (fallback) {
+    return fallback;
+  }
+  const sockets = await io.fetchSockets();
+  const match = sockets.find(
+    participantSocket => participantSocket.data?.roomId === roomId && participantSocket.data?.roomCode
+  );
+  return match?.data?.roomCode;
+}
+
+async function getRecordingStateSnapshot(roomId: string): Promise<RecordingStateEvent | null> {
+  const localState = RecordingManager.getState(roomId);
+  if (localState) {
+    const status = localState.status;
+    return {
+      active: !localState.stopRequested && ACTIVE_RECORDING_STATUSES.has(status),
+      status,
+      sessionId: localState.session.id,
+      startedAt: localState.session.startedAt?.toISOString?.() ?? new Date().toISOString(),
+      hostId: localState.hostId,
+      serverInstanceId: config.server.instanceId,
+      endedAt: localState.session.endedAt ? localState.session.endedAt.toISOString() : null,
+      failureReason: localState.session.failureReason ?? null,
+    };
+  }
+
+  const redisState = await RedisStateService.getRecordingState(roomId);
+  if (redisState) {
+    const status = redisState.status as RecordingStatusValue;
+    return {
+      active: ACTIVE_RECORDING_STATUSES.has(status),
+      status,
+      sessionId: redisState.sessionId,
+      startedAt: new Date(redisState.startedAt).toISOString(),
+      hostId: redisState.hostId,
+      serverInstanceId: redisState.serverInstanceId ?? config.server.instanceId,
+      endedAt: null,
+      failureReason: null,
+    };
+  }
+
+  return null;
+}
+
+async function emitRecordingState(
+  io: SocketIOServer,
+  roomId: string,
+  roomCode?: string
+): Promise<void> {
+  const state = await getRecordingStateSnapshot(roomId);
+  const targetRoomCode = await resolveRecordingRoomCode(io, roomId, roomCode);
+  if (!targetRoomCode) {
+    return;
+  }
+
+  const payload: RecordingStateEvent =
+    state ?? {
+      active: false,
+      status: null,
+    };
+
+  io.to(targetRoomCode).emit('recording:state', payload);
+}
+
+function registerRecordingEventBridge(io: SocketIOServer) {
+  if (recordingEventsRegistered) {
+    return;
+  }
+
+  recordingEventsRegistered = true;
+
+  RecordingManager.on('recording-started', async ({ roomId, roomCode }) => {
+    await emitRecordingState(io, roomId, roomCode);
+  });
+
+  RecordingManager.on('recording-stopped', async ({ roomId, roomCode, session, error }) => {
+    await emitRecordingState(io, roomId, roomCode);
+    if (error) {
+      const resolvedCode = await resolveRecordingRoomCode(io, roomId, roomCode);
+      if (resolvedCode) {
+        io.to(resolvedCode).emit('recording:error', {
+          message: error.message,
+          roomId,
+          sessionId: session.id,
+        });
+      }
+    }
+  });
+
+  RecordingManager.on('recording-error', async ({ roomId, error }) => {
+    await emitRecordingState(io, roomId);
+    const resolvedCode = await resolveRecordingRoomCode(io, roomId);
+    if (resolvedCode) {
+      io.to(resolvedCode).emit('recording:error', {
+        message: error.message,
+        roomId,
+      });
+    }
+  });
+}
 
 function buildParticipantRoster(
   room: RoomWithParticipants,
@@ -259,6 +390,10 @@ export async function handleSocketLeave(
 ): Promise<HandleSocketLeaveResult> {
   const roomCode: string | undefined = socket.data.roomCode;
   const userId: string | undefined = socket.data.userId;
+  const roomId: string | undefined = socket.data.roomId;
+  const roomAdminId: string | undefined = socket.data.roomAdminId;
+  const wasHost =
+    socket.data.isHost === true || (!!roomAdminId && roomAdminId === userId);
 
   const reason = options.reason ?? null;
   const triggeredByDisconnect = options.triggeredByDisconnect ?? false;
@@ -349,6 +484,37 @@ export async function handleSocketLeave(
     });
   }
 
+  if (roomId) {
+    try {
+      const remainingSockets = await socket.server.in(roomCode).fetchSockets();
+      const hostStillPresent = remainingSockets.some(participantSocket => {
+        const participantAdminId: string | undefined = participantSocket.data?.roomAdminId;
+        return (
+          participantSocket.data?.isHost === true ||
+          (!!participantAdminId && participantAdminId === participantSocket.data?.userId)
+        );
+      });
+
+      const shouldStop =
+        RecordingManager.isRecording(roomId) &&
+        (remainingSockets.length === 0 || (wasHost && !hostStillPresent));
+
+      if (shouldStop) {
+        const reason =
+          remainingSockets.length === 0
+            ? 'Recording stopped automatically because the room is empty.'
+            : 'Recording stopped automatically after the host left the room.';
+        await RecordingManager.stopRecording({ roomId, roomCode, reason });
+      }
+    } catch (error) {
+      logger.error('handleSocketLeave: failed to evaluate recording teardown', {
+        roomId,
+        roomCode,
+        error,
+      });
+    }
+  }
+
   try {
     await redis.publish('room:leave', JSON.stringify({
       roomCode,
@@ -397,6 +563,8 @@ interface UpdateRolePayload {
 }
 
 export function roomHandler(io: SocketIOServer, socket: Socket) {
+  registerRecordingEventBridge(io);
+
   const resolveHostContext = (options?: { requireHost?: boolean }) => {
     const roomCode: string | undefined = socket.data.roomCode;
     const roomId: string | undefined = socket.data.roomId;
@@ -1251,6 +1419,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       }
 
       const participantRoster = buildParticipantRoster(updatedRoom, combinedMuteStates);
+      const recordingState = await getRecordingStateSnapshot(room.id);
       const joiningMuteState = combinedMuteStates[userId];
       const joiningParticipant =
         participantRoster.find((participant) => participant.userId === userId) ||
@@ -1437,6 +1606,7 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         role: participantRole,
         isPublic: updatedRoom.isPublic,
         hostControls: hostControlState,
+        recording: recordingState ?? { active: false, status: null },
       });
     } catch (error: any) {
       logger.error('Error joining room:', {
@@ -1532,6 +1702,98 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
               ? error.message
               : 'Failed to update participant role.',
         });
+      }
+    }
+  );
+
+  socket.on(
+    'host-control:start-recording',
+    async (
+      _data: unknown,
+      callback?: (result: { success: boolean; error?: string; sessionId?: string; status?: RecordingStatusValue }) => void
+    ) => {
+      try {
+        const { roomCode, roomId, actorUserId } = resolveHostContext({ requireHost: true });
+
+        if (!config.recording.enabled) {
+          callback?.({ success: false, error: 'Server-side recording is disabled.' });
+          return;
+        }
+
+        if (RecordingManager.isRecording(roomId)) {
+          callback?.({ success: false, error: 'Recording already in progress.' });
+          return;
+        }
+
+        let router = RouterManager.getRouter(roomId);
+        if (!router) {
+          router = await RouterManager.createRouter(roomId);
+        }
+
+        const session = await RecordingManager.startRecording({
+          roomId,
+          hostId: actorUserId,
+          router,
+          roomCode,
+        });
+
+        await ProducerManager.attachProducersToRecording(roomId);
+
+        callback?.({
+          success: true,
+          sessionId: session.id,
+          status: session.status,
+        });
+      } catch (error: any) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : 'Failed to start server-side recording.';
+        logger.error('host-control:start-recording failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({ success: false, error: message });
+      }
+    }
+  );
+
+  socket.on(
+    'host-control:stop-recording',
+    async (
+      data: { reason?: string },
+      callback?: (result: { success: boolean; error?: string }) => void
+    ) => {
+      try {
+        const { roomCode, roomId, actorUserId } = resolveHostContext({ requireHost: true });
+
+        if (!RecordingManager.isRecording(roomId)) {
+          callback?.({ success: false, error: 'No active recording to stop.' });
+          return;
+        }
+
+        const reason =
+          typeof data?.reason === 'string' && data.reason.trim().length > 0
+            ? data.reason.trim()
+            : `Recording stopped by ${actorUserId}`;
+
+        await RecordingManager.stopRecording({
+          roomId,
+          roomCode,
+          reason,
+        });
+
+        callback?.({ success: true });
+      } catch (error: any) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : 'Failed to stop server-side recording.';
+        logger.error('host-control:stop-recording failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({ success: false, error: message });
       }
     }
   );

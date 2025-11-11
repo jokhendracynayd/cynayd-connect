@@ -1,6 +1,7 @@
 import * as mediasoup from 'mediasoup';
 import { logger } from '../shared/utils/logger';
 import { RedisStateService } from '../shared/services/state.redis';
+import RecordingManager from './RecordingManager';
 
 type Producer = mediasoup.types.Producer;
 type ProducerSource = 'microphone' | 'camera' | 'screen' | 'data' | 'unknown';
@@ -45,6 +46,13 @@ export class ProducerManager {
       await this.removeProducer(socketId, producer.id);
     });
 
+    RecordingManager.handleProducerAdded(roomId, producer, { source }).catch(error =>
+      logger.error(`Failed to attach producer ${producer.id} to recording manager`, {
+        error,
+        roomId,
+      })
+    );
+
     logger.debug(`Producer added: ${producer.id} (${producer.kind})`);
   }
 
@@ -79,6 +87,32 @@ export class ProducerManager {
     }
     
     return null;
+  }
+
+  static async attachProducersToRecording(roomId: string): Promise<void> {
+    const tasks: Promise<void>[] = [];
+
+    for (const producers of this.producers.values()) {
+      for (const producer of producers) {
+        const metadata = this.producerMetadata.get(producer.id);
+        if (!metadata || metadata.roomId !== roomId) {
+          continue;
+        }
+
+        tasks.push(
+          RecordingManager.handleProducerAdded(roomId, producer, { source: metadata.source }).catch(
+            (err: unknown) => {
+              logger.error(`Failed to attach existing producer ${producer.id} to recording`, {
+                error: err,
+                roomId,
+              });
+            }
+          )
+        );
+      }
+    }
+
+    await Promise.all(tasks);
   }
 
   static getProducerMetadata(producerId: string): { socketId: string; roomId: string; userId: string; kind: 'audio' | 'video'; source: ProducerSource } | null {
@@ -140,8 +174,17 @@ export class ProducerManager {
     const filtered = producers.filter(p => p.id !== producerId);
     this.producers.set(socketId, filtered);
     
-    // Remove metadata
     const metadata = this.producerMetadata.get(producerId);
+    if (metadata) {
+      RecordingManager.handleProducerRemoved(metadata.roomId, producerId).catch(error =>
+        logger.error(`Failed to notify recording manager for removed producer ${producerId}`, {
+          error,
+          roomId: metadata.roomId,
+        })
+      );
+    }
+
+    // Remove metadata
     if (metadata) {
       this.producerMetadata.delete(producerId);
       

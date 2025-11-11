@@ -8,6 +8,8 @@ import {
   EVERYONE_CONVERSATION_ID,
   type ChatMessage,
   type ParticipantRole,
+  type RecordingState,
+  type RecordingStatus,
 } from '../store/callStore';
 import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
@@ -22,6 +24,35 @@ import ScreenShareSection from '../components/call/ScreenShareSection';
 import { getPendingRequests, requestRoomJoin } from '../lib/api';
 import api from '../lib/api';
 import { storage } from '../lib/storage';
+
+const formatDuration = (totalSeconds: number): string => {
+  const clamped = Math.max(0, totalSeconds);
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  const seconds = clamped % 60;
+  const segments = [
+    hours > 0 ? String(hours).padStart(2, '0') : null,
+    String(minutes).padStart(2, '0'),
+    String(seconds).padStart(2, '0'),
+  ].filter(Boolean);
+  return segments.join(':');
+};
+
+interface RecordingStateEventPayload {
+  active?: boolean;
+  status?: RecordingStatus | string | null;
+  sessionId?: string | null;
+  hostId?: string | null;
+  serverInstanceId?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  failureReason?: string | null;
+  updatedAt?: string | null;
+}
+
+interface RecordingErrorEventPayload {
+  message?: string;
+}
 
 type SocketEventKey =
   | 'user-joined'
@@ -42,7 +73,9 @@ type SocketEventKey =
   | 'host-control:room-state'
   | 'host-control:chat-state'
   | 'host-control:participant-removed'
-  | 'host-control:role-updated';
+  | 'host-control:role-updated'
+  | 'recording:state'
+  | 'recording:error';
 
 type ServerParticipant = {
   userId: string;
@@ -137,6 +170,9 @@ export default function Call() {
     hostControls,
     setHostControls,
     applyParticipantForceState,
+    recording,
+    setRecordingState,
+    resetRecordingState,
   } = useCallStore();
   
   const navigate = useNavigate();
@@ -178,10 +214,98 @@ export default function Call() {
     audioReason: null,
     videoReason: null,
   });
+  const previousRecordingStatusRef = useRef<RecordingStatus | null>(recording.status ?? null);
+  const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+
+  const normalizeRecordingState = useCallback(
+    (incoming?: RecordingStateEventPayload | null): RecordingState => {
+      if (!incoming) {
+        return {
+          active: false,
+          status: null,
+          sessionId: null,
+          hostId: null,
+          serverInstanceId: null,
+          startedAt: null,
+          endedAt: null,
+          failureReason: null,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
+      const rawStatus =
+        typeof incoming.status === 'string'
+          ? (incoming.status.toUpperCase() as RecordingStatus)
+          : incoming.status ?? null;
+      const allowedStatuses: RecordingStatus[] = [
+        'STARTING',
+        'RECORDING',
+        'UPLOADING',
+        'COMPLETED',
+        'FAILED',
+      ];
+      const normalizedStatus =
+        rawStatus && allowedStatuses.includes(rawStatus) ? rawStatus : null;
+
+      return {
+        active: Boolean(incoming.active) || normalizedStatus === 'RECORDING',
+        status: normalizedStatus,
+        sessionId: incoming.sessionId ?? null,
+        hostId: incoming.hostId ?? null,
+        serverInstanceId: incoming.serverInstanceId ?? null,
+        startedAt: incoming.startedAt ?? null,
+        endedAt: incoming.endedAt ?? null,
+        failureReason: incoming.failureReason ?? null,
+        updatedAt: incoming.updatedAt ?? new Date().toISOString(),
+      };
+    },
+    []
+  );
 
   useEffect(() => {
     previousHostControlsRef.current = hostControls;
   }, [hostControls]);
+
+  useEffect(() => {
+    const previous = previousRecordingStatusRef.current;
+    const currentStatus = recording.status ?? null;
+    if (previous !== currentStatus) {
+      if (currentStatus === 'STARTING') {
+        toast('Preparing recording…');
+      } else if (currentStatus === 'RECORDING') {
+        toast.success('Recording started');
+      } else if (currentStatus === 'UPLOADING') {
+        toast('Finalising recording…');
+      } else if (currentStatus === 'COMPLETED') {
+        toast.success('Recording saved');
+      } else if (currentStatus === 'FAILED') {
+        toast.error(recording.failureReason ?? 'Recording failed');
+      }
+      previousRecordingStatusRef.current = currentStatus;
+    }
+  }, [recording.status, recording.failureReason]);
+
+  useEffect(() => {
+    let intervalId: number | null = null;
+    if (recording.active && recording.startedAt) {
+      const startTime = new Date(recording.startedAt).getTime();
+      if (!Number.isNaN(startTime)) {
+        const updateElapsed = () => {
+          setRecordingElapsedSeconds(Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
+        };
+        updateElapsed();
+        intervalId = window.setInterval(updateElapsed, 1000);
+      }
+    } else {
+      setRecordingElapsedSeconds(0);
+    }
+
+    return () => {
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [recording.active, recording.startedAt]);
 
   const hasPermissionIssue = permissionErrors.audio || permissionErrors.video;
 
@@ -199,6 +323,26 @@ export default function Call() {
     (!isAdmin && hostControls.audioForceAll) || localForceState.audio;
   const videoForceActive =
     (!isAdmin && hostControls.videoForceAll) || localForceState.video;
+  const recordingStatusValue = recording.status ?? null;
+  const recordingIsRecording =
+    recording.active && recordingStatusValue === 'RECORDING';
+  const recordingIsStarting = recordingStatusValue === 'STARTING';
+  const recordingIsUploading = recordingStatusValue === 'UPLOADING';
+  const recordingPending = recordingIsStarting || recordingIsUploading;
+  const recordingIndicatorVisible = recordingIsRecording || recordingPending;
+  const recordingButtonDisabled = recordingPending;
+  const recordingButtonClass = recordingIsRecording
+    ? 'bg-rose-500 text-white shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:bg-rose-600'
+    : recordingPending
+    ? 'bg-amber-500/80 text-white'
+    : 'bg-white/90 text-slate-600';
+  const recordingStatusText = recordingIsRecording
+    ? 'Recording'
+    : recordingIsUploading
+    ? 'Finalising recording'
+    : recordingIsStarting
+    ? 'Preparing recording'
+    : '';
 
   useEffect(() => {
     showChatPanelRef.current = showChatPanel;
@@ -661,6 +805,8 @@ export default function Call() {
   const connectToRoom = async () => {
     if (!roomCode || !user) return;
     
+    resetRecordingState();
+    
     let effectiveAudioMuted = isAudioMuted;
     let effectiveVideoMuted = isVideoMuted;
     let rosterEntries: ServerParticipant[] = [];
@@ -756,6 +902,7 @@ export default function Call() {
       }
 
     rosterEntries = Array.isArray(response.participants) ? response.participants : [];
+    setRecordingState(normalizeRecordingState(response.recording as RecordingStateEventPayload | null));
     const selfRosterEntry = rosterEntries.find((participant) => participant?.userId === user.id);
 
     if (selfRosterEntry) {
@@ -1089,6 +1236,7 @@ export default function Call() {
       console.error('Failed to connect:', error);
       setError(error.message || 'Failed to connect to room');
       toast.error(error.message || 'Failed to connect to room');
+      resetRecordingState();
       setIsConnecting(false);
     }
   };
@@ -1606,6 +1754,29 @@ export default function Call() {
     };
     socketManager.on('host-control:role-updated', handleHostRoleUpdated);
     eventListenersRef.current['host-control:role-updated'] = handleHostRoleUpdated;
+
+    const handleRecordingStateEvent = (payload: RecordingStateEventPayload) => {
+      setRecordingState(normalizeRecordingState(payload));
+    };
+    socketManager.on('recording:state', handleRecordingStateEvent);
+    eventListenersRef.current['recording:state'] = handleRecordingStateEvent;
+
+    const handleRecordingErrorEvent = (payload: RecordingErrorEventPayload) => {
+      const message =
+        typeof payload?.message === 'string' && payload.message.length > 0
+          ? payload.message
+          : 'Recording encountered an error.';
+      toast.error(message);
+      setRecordingState({
+        active: false,
+        status: 'FAILED',
+        failureReason: message,
+        endedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    };
+    socketManager.on('recording:error', handleRecordingErrorEvent);
+    eventListenersRef.current['recording:error'] = handleRecordingErrorEvent;
 
     // Active speaker event
     const handleActiveSpeaker = (data: { userId: string; isActiveSpeaker: boolean }) => {
@@ -2674,6 +2845,24 @@ export default function Call() {
     );
   }, [emitHostControl, hostControls.locked]);
 
+  const handleHostStartRecording = useCallback(() => {
+    emitHostControl(
+      'host-control:start-recording',
+      {},
+      'Starting recording…',
+      'Failed to start recording'
+    );
+  }, [emitHostControl]);
+
+  const handleHostStopRecording = useCallback(() => {
+    emitHostControl(
+      'host-control:stop-recording',
+      {},
+      'Stopping recording…',
+      'Failed to stop recording'
+    );
+  }, [emitHostControl]);
+
   const handleHostControlParticipant = useCallback(
     (userId: string, targets: { audio?: boolean; video?: boolean }, mute: boolean) => {
       emitHostControl(
@@ -3377,6 +3566,22 @@ export default function Call() {
         </div>
       )}
 
+      {recordingIndicatorVisible && (
+        <div className="pointer-events-none fixed top-6 left-1/2 z-40 flex -translate-x-1/2 px-4">
+          <div className="pointer-events-auto flex items-center gap-2 rounded-full bg-slate-900/85 px-4 py-2 text-xs font-semibold text-white shadow-[0_18px_40px_-28px_rgba(15,23,42,0.6)]">
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                recordingIsRecording ? 'bg-red-500 animate-pulse' : 'bg-amber-400 animate-pulse'
+              }`}
+            />
+            <span>{recordingStatusText}</span>
+            {recordingIsRecording && (
+              <span className="font-mono text-sm">{formatDuration(recordingElapsedSeconds)}</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {isAdmin && (
         <div
           className="fixed right-6 z-40 flex flex-col items-end gap-3"
@@ -3473,6 +3678,54 @@ export default function Call() {
               <span className="hidden sm:inline">Lock</span>
               <span className="sm:hidden">L</span>
             </button>
+
+            {false && (
+              <button
+                onClick={recordingIsRecording ? handleHostStopRecording : handleHostStartRecording}
+                disabled={recordingButtonDisabled}
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
+                  recordingButtonDisabled ? `${recordingButtonClass} cursor-wait` : recordingButtonClass
+                }`}
+                aria-pressed={recordingIsRecording}
+                title={
+                  recordingIsRecording
+                    ? 'Stop recording'
+                    : recordingPending
+                    ? 'Recording in progress'
+                    : 'Start recording'
+                }
+              >
+                {recordingPending ? (
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                    />
+                  </svg>
+                ) : recordingIsRecording ? (
+                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <rect x="6" y="6" width="8" height="8" rx="1.5" />
+                  </svg>
+                ) : (
+                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <circle cx="10" cy="10" r="6" />
+                  </svg>
+                )}
+                <span className="hidden sm:inline">
+                  {recordingIsRecording ? 'Stop Rec' : 'Start Rec'}
+                </span>
+                <span className="sm:hidden">{recordingIsRecording ? 'Stop' : 'Rec'}</span>
+              </button>
+            )}
           </div>
         </div>
       )}

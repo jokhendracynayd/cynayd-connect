@@ -57,3 +57,4 @@ certs/*
 .vercel
 apps/backend/deploy-backend.sh
 apps/frontend/deploy-frontend.sh
+apps/backend/tmp/recordings/*

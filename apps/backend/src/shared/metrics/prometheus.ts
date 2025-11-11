@@ -7,6 +7,7 @@ import { ConsumerManager } from '../../media/Consumer';
 import { RouterManager } from '../../media/Router';
 import { RoomRoutingService } from '../services/room-routing.service';
 import { config } from '../config';
+import RecordingManager from '../../media/RecordingManager';
 
 /**
  * Prometheus Metrics Collection
@@ -36,6 +37,10 @@ class PrometheusMetrics {
   // Room metrics
   public readonly activeRooms: Gauge<string>;
   public readonly activeParticipants: Gauge<string>;
+  public readonly recordingsActive: Gauge<string>;
+  public readonly recordingsStarted: Counter<string>;
+  public readonly recordingsCompleted: Counter<string>;
+  public readonly recordingsFailed: Counter<string>;
 
   // Database metrics
   public readonly databaseQueries: Counter<string>;
@@ -143,6 +148,34 @@ class PrometheusMetrics {
       registers: [this.registry],
     });
 
+    this.recordingsActive = new Gauge({
+      name: 'recordings_active',
+      help: 'Number of active server-side recordings',
+      labelNames: ['server'],
+      registers: [this.registry],
+    });
+
+    this.recordingsStarted = new Counter({
+      name: 'recordings_started_total',
+      help: 'Total number of server-side recordings started',
+      labelNames: ['server'],
+      registers: [this.registry],
+    });
+
+    this.recordingsCompleted = new Counter({
+      name: 'recordings_completed_total',
+      help: 'Total number of server-side recordings completed successfully',
+      labelNames: ['server'],
+      registers: [this.registry],
+    });
+
+    this.recordingsFailed = new Counter({
+      name: 'recordings_failed_total',
+      help: 'Total number of server-side recordings that failed',
+      labelNames: ['server'],
+      registers: [this.registry],
+    });
+
     // Database metrics
     this.databaseQueries = new Counter({
       name: 'database_queries_total',
@@ -212,6 +245,22 @@ class PrometheusMetrics {
 
     // Collect default Node.js metrics (memory, CPU, etc.)
     collectDefaultMetrics({ register: this.registry });
+
+    RecordingManager.on('recording-started', () => {
+      this.recordingsStarted.inc({ server: config.server.instanceId });
+    });
+
+    RecordingManager.on('recording-stopped', ({ error }) => {
+      if (error) {
+        this.recordingsFailed.inc({ server: config.server.instanceId });
+      } else {
+        this.recordingsCompleted.inc({ server: config.server.instanceId });
+      }
+    });
+
+    RecordingManager.on('recording-error', () => {
+      this.recordingsFailed.inc({ server: config.server.instanceId });
+    });
   }
 
   /**
@@ -271,6 +320,11 @@ class PrometheusMetrics {
       } catch (error) {
         logger.error('Error updating room metrics:', error);
       }
+
+      this.recordingsActive.set(
+        { server: config.server.instanceId },
+        RecordingManager.getActiveRecordingCount()
+      );
 
       // System metrics
       this.serverUptime.set(process.uptime());

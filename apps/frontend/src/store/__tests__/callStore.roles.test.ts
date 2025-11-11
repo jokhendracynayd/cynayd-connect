@@ -54,6 +54,8 @@ describe('callStore participant roles', () => {
     useCallStore.getState().resetCallState();
     expect(useCallStore.getState().participantRole).toBe('PARTICIPANT');
     expect(useCallStore.getState().isHost).toBe(false);
+    expect(useCallStore.getState().recording.active).toBe(false);
+    expect(useCallStore.getState().recording.status).toBeNull();
   });
 });
 

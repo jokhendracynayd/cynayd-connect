@@ -35,6 +35,102 @@ export interface RoomHostControlState {
   chatForceReason: string | null;
 }
 
+export const RecordingStatus = {
+  STARTING: 'STARTING',
+  RECORDING: 'RECORDING',
+  UPLOADING: 'UPLOADING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+} as const;
+
+export type RecordingStatus = (typeof RecordingStatus)[keyof typeof RecordingStatus];
+
+export const RecordingAssetType = {
+  COMPOSITE: 'COMPOSITE',
+  AUDIO_ONLY: 'AUDIO_ONLY',
+  VIDEO_ONLY: 'VIDEO_ONLY',
+  RAW_TRACK: 'RAW_TRACK',
+  METADATA: 'METADATA',
+} as const;
+
+export type RecordingAssetType = (typeof RecordingAssetType)[keyof typeof RecordingAssetType];
+
+export interface RecordingAssetRecord {
+  id: string;
+  sessionId: string;
+  type: RecordingAssetType;
+  storageBucket: string;
+  storageKey: string;
+  storageRegion: string | null;
+  sizeBytes: bigint | null;
+  durationSeconds: number | null;
+  format: string | null;
+  checksum: string | null;
+  metadata: Prisma.JsonValue | null;
+  createdAt: Date;
+  uploadedAt: Date | null;
+  urlExpiresAt: Date | null;
+}
+
+export interface RecordingSessionRecord {
+  id: string;
+  roomId: string;
+  hostId: string;
+  status: RecordingStatus;
+  startedAt: Date;
+  endedAt: Date | null;
+  durationSeconds: number | null;
+  failureReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  assets?: RecordingAssetRecord[];
+}
+
+export interface RecordingSessionCreateOptions {
+  roomId: string;
+  hostId: string;
+  status?: RecordingStatus;
+  startedAt?: Date;
+  durationSeconds?: number | null;
+  failureReason?: string | null;
+}
+
+export interface RecordingSessionUpdateOptions {
+  status?: RecordingStatus;
+  endedAt?: Date | null;
+  durationSeconds?: number | null;
+  failureReason?: string | null;
+}
+
+export interface RecordingAssetCreateOptions {
+  sessionId: string;
+  type: RecordingAssetType;
+  storageBucket: string;
+  storageKey: string;
+  storageRegion?: string | null;
+  sizeBytes?: bigint | number | null;
+  durationSeconds?: number | null;
+  format?: string | null;
+  checksum?: string | null;
+  metadata?: Prisma.JsonValue | null;
+  uploadedAt?: Date | null;
+  urlExpiresAt?: Date | null;
+}
+
+export interface RecordingAssetUpdateOptions {
+  storageBucket?: string;
+  storageKey?: string;
+  storageRegion?: string | null;
+  sizeBytes?: bigint | number | null;
+  durationSeconds?: number | null;
+  format?: string | null;
+  checksum?: string | null;
+  metadata?: Prisma.JsonValue | null;
+  uploadedAt?: Date | null;
+  urlExpiresAt?: Date | null;
+  type?: RecordingAssetType;
+}
+
 async function areMuteColumnsAvailable(): Promise<boolean> {
   const now = Date.now();
 
@@ -1334,6 +1430,246 @@ export class RoomService {
     return updatedRoom;
   }
 
+  static async createRecordingSession(
+    options: RecordingSessionCreateOptions
+  ): Promise<RecordingSessionRecord> {
+    const {
+      roomId,
+      hostId,
+      status = RecordingStatus.STARTING,
+      startedAt = new Date(),
+      durationSeconds = null,
+      failureReason = null,
+    } = options;
+
+    const client = prisma as any;
+
+    const record = await client.recordingSession.create({
+      data: {
+        roomId,
+        hostId,
+        status,
+        startedAt,
+        durationSeconds,
+        failureReason,
+      },
+    });
+
+    return record as RecordingSessionRecord;
+  }
+
+  static async updateRecordingSession(
+    sessionId: string,
+    updates: RecordingSessionUpdateOptions
+  ): Promise<RecordingSessionRecord> {
+    const data: Record<string, unknown> = {};
+
+    if (typeof updates.status !== 'undefined') {
+      data.status = updates.status;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'endedAt')) {
+      data.endedAt = updates.endedAt ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'durationSeconds')) {
+      data.durationSeconds = updates.durationSeconds ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'failureReason')) {
+      data.failureReason = updates.failureReason ?? null;
+    }
+
+    const client = prisma as any;
+
+    const record = await client.recordingSession.update({
+      where: { id: sessionId },
+      data,
+    });
+
+    return record as RecordingSessionRecord;
+  }
+
+  static async getRecordingSessionById(
+    sessionId: string
+  ): Promise<(RecordingSessionRecord & { assets: RecordingAssetRecord[] }) | null> {
+    const client = prisma as any;
+
+    const record = await client.recordingSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        assets: true,
+      },
+    });
+
+    return record as (RecordingSessionRecord & { assets: RecordingAssetRecord[] }) | null;
+  }
+
+  static async getActiveRecordingSessionForRoom(
+    roomId: string
+  ): Promise<(RecordingSessionRecord & { assets: RecordingAssetRecord[] }) | null> {
+    const activeStatuses: RecordingStatus[] = [
+      RecordingStatus.STARTING,
+      RecordingStatus.RECORDING,
+      RecordingStatus.UPLOADING,
+    ];
+
+    const client = prisma as any;
+
+    const record = await client.recordingSession.findFirst({
+      where: {
+        roomId,
+        status: {
+          in: activeStatuses,
+        },
+      },
+      orderBy: {
+        startedAt: 'desc',
+      },
+      include: {
+        assets: true,
+      },
+    });
+
+    return record as (RecordingSessionRecord & { assets: RecordingAssetRecord[] }) | null;
+  }
+
+  static async listRoomRecordingSessions(
+    roomId: string,
+    options: { cursor?: string; take?: number } = {}
+  ): Promise<(RecordingSessionRecord & { assets: RecordingAssetRecord[] })[]> {
+    const take = Math.min(Math.max(options.take ?? 20, 1), 100);
+    const cursor = options.cursor ? { id: options.cursor } : undefined;
+
+    const client = prisma as any;
+
+    const records = await client.recordingSession.findMany({
+      where: { roomId },
+      orderBy: {
+        startedAt: 'desc',
+      },
+      take,
+      skip: cursor ? 1 : undefined,
+      cursor,
+      include: {
+        assets: true,
+      },
+    });
+
+    return records as (RecordingSessionRecord & { assets: RecordingAssetRecord[] })[];
+  }
+
+  static async createRecordingAsset(
+    options: RecordingAssetCreateOptions
+  ): Promise<RecordingAssetRecord> {
+    const sizeBytes =
+      options.sizeBytes === undefined || options.sizeBytes === null
+        ? null
+        : typeof options.sizeBytes === 'bigint'
+        ? options.sizeBytes
+        : BigInt(options.sizeBytes);
+
+    const client = prisma as any;
+
+    const record = await client.recordingAsset.create({
+      data: {
+        sessionId: options.sessionId,
+        type: options.type,
+        storageBucket: options.storageBucket,
+        storageKey: options.storageKey,
+        storageRegion: options.storageRegion ?? null,
+        sizeBytes,
+        durationSeconds: options.durationSeconds ?? null,
+        format: options.format ?? null,
+        checksum: options.checksum ?? null,
+        metadata: options.metadata ?? Prisma.JsonNull,
+        uploadedAt: options.uploadedAt ?? null,
+        urlExpiresAt: options.urlExpiresAt ?? null,
+      },
+    });
+
+    return record as RecordingAssetRecord;
+  }
+
+  static async updateRecordingAsset(
+    assetId: string,
+    updates: RecordingAssetUpdateOptions
+  ): Promise<RecordingAssetRecord> {
+    const data: Record<string, unknown> = {};
+
+    if (typeof updates.type !== 'undefined') {
+      data.type = updates.type;
+    }
+
+    if (typeof updates.storageBucket !== 'undefined') {
+      data.storageBucket = updates.storageBucket;
+    }
+
+    if (typeof updates.storageKey !== 'undefined') {
+      data.storageKey = updates.storageKey;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'storageRegion')) {
+      data.storageRegion = updates.storageRegion ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'sizeBytes')) {
+      const value = updates.sizeBytes;
+      data.sizeBytes =
+        value === undefined || value === null
+          ? null
+          : typeof value === 'bigint'
+          ? value
+          : BigInt(value);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'durationSeconds')) {
+      data.durationSeconds = updates.durationSeconds ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'format')) {
+      data.format = updates.format ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'checksum')) {
+      data.checksum = updates.checksum ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'metadata')) {
+      data.metadata = updates.metadata ?? Prisma.JsonNull;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'uploadedAt')) {
+      data.uploadedAt = updates.uploadedAt ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'urlExpiresAt')) {
+      data.urlExpiresAt = updates.urlExpiresAt ?? null;
+    }
+
+    const client = prisma as any;
+
+    const record = await client.recordingAsset.update({
+      where: { id: assetId },
+      data,
+    });
+
+    return record as RecordingAssetRecord;
+  }
+
+  static async listRecordingAssets(sessionId: string): Promise<RecordingAssetRecord[]> {
+    const client = prisma as any;
+
+    const records = await client.recordingAsset.findMany({
+      where: { sessionId },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+
+    return records as RecordingAssetRecord[];
+  }
+
   static async leaveRoom(userId: string, roomCode: string) {
     const normalizedRoomCode = roomCode.trim().toLowerCase();
     const room = await this.getRoomByCode(normalizedRoomCode);
@@ -1359,4 +1695,3 @@ export class RoomService {
     return `${segment()}-${segment()}-${segment()}`;
   }
 }
-
