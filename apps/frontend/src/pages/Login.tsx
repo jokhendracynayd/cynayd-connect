@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { toast } from 'react-hot-toast';
 
@@ -8,13 +8,22 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const { login, isLoading } = useAuthStore();
   const navigate = useNavigate();
+  const location = useLocation();
+  const redirectTarget = (() => {
+    const state = location.state as { from?: { pathname: string; search?: string; hash?: string } } | null;
+    if (state?.from) {
+      const { pathname, search, hash } = state.from;
+      return `${pathname}${search ?? ''}${hash ?? ''}`;
+    }
+    return '/';
+  })();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       await login(email, password);
       toast.success('Logged in successfully');
-      navigate('/');
+      navigate(redirectTarget, { replace: true });
     } catch (error: any) {
       toast.error(error.message);
     }

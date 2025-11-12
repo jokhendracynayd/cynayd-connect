@@ -18,7 +18,7 @@ export interface NetworkSample {
 export interface NetworkMonitorConfig {
   intervalMs?: number;
   onSamples: (samples: NetworkSample[]) => void;
-  resolveProducerMeta: (producerId: string) => { userId?: string; kind?: 'audio' | 'video' | 'screen' } | undefined;
+  resolveProducerMeta: (producerId: string) => { userId?: string | undefined; kind?: 'audio' | 'video' | 'screen' | undefined } | undefined;
   localUserId: string;
 }
 

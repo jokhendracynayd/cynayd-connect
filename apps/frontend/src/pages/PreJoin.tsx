@@ -22,6 +22,7 @@ export default function PreJoin() {
     setLocalStream,
     setPermissionError,
     clearPermissionErrors,
+    setPreJoinCompleted,
   } = useCallStore();
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -35,8 +36,9 @@ export default function PreJoin() {
 
   useEffect(() => {
     clearPermissionErrors();
+    setPreJoinCompleted(false);
     loadDevices();
-  }, []);
+  }, [clearPermissionErrors, setPreJoinCompleted]);
 
   useEffect(() => {
     // Start preview if either audio or video is enabled
@@ -243,6 +245,7 @@ export default function PreJoin() {
       stopPreview();
       // Clear the media manager's stream reference to ensure fresh tracks in Call
       mediaManager.stopLocalMedia();
+      setPreJoinCompleted(true);
       navigate(`/call/${roomCode}`);
     } catch (error) {
       console.error('Failed to join:', error);

@@ -142,6 +142,7 @@ export default function Call() {
     roomIsPublic,
     pendingRequests,
     activeSpeakerId,
+    preJoinCompleted,
     raisedHands,
     setIsAdmin,
     setParticipantRole,
@@ -177,7 +178,14 @@ export default function Call() {
   
   const navigate = useNavigate();
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const [localVideoElement, setLocalVideoElement] = useState<HTMLVideoElement | null>(null);
+  
+  const setLocalVideoRef = useCallback((element: HTMLVideoElement | null) => {
+    localVideoRef.current = element;
+    setLocalVideoElement(element);
+  }, []);
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const remoteVideoRefCallbacks = useRef<Map<string, (element: HTMLVideoElement | null) => void>>(new Map());
   const [isConnecting, setIsConnecting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
@@ -216,6 +224,16 @@ export default function Call() {
   });
   const previousRecordingStatusRef = useRef<RecordingStatus | null>(recording.status ?? null);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!hasCheckedAuth || isLeaving || isLeavingRef.current) {
+      return;
+    }
+
+    if (!preJoinCompleted && roomCode) {
+      navigate(`/pre-join/${roomCode}`, { replace: true });
+    }
+  }, [preJoinCompleted, roomCode, navigate, hasCheckedAuth, isLeaving]);
 
   const normalizeRecordingState = useCallback(
     (incoming?: RecordingStateEventPayload | null): RecordingState => {
@@ -584,6 +602,10 @@ export default function Call() {
       return; // Wait for auth check
     }
 
+    if (!preJoinCompleted) {
+      return;
+    }
+
     // Get token from store or localStorage (fallback)
     const currentToken = token || storage.getToken();
     const currentUser = user;
@@ -637,13 +659,44 @@ export default function Call() {
         });
       }
     };
-  }, [roomCode, user, token, hasCheckedAuth]);
+  }, [roomCode, user, token, hasCheckedAuth, preJoinCompleted]);
 
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+    const videoEl = localVideoElement;
+    
+    if (!videoEl) {
+      return;
     }
-  }, [localStream]);
+
+    if (!localStream) {
+      if (videoEl.srcObject) {
+        videoEl.srcObject = null;
+      }
+      return;
+    }
+
+    if (videoEl.srcObject !== localStream) {
+      videoEl.srcObject = localStream;
+    }
+
+    const attemptPlay = () => {
+      videoEl
+        .play()
+        .catch(error => {
+          console.warn('Unable to autoplay local preview video:', error);
+        });
+    };
+
+    if (videoEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      attemptPlay();
+    } else {
+      videoEl.addEventListener('loadeddata', attemptPlay, { once: true });
+    }
+
+    return () => {
+      videoEl.removeEventListener('loadeddata', attemptPlay);
+    };
+  }, [localStream, localVideoElement]);
 
   useEffect(() => {
     // Update remote video elements when streams are added or changed
@@ -656,7 +709,7 @@ export default function Call() {
           !currentSrcObject || 
           currentSrcObject !== stream ||
           (currentSrcObject.getVideoTracks().length > 0 && 
-           currentSrcObject.getVideoTracks()[0].readyState === 'ended');
+           currentSrcObject.getVideoTracks()[0]?.readyState === 'ended');
         
         if (shouldUpdate) {
           console.log('Updating video element srcObject for user:', userId, {
@@ -803,12 +856,14 @@ export default function Call() {
   }, [remoteStreams, navigate, resetCallState]);
 
   const connectToRoom = async () => {
-    if (!roomCode || !user) return;
+    if (!roomCode || !user || !preJoinCompleted) return;
     
     resetRecordingState();
     
     let effectiveAudioMuted = isAudioMuted;
     let effectiveVideoMuted = isVideoMuted;
+    let selfAudioForceMuted = false;
+    let selfVideoForceMuted = false;
     let rosterEntries: ServerParticipant[] = [];
 
     // Get token from store or localStorage (fallback for page refresh)
@@ -836,7 +891,7 @@ export default function Call() {
         roomCode,
         name: user.name,
         email: user.email,
-        picture: user.picture,
+        picture: user.picture ?? undefined,
       });
 
       console.log('Joined room:', response);
@@ -906,6 +961,8 @@ export default function Call() {
     const selfRosterEntry = rosterEntries.find((participant) => participant?.userId === user.id);
 
     if (selfRosterEntry) {
+      selfAudioForceMuted = selfRosterEntry.isAudioForceMuted ?? false;
+      selfVideoForceMuted = selfRosterEntry.isVideoForceMuted ?? false;
       if (typeof selfRosterEntry.isAudioMuted === 'boolean') {
         effectiveAudioMuted = selfRosterEntry.isAudioMuted;
         setLocalAudioMuted(selfRosterEntry.isAudioMuted);
@@ -934,6 +991,9 @@ export default function Call() {
       
       // Get fresh local media - always get new tracks (don't reuse stopped tracks from PreJoin)
       clearPermissionErrors();
+      const audioPreferenceEnabled = settings.joinWithAudio && !selfAudioForceMuted;
+      const videoPreferenceEnabled = settings.joinWithVideo && !selfVideoForceMuted;
+      const pendingMuteUpdates: { audio?: boolean; video?: boolean } = {};
       let stream: MediaStream | null = null;
       if (settings.joinWithAudio || settings.joinWithVideo) {
         try {
@@ -951,17 +1011,80 @@ export default function Call() {
             setPermissionError('video', false);
           }
 
-          // Set initial enabled state based on muted settings
           if (stream) {
-            stream.getAudioTracks().forEach(track => {
-              track.enabled = settings.joinWithAudio && !effectiveAudioMuted;
+            const activeStream = stream;
+            // Sync audio mute state based on user's preference and server state
+            const desiredAudioMuted = !audioPreferenceEnabled;
+            if (effectiveAudioMuted !== desiredAudioMuted) {
+              effectiveAudioMuted = desiredAudioMuted;
+              pendingMuteUpdates.audio = desiredAudioMuted;
+              setLocalAudioMuted(desiredAudioMuted);
+            }
+
+            // Sync video mute state based on user's preference and server state
+            const desiredVideoMuted = !videoPreferenceEnabled;
+            if (effectiveVideoMuted !== desiredVideoMuted) {
+              effectiveVideoMuted = desiredVideoMuted;
+              pendingMuteUpdates.video = desiredVideoMuted;
+              setLocalVideoMuted(desiredVideoMuted);
+            }
+
+            const shouldEnableAudioTrack = audioPreferenceEnabled && !effectiveAudioMuted;
+            const existingAudioTracks = [...activeStream.getAudioTracks()];
+            existingAudioTracks.forEach(track => {
+              track.enabled = shouldEnableAudioTrack;
+              if (!shouldEnableAudioTrack) {
+                track.stop();
+                activeStream.removeTrack(track);
+              }
             });
-            stream.getVideoTracks().forEach(track => {
-              track.enabled = settings.joinWithVideo && !effectiveVideoMuted;
+
+            if (shouldEnableAudioTrack) {
+              const activeAudioTracks = activeStream
+                .getAudioTracks()
+                .filter(track => track.readyState === 'live');
+              if (activeAudioTracks.length === 0) {
+                try {
+                  const newAudioTrack = await mediaManager.getSingleTrack('audio', selectedDevices.audioInput);
+                  if (newAudioTrack) {
+                    newAudioTrack.enabled = true;
+                    activeStream.addTrack(newAudioTrack);
+                  }
+                } catch (trackError) {
+                  console.error('Failed to acquire audio track during join:', trackError);
+                }
+              }
+            }
+
+            const shouldEnableVideoTrack = videoPreferenceEnabled && !effectiveVideoMuted;
+            const existingVideoTracks = [...activeStream.getVideoTracks()];
+            existingVideoTracks.forEach(track => {
+              track.enabled = shouldEnableVideoTrack;
+              if (!shouldEnableVideoTrack) {
+                track.stop();
+                activeStream.removeTrack(track);
+              }
             });
+
+            if (shouldEnableVideoTrack) {
+              const activeVideoTracks = activeStream
+                .getVideoTracks()
+                .filter(track => track.readyState === 'live');
+              if (activeVideoTracks.length === 0) {
+                try {
+                  const newVideoTrack = await mediaManager.getSingleTrack('video', selectedDevices.videoInput);
+                  if (newVideoTrack) {
+                    newVideoTrack.enabled = true;
+                    activeStream.addTrack(newVideoTrack);
+                  }
+                } catch (trackError) {
+                  console.error('Failed to acquire video track during join:', trackError);
+                }
+              }
+            }
           }
 
-          setLocalStream(stream);
+          setLocalStream(stream ? new MediaStream(stream.getTracks()) : null);
         } catch (mediaError: any) {
           const permissionDenied =
             mediaError?.name === 'NotAllowedError' ||
@@ -1029,7 +1152,7 @@ export default function Call() {
                     // Update stream
                     if (stream) {
                       stream.addTrack(newVideoTrack);
-                      setLocalStream(new MediaStream(stream));
+                      setLocalStream(new MediaStream(stream.getTracks()));
                     }
                   }
                 } catch (trackError) {
@@ -1039,6 +1162,25 @@ export default function Call() {
             } else {
               throw error;
             }
+          }
+        }
+      }
+      
+      if (pendingMuteUpdates.audio !== undefined || pendingMuteUpdates.video !== undefined) {
+        const socket = (socketManager as any).socket;
+        const localUserId = user?.id || '';
+        if (socket && localUserId) {
+          if (pendingMuteUpdates.audio !== undefined) {
+            socket.emit('audio-mute', {
+              isAudioMuted: pendingMuteUpdates.audio,
+              uid: localUserId,
+            });
+          }
+          if (pendingMuteUpdates.video !== undefined) {
+            socket.emit('video-mute', {
+              isVideoMuted: pendingMuteUpdates.video,
+              uid: localUserId,
+            });
           }
         }
       }
@@ -1057,18 +1199,18 @@ export default function Call() {
           email: participantInfo.email,
           picture: participantInfo.picture ?? undefined,
           role: (participantInfo.role as ParticipantRole) ?? 'PARTICIPANT',
-          isAdmin: participantInfo.isAdmin,
-          isAudioMuted: participantInfo.isAudioMuted,
-          isVideoMuted: participantInfo.isVideoMuted,
-          isAudioForceMuted: participantInfo.isAudioForceMuted,
-          isVideoForceMuted: participantInfo.isVideoForceMuted,
-          audioForceMutedAt: participantInfo.audioForceMutedAt ?? null,
-          videoForceMutedAt: participantInfo.videoForceMutedAt ?? null,
-          audioForceMutedBy: participantInfo.audioForceMutedBy ?? null,
-          videoForceMutedBy: participantInfo.videoForceMutedBy ?? null,
-          forceMuteReason: participantInfo.forceMuteReason ?? null,
-          isSpeaking: participantInfo.isSpeaking,
-          hasRaisedHand: participantInfo.hasRaisedHand,
+          isAdmin: participantInfo.isAdmin ?? undefined,
+          isAudioMuted: participantInfo.isAudioMuted ?? undefined,
+          isVideoMuted: participantInfo.isVideoMuted ?? undefined,
+          isAudioForceMuted: participantInfo.isAudioForceMuted ?? undefined,
+          isVideoForceMuted: participantInfo.isVideoForceMuted ?? undefined,
+          audioForceMutedAt: participantInfo.audioForceMutedAt ?? undefined,
+          videoForceMutedAt: participantInfo.videoForceMutedAt ?? undefined,
+          audioForceMutedBy: participantInfo.audioForceMutedBy ?? undefined,
+          videoForceMutedBy: participantInfo.videoForceMutedBy ?? undefined,
+          forceMuteReason: participantInfo.forceMuteReason ?? undefined,
+          isSpeaking: participantInfo.isSpeaking ?? undefined,
+          hasRaisedHand: participantInfo.hasRaisedHand ?? undefined,
         });
         flushPendingParticipantEvents(participantInfo.userId);
       });
@@ -1266,18 +1408,18 @@ export default function Call() {
         email: participant.email,
         picture: participant.picture ?? undefined,
         role: (participant.role as ParticipantRole) ?? 'PARTICIPANT',
-        isAdmin: participant.isAdmin,
-        isAudioMuted: participant.isAudioMuted,
-        isVideoMuted: participant.isVideoMuted,
-         isAudioForceMuted: participant.isAudioForceMuted,
-         isVideoForceMuted: participant.isVideoForceMuted,
-         audioForceMutedAt: participant.audioForceMutedAt ?? null,
-         videoForceMutedAt: participant.videoForceMutedAt ?? null,
-         audioForceMutedBy: participant.audioForceMutedBy ?? null,
-         videoForceMutedBy: participant.videoForceMutedBy ?? null,
-         forceMuteReason: participant.forceMuteReason ?? null,
-        isSpeaking: participant.isSpeaking,
-        hasRaisedHand: participant.hasRaisedHand,
+        isAdmin: participant.isAdmin ?? undefined,
+        isAudioMuted: participant.isAudioMuted ?? undefined,
+        isVideoMuted: participant.isVideoMuted ?? undefined,
+         isAudioForceMuted: participant.isAudioForceMuted ?? undefined,
+         isVideoForceMuted: participant.isVideoForceMuted ?? undefined,
+         audioForceMutedAt: participant.audioForceMutedAt ?? undefined,
+         videoForceMutedAt: participant.videoForceMutedAt ?? undefined,
+         audioForceMutedBy: participant.audioForceMutedBy ?? undefined,
+         videoForceMutedBy: participant.videoForceMutedBy ?? undefined,
+         forceMuteReason: participant.forceMuteReason ?? undefined,
+        isSpeaking: participant.isSpeaking ?? undefined,
+        hasRaisedHand: participant.hasRaisedHand ?? undefined,
       });
       flushPendingParticipantEvents(participant.userId);
     };
@@ -1419,7 +1561,7 @@ export default function Call() {
       try {
         const message = mapToChatMessage(data);
         ingestChatMessage(message, {
-          currentUserId: user?.id,
+          currentUserId: user?.id ?? undefined,
           markAsRead: showChatPanelRef.current,
         });
       } catch (error) {
@@ -1522,14 +1664,14 @@ export default function Call() {
       applyParticipantForceState(payload.userId, {
         audio: payload.audio
           ? {
-              muted: payload.audio.muted,
+              muted: payload.audio.muted ?? undefined,
               forced: payload.audio.forced,
               reason: payload.audio.forced
-                ? payload.audio.reason ?? payload.reason ?? null
-                : null,
+                ? payload.audio.reason ?? payload.reason ?? undefined
+                : undefined,
               forcedBy: payload.audio.forced
-                ? payload.audio.forcedBy ?? payload.actorUserId ?? null
-                : null,
+                ? payload.audio.forcedBy ?? payload.actorUserId ?? undefined
+                : undefined,
               timestamp:
                 payload.audio.timestamp !== undefined && payload.audio.timestamp !== null
                   ? typeof payload.audio.timestamp === 'number'
@@ -1540,14 +1682,14 @@ export default function Call() {
           : undefined,
         video: payload.video
           ? {
-              muted: payload.video.muted,
+              muted: payload.video.muted ?? undefined,
               forced: payload.video.forced,
               reason: payload.video.forced
-                ? payload.video.reason ?? payload.reason ?? null
-                : null,
+                ? payload.video.reason ?? payload.reason ?? undefined
+                : undefined,
               forcedBy: payload.video.forced
-                ? payload.video.forcedBy ?? payload.actorUserId ?? null
-                : null,
+                ? payload.video.forcedBy ?? payload.actorUserId ?? undefined
+                : undefined,
               timestamp:
                 payload.video.timestamp !== undefined && payload.video.timestamp !== null
                   ? typeof payload.video.timestamp === 'number'
@@ -1828,7 +1970,7 @@ export default function Call() {
           userId: data.userId,
           name: data.name,
           email: data.email,
-          picture: data.picture,
+          picture: data.picture ?? undefined,
           requestedAt: data.requestedAt,
           status: 'pending',
         });
@@ -1886,7 +2028,7 @@ export default function Call() {
             userId: req.userId,
             name: req.name,
             email: req.email,
-            picture: req.picture,
+            picture: req.picture ?? undefined,
             requestedAt: req.requestedAt,
             status: 'pending',
           });
@@ -2397,8 +2539,7 @@ export default function Call() {
         window.location.href = '/';
       }
     } finally {
-      // Reset leaving state (though we're navigating away)
-      setIsLeaving(false);
+      // Do not reset isLeaving here to avoid re-triggering pre-join redirects before unmount
     }
   };
 
@@ -2477,7 +2618,7 @@ export default function Call() {
             localStream.removeTrack(track);
           });
           localStream.addTrack(newAudioTrack);
-          setLocalStream(new MediaStream(localStream));
+          setLocalStream(new MediaStream(localStream.getTracks()));
         } else {
           const newStream = new MediaStream([newAudioTrack]);
           setLocalStream(newStream);
@@ -2606,7 +2747,7 @@ export default function Call() {
             localStream.removeTrack(track);
           });
           localStream.addTrack(newVideoTrack);
-          setLocalStream(new MediaStream(localStream));
+          setLocalStream(new MediaStream(localStream.getTracks()));
         } else {
           const newStream = new MediaStream([newVideoTrack]);
           setLocalStream(newStream);
@@ -2681,7 +2822,7 @@ export default function Call() {
         // Remove video track from stream
         if (localStream) {
           localStream.removeTrack(videoTrack);
-          setLocalStream(new MediaStream(localStream));
+          setLocalStream(new MediaStream(localStream.getTracks()));
         }
         
         // Emit video mute event
@@ -2727,7 +2868,7 @@ export default function Call() {
           if (!localStream.getVideoTracks().includes(newVideoTrack)) {
             localStream.addTrack(newVideoTrack);
           }
-          setLocalStream(new MediaStream(localStream));
+          setLocalStream(new MediaStream(localStream.getTracks()));
         } else {
           const newStream = new MediaStream([newVideoTrack]);
           setLocalStream(newStream);
@@ -3124,7 +3265,7 @@ export default function Call() {
       userId: participant.userId,
       name: participant.name,
       email: participant.email,
-      picture: participant.picture,
+      picture: participant.picture ?? null,
       isLocal: false,
       isHost: participant.role === 'HOST',
       isModerator: participant.isAdmin ?? false,
@@ -3330,29 +3471,20 @@ export default function Call() {
     return 'grid-cols-1 sm:grid-cols-2';
   }
 
-  const setRemoteVideoRef = (tile: ParticipantTile) => (element: HTMLVideoElement | null) => {
-    if (!tile.stream) {
-      remoteVideoRefs.current.delete(tile.userId);
-      return;
-    }
+  const getRemoteVideoRef = useCallback((userId: string) => {
+    if (!remoteVideoRefCallbacks.current.has(userId)) {
+      remoteVideoRefCallbacks.current.set(userId, (element: HTMLVideoElement | null) => {
+        if (!element) {
+          remoteVideoRefs.current.delete(userId);
+          return;
+        }
 
-    if (!element) {
-      remoteVideoRefs.current.delete(tile.userId);
-      return;
-    }
-
-    remoteVideoRefs.current.set(tile.userId, element);
-
-    if (element.srcObject !== tile.stream) {
-      element.srcObject = tile.stream;
-    }
-
-    if (element.paused) {
-      element.play().catch(() => {
-        /* ignore autoplay errors */
+        remoteVideoRefs.current.set(userId, element);
       });
     }
-  };
+
+    return remoteVideoRefCallbacks.current.get(userId)!;
+  }, []);
 
   const renderParticipantTile = (tile: ParticipantTile, index: number) => {
     const tileStream = tile.stream ?? null;
@@ -3388,7 +3520,7 @@ export default function Call() {
     return (
       <div key={`${tile.userId}-${tile.isLocal ? 'local' : 'remote'}`} className={tileClasses}>
         <video
-          ref={tile.isLocal ? localVideoRef : setRemoteVideoRef(tile)}
+          ref={tile.isLocal ? setLocalVideoRef : getRemoteVideoRef(tile.userId)}
           autoPlay
           playsInline
           muted={tile.isLocal}
@@ -3469,6 +3601,17 @@ export default function Call() {
        />
      );
    }
+
+  if (!preJoinCompleted) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f7f9fc] text-slate-600">
+        <div className="text-center">
+          <div className="mx-auto h-12 w-12 rounded-full border-2 border-slate-200 border-t-cyan-400 animate-spin" />
+          <p className="mt-4 font-medium text-slate-800">Preparing room…</p>
+        </div>
+      </div>
+    );
+  }
 
    // Show leaving state
    if (isLeaving) {
@@ -3799,7 +3942,7 @@ export default function Call() {
                   pinnedUserId={pinnedScreenShareUserId}
                   onPin={handlePinScreenShare}
                   remoteStreams={screenShareStreams}
-                  currentUserId={user?.id}
+                  currentUserId={user?.id ?? ''}
                 />
 
                 <button
@@ -3947,7 +4090,7 @@ export default function Call() {
                     pinnedUserId={pinnedScreenShareUserId}
                     onPin={handlePinScreenShare}
                     remoteStreams={screenShareStreams}
-                    currentUserId={user?.id}
+                    currentUserId={user?.id ?? ''}
                   />
                 </div>
               )}

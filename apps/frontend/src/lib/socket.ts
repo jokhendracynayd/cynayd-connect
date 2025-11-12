@@ -118,7 +118,7 @@ class SocketManager {
     return this.socket;
   }
 
-  joinRoom(data: { roomCode: string; name: string; email: string; picture?: string }): Promise<any> {
+  joinRoom(data: { roomCode: string; name: string; email: string; picture?: string | undefined }): Promise<any> {
     return new Promise((resolve, reject) => {
       if (!this.socket) return reject(new Error('Not connected'));
       

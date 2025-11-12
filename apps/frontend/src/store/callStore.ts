@@ -180,7 +180,7 @@ export interface RoomJoinRequest {
   userId: string;
   name: string;
   email: string;
-  picture?: string;
+  picture?: string | undefined;
   requestedAt: Date | string;
   status: 'pending' | 'approved' | 'rejected';
 }
@@ -230,20 +230,20 @@ type ParticipantInput = {
   userId: string;
   name?: string;
   email?: string;
-  picture?: string;
+  picture?: string | undefined;
   role?: ParticipantRole;
-  isAudioMuted?: boolean;
-  isVideoMuted?: boolean;
-  isAudioForceMuted?: boolean;
-  isVideoForceMuted?: boolean;
-  isSpeaking?: boolean;
-  isAdmin?: boolean;
-  hasRaisedHand?: boolean;
-  audioForceMutedAt?: string | null;
-  videoForceMutedAt?: string | null;
-  audioForceMutedBy?: string | null;
-  videoForceMutedBy?: string | null;
-  forceMuteReason?: string | null;
+  isAudioMuted?: boolean | undefined;
+  isVideoMuted?: boolean | undefined;
+  isAudioForceMuted?: boolean | undefined;
+  isVideoForceMuted?: boolean | undefined;
+  isSpeaking?: boolean | undefined;
+  isAdmin?: boolean | undefined;
+  hasRaisedHand?: boolean | undefined;
+  audioForceMutedAt?: string | null | undefined;
+  videoForceMutedAt?: string | null | undefined;
+  audioForceMutedBy?: string | null | undefined;
+  videoForceMutedBy?: string | null | undefined;
+  forceMuteReason?: string | null | undefined;
 };
 
 interface CallState {
@@ -259,6 +259,7 @@ interface CallState {
   roomIsPublic: boolean;
   pendingRequests: RoomJoinRequest[];
   activeSpeakerId: string | null;
+  preJoinCompleted: boolean;
   raisedHands: Set<string>;
   screenShares: Map<string, ScreenShare>; // userId -> ScreenShare
   pinnedScreenShareUserId: string | null; // User's local pin choice
@@ -313,6 +314,7 @@ interface CallState {
   setParticipantRole: (role: ParticipantRole) => void;
   setIsHost: (isHost: boolean) => void;
   setRoomIsPublic: (isPublic: boolean) => void;
+  setPreJoinCompleted: (completed: boolean) => void;
   setPendingRequests: (requests: RoomJoinRequest[]) => void;
   addPendingRequest: (request: RoomJoinRequest) => void;
   removePendingRequest: (requestId: string) => void;
@@ -328,7 +330,7 @@ interface CallState {
   setSelectedDevices: (devices: Partial<CallState['selectedDevices']>) => void;
   setSettings: (settings: Partial<CallState['settings']>) => void;
   setChatActiveConversation: (conversationId: string) => void;
-  ingestChatMessage: (message: ChatMessage, options?: { currentUserId?: string; markAsRead?: boolean }) => void;
+  ingestChatMessage: (message: ChatMessage, options?: { currentUserId?: string | undefined; markAsRead?: boolean }) => void;
   addPendingChatMessage: (conversationId: string, message: ChatMessage) => void;
   resolvePendingChatMessage: (conversationId: string, clientMessageId: string, serverMessage: ChatMessage) => void;
   failPendingChatMessage: (conversationId: string, clientMessageId: string) => void;
@@ -345,19 +347,19 @@ interface CallState {
     userId: string,
     state: {
       audio?: {
-        muted?: boolean;
+        muted?: boolean | undefined;
         forced: boolean;
-        reason?: string | null;
-        forcedBy?: string | null;
-        timestamp?: string | null;
-      };
+        reason?: string | null | undefined;
+        forcedBy?: string | null | undefined;
+        timestamp?: string | null | undefined;
+      } | undefined;
       video?: {
-        muted?: boolean;
+        muted?: boolean | undefined;
         forced: boolean;
-        reason?: string | null;
-        forcedBy?: string | null;
-        timestamp?: string | null;
-      };
+        reason?: string | null | undefined;
+        forcedBy?: string | null | undefined;
+        timestamp?: string | null | undefined;
+      } | undefined;
     }
   ) => void;
   setRecordingState: (state: Partial<RecordingState> | RecordingState) => void;
@@ -446,6 +448,7 @@ export const useCallStore = create<CallState>((set) => ({
   roomIsPublic: true,
   pendingRequests: [],
   activeSpeakerId: null,
+  preJoinCompleted: false,
   raisedHands: new Set<string>(),
   screenShares: new Map<string, ScreenShare>(),
   pinnedScreenShareUserId: null,
@@ -529,6 +532,7 @@ export const useCallStore = create<CallState>((set) => ({
   setParticipantRole: (role) => set({ participantRole: role }),
   setIsHost: (isHost) => set({ isHost }),
   setRoomIsPublic: (isPublic) => set({ roomIsPublic: isPublic }),
+  setPreJoinCompleted: (completed) => set({ preJoinCompleted: completed }),
   setPendingRequests: (requests) => set({ pendingRequests: requests }),
   addPendingRequest: (request) => set((state) => {
     // Check if request already exists
@@ -1022,6 +1026,7 @@ export const useCallStore = create<CallState>((set) => ({
     roomIsPublic: true,
     pendingRequests: [],
     activeSpeakerId: null,
+    preJoinCompleted: false,
     raisedHands: new Set<string>(),
     screenShares: new Map<string, ScreenShare>(),
     pinnedScreenShareUserId: null,
