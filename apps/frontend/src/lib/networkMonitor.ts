@@ -269,8 +269,9 @@ export class NetworkMonitor {
     fallbackProducerId?: string
   ): { userId?: string; kind?: 'audio' | 'video' | 'screen' } {
     if (!appData || typeof appData !== 'object') {
+      const resolvedUserId = fallbackUserId ?? fallbackProducerId;
       return {
-        userId: fallbackUserId ?? fallbackProducerId,
+        ...(resolvedUserId ? { userId: resolvedUserId } : {}),
         kind: 'video',
       };
     }
@@ -285,8 +286,13 @@ export class NetworkMonitor {
             ? 'video'
             : (appData.kind === 'audio' || appData.kind === 'video' ? appData.kind : 'video');
 
+    const resolvedUserId =
+      (typeof appData.userId === 'string' && appData.userId) ||
+      fallbackUserId ||
+      fallbackProducerId;
+
     return {
-      userId: appData.userId ?? fallbackUserId ?? fallbackProducerId,
+      ...(resolvedUserId ? { userId: resolvedUserId } : {}),
       kind,
     };
   }

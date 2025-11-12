@@ -3,7 +3,6 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import Home from './pages/Home';
 import CreateRoom from './pages/CreateRoom';
-import JoinRoom from './pages/JoinRoom';
 import PreJoin from './pages/PreJoin';
 import Call from './pages/Call';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -30,14 +29,6 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <CreateRoom />
-      </ProtectedRoute>
-    ),
-  },
-  {
-    path: '/rooms/join',
-    element: (
-      <ProtectedRoute>
-        <JoinRoom />
       </ProtectedRoute>
     ),
   },

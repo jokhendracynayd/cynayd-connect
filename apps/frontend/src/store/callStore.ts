@@ -114,7 +114,16 @@ const upsertMessage = (messages: ChatMessage[], incoming: ChatMessage): ChatMess
     : -1;
 
   if (byIdIndex >= 0) {
-    updated[byIdIndex] = { ...updated[byIdIndex], ...incoming, status: incoming.status ?? updated[byIdIndex].status };
+    const existingMessage = updated[byIdIndex];
+    if (existingMessage) {
+      const mergedStatus = incoming.status ?? existingMessage.status;
+      const mergedMessage: ChatMessage = {
+        ...existingMessage,
+        ...incoming,
+        ...(mergedStatus !== undefined ? { status: mergedStatus } : {}),
+      };
+      updated[byIdIndex] = mergedMessage;
+    }
     return sortMessages(updated);
   }
 
@@ -124,11 +133,16 @@ const upsertMessage = (messages: ChatMessage[], incoming: ChatMessage): ChatMess
     );
 
     if (byClientIndex >= 0) {
-      updated[byClientIndex] = {
-        ...updated[byClientIndex],
-        ...incoming,
-        status: incoming.status ?? updated[byClientIndex].status,
-      };
+      const existingMessage = updated[byClientIndex];
+      if (existingMessage) {
+        const mergedStatus = incoming.status ?? existingMessage.status;
+        const mergedMessage: ChatMessage = {
+          ...existingMessage,
+          ...incoming,
+          ...(mergedStatus !== undefined ? { status: mergedStatus } : {}),
+        };
+        updated[byClientIndex] = mergedMessage;
+      }
       return sortMessages(updated);
     }
   }
@@ -371,7 +385,7 @@ const withParticipantDefaults = (participant: ParticipantInput): Participant => 
   userId: participant.userId,
   name: participant.name ?? 'Unknown',
   email: participant.email ?? '',
-  picture: participant.picture,
+  ...(participant.picture !== undefined ? { picture: participant.picture } : {}),
   role: participant.role ?? 'PARTICIPANT',
   isAudioMuted: participant.isAudioMuted ?? true,
   isVideoMuted: participant.isVideoMuted ?? true,
@@ -397,30 +411,36 @@ const mergeParticipantWithUpdates = (existing: Participant, updates: Participant
       ? updates.isAdmin
       : nextRole === 'HOST' || nextRole === 'COHOST';
 
-  return {
-  userId: existing.userId,
-  name: updates.name ?? existing.name,
-  email: updates.email ?? existing.email,
-  picture: updates.picture ?? existing.picture,
+  const merged: Participant = {
+    userId: existing.userId,
+    name: updates.name ?? existing.name,
+    email: updates.email ?? existing.email,
     role: nextRole,
-  isAudioMuted: updates.isAudioMuted ?? existing.isAudioMuted,
-  isVideoMuted: updates.isVideoMuted ?? existing.isVideoMuted,
-  isAudioForceMuted: updates.isAudioForceMuted ?? existing.isAudioForceMuted,
-  isVideoForceMuted: updates.isVideoForceMuted ?? existing.isVideoForceMuted,
-  isSpeaking: updates.isSpeaking ?? existing.isSpeaking,
+    isAudioMuted: updates.isAudioMuted ?? existing.isAudioMuted,
+    isVideoMuted: updates.isVideoMuted ?? existing.isVideoMuted,
+    isAudioForceMuted: updates.isAudioForceMuted ?? existing.isAudioForceMuted,
+    isVideoForceMuted: updates.isVideoForceMuted ?? existing.isVideoForceMuted,
+    isSpeaking: updates.isSpeaking ?? existing.isSpeaking,
     isAdmin: nextIsAdmin,
-  hasRaisedHand: updates.hasRaisedHand ?? existing.hasRaisedHand,
-  audioForceMutedAt:
-    updates.audioForceMutedAt !== undefined ? updates.audioForceMutedAt : existing.audioForceMutedAt ?? null,
-  videoForceMutedAt:
-    updates.videoForceMutedAt !== undefined ? updates.videoForceMutedAt : existing.videoForceMutedAt ?? null,
-  audioForceMutedBy:
-    updates.audioForceMutedBy !== undefined ? updates.audioForceMutedBy : existing.audioForceMutedBy ?? null,
-  videoForceMutedBy:
-    updates.videoForceMutedBy !== undefined ? updates.videoForceMutedBy : existing.videoForceMutedBy ?? null,
-  forceMuteReason:
-    updates.forceMuteReason !== undefined ? updates.forceMuteReason : existing.forceMuteReason ?? null,
+    hasRaisedHand: updates.hasRaisedHand ?? existing.hasRaisedHand,
+    audioForceMutedAt:
+      updates.audioForceMutedAt !== undefined ? updates.audioForceMutedAt : existing.audioForceMutedAt ?? null,
+    videoForceMutedAt:
+      updates.videoForceMutedAt !== undefined ? updates.videoForceMutedAt : existing.videoForceMutedAt ?? null,
+    audioForceMutedBy:
+      updates.audioForceMutedBy !== undefined ? updates.audioForceMutedBy : existing.audioForceMutedBy ?? null,
+    videoForceMutedBy:
+      updates.videoForceMutedBy !== undefined ? updates.videoForceMutedBy : existing.videoForceMutedBy ?? null,
+    forceMuteReason:
+      updates.forceMuteReason !== undefined ? updates.forceMuteReason : existing.forceMuteReason ?? null,
   };
+
+  const nextPicture = updates.picture ?? existing.picture;
+  if (nextPicture !== undefined) {
+    merged.picture = nextPicture;
+  }
+
+  return merged;
 };
 
 const initialRecordingState: RecordingState = {

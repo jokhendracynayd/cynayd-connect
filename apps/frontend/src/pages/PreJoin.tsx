@@ -289,21 +289,12 @@ export default function PreJoin() {
         <div className="absolute right-[-100px] bottom-[-160px] h-[480px] w-[480px] rounded-full bg-gradient-to-tl from-white via-cyan-100 to-indigo-100 opacity-60 blur-[170px]" />
       </div>
 
-      <div className="relative z-10 mx-auto flex min-h-screen max-w-6xl flex-col justify-center px-6 py-16 sm:px-8 lg:px-10">
-        <div className="grid gap-10 lg:grid-cols-[1.05fr_0.95fr]">
+      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-7xl flex-col justify-center px-6 py-16 sm:px-8 lg:px-10">
+        <div className="grid gap-10 lg:grid-cols-[1.3fr_0.8fr]">
           {/* Video Preview */}
-          <div className="rounded-[34px] border border-slate-200 bg-white/95 shadow-[0_32px_75px_-40px_rgba(14,165,233,0.55)] backdrop-blur overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.35em] text-cyan-500">Preview</p>
-                <h3 className="mt-2 text-lg font-semibold text-slate-900">Check your presence</h3>
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500">
-                Live preview
-              </div>
-            </div>
+          <div className="rounded-[36px] border border-slate-200 bg-white/95 shadow-[0_36px_90px_-46px_rgba(14,165,233,0.55)] backdrop-blur overflow-hidden">
             <div className="relative">
-              <div className="aspect-video border-b border-slate-100 bg-slate-950/90">
+              <div className="relative aspect-[4/3] min-h-[360px] border-b border-slate-100 bg-slate-950 sm:aspect-[16/9] sm:min-h-[420px] lg:min-h-[520px]">
                 {settings.joinWithVideo ? (
                   <video
                     ref={videoRef}
@@ -314,69 +305,87 @@ export default function PreJoin() {
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-100 via-white to-slate-50">
-                    <div className="text-center">
-                      <svg className="mx-auto h-16 w-16 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <div className="flex flex-col items-center justify-center gap-3 text-center text-slate-500">
+                      <svg className="h-16 w-16 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                       </svg>
-                      <p className="mt-4 text-sm font-medium text-slate-500">Camera is currently off</p>
+                      <div>
+                        <p className="text-sm font-medium">Camera is currently off</p>
+                        <p className="mt-1 text-xs text-slate-400">Enable video to check framing before you join.</p>
+                      </div>
                     </div>
                   </div>
                 )}
+                {settings.joinWithVideo && (
+                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_25%_25%,rgba(34,197,94,0.18),transparent_60%)]" />
+                )}
+                <div className="absolute top-4 left-4 flex flex-wrap items-center gap-3 text-xs font-medium text-white">
+                  <div className="inline-flex items-center gap-2 rounded-full bg-emerald-500/80 px-3 py-1 backdrop-blur">
+                    <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-white" />
+                    Live feed
+                  </div>
+                  <div className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 backdrop-blur">
+                    <span className="inline-flex h-2 w-2 rounded-full bg-rose-400 animate-pulse" />
+                    Recording Prep Ready
+                  </div>
+                  <div className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 backdrop-blur">
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-cyan-400/90 text-[11px] font-semibold">
+                      HD
+                    </span>
+                    4K Presence Enabled
+                  </div>
+                </div>
               </div>
 
-              <div className="flex flex-col gap-2 border-t border-slate-100 bg-white/90 px-6 py-4 sm:flex-row">
+              <div className="grid gap-2 border-t border-slate-100 bg-white/92 px-6 py-4 sm:grid-cols-2">
                 <button
                   onClick={handleToggleAudio}
-                  className={`flex-1 rounded-[18px] px-4 py-3 text-sm font-medium transition ${
+                  className={`flex items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
                     settings.joinWithAudio
-                      ? 'bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 text-white shadow-[0_18px_40px_-22px_rgba(14,165,233,0.6)] hover:shadow-[0_22px_50px_-24px_rgba(14,165,233,0.65)]'
-                      : 'border border-rose-200 bg-rose-50 text-rose-500 hover:border-rose-300'
+                      ? 'bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 text-white shadow-[0_22px_45px_-24px_rgba(14,165,233,0.65)] hover:shadow-[0_26px_55px_-26px_rgba(14,165,233,0.7)]'
+                      : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
                   }`}
                 >
-                  <span className="flex items-center justify-center gap-2">
-                    {settings.joinWithAudio ? (
-                      <>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                        </svg>
-                        Mic on
-                      </>
-                    ) : (
-                      <>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                        </svg>
-                        Mic muted
-                      </>
-                    )}
-                  </span>
+                  {settings.joinWithAudio ? (
+                    <>
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                      </svg>
+                      Mic active
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                      </svg>
+                      Mic muted
+                    </>
+                  )}
                 </button>
                 <button
                   onClick={handleToggleVideo}
-                  className={`flex-1 rounded-[18px] px-4 py-3 text-sm font-medium transition ${
+                  className={`flex items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
                     settings.joinWithVideo
-                      ? 'border border-slate-200 bg-white text-slate-700 hover:border-cyan-200 hover:bg-cyan-50'
-                      : 'border border-rose-200 bg-rose-50 text-rose-500 hover:border-rose-300'
+                      ? 'border border-cyan-200 bg-white text-slate-700 shadow-[0_18px_40px_-28px_rgba(14,165,233,0.55)] hover:border-cyan-300 hover:bg-cyan-50'
+                      : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
                   }`}
                 >
-                  <span className="flex items-center justify-center gap-2">
-                    {settings.joinWithVideo ? (
-                      <>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
-                        Camera on
-                      </>
-                    ) : (
-                      <>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                        </svg>
-                        Camera off
-                      </>
-                    )}
-                  </span>
+                  {settings.joinWithVideo ? (
+                    <>
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      Video live
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                      </svg>
+                      Video paused
+                    </>
+                  )}
                 </button>
               </div>
             </div>

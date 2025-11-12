@@ -29,10 +29,10 @@ const prisma = new PrismaClient({
 // Query logging (only in development)
 if (config.env === 'development') {
   prisma.$on('query', (e: Prisma.QueryEvent) => {
-    logger.debug(`Query: ${e.query}`);
-    logger.debug(`Duration: ${e.duration}ms`);
+    // logger.debug(`Query: ${e.query}`);
+    // logger.debug(`Duration: ${e.duration}ms`);
     if (e.duration > 1000) {
-      logger.warn(`Slow query detected: ${e.duration}ms`);
+      // logger.warn(`Slow query detected: ${e.duration}ms`);
     }
   });
 }

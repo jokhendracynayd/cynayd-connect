@@ -25,6 +25,65 @@ import { getPendingRequests, requestRoomJoin } from '../lib/api';
 import api from '../lib/api';
 import { storage } from '../lib/storage';
 
+function MicMutedIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 1920 1920"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        fillRule="evenodd"
+        d="M621.452 435.678c0-186.858 152.004-338.862 338.862-338.862 159.316 0 293.306 110.504 329.336 258.896L724.351 1162.76c-63.433-61.62-102.899-147.78-102.899-242.994V435.678Zm46.834 807.122c-88.168-79.79-143.65-195.06-143.65-323.033V435.679C524.636 195.475 720.111 0 960.315 0c176.955 0 329.645 106.09 397.775 257.997L1538.8 0l92.38 64.669L333.381 1917.48 241 1852.81l305.287-435.84C414.414 1301.53 331 1132.02 331 943.411V709.984h96.818v233.427c0 155.809 67.319 296.239 174.392 393.719l66.076-94.33Zm292.028 15.83c-9.387 0-18.687-.39-27.883-1.14l-62.071 88.62c29.036 6.12 59.127 9.34 89.955 9.34 240.205 0 435.675-195.48 435.675-435.683V595.685l-96.81 138.223v185.858c0 186.854-152.01 338.864-338.866 338.864Zm-162.996 191.75-57.715 82.4c54.294 20.4 112.13 33.5 172.305 38.1v252.3H669.861V1920h580.909v-96.82h-242.044v-252.3c324.464-24.8 580.904-296.76 580.904-627.469V709.984h-96.82v233.427c0 293.549-238.94 532.499-532.495 532.499-56.824 0-111.602-8.96-162.997-25.53Z"
+      />
+    </svg>
+  );
+}
+
+function HandRaisedIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M13.5001 3.75C13.9143 3.75 14.2501 4.08579 14.2501 4.5V7.5V12.75H15.7501V7.5C15.7501 7.08579 16.0858 6.75 16.5001 6.75C16.9143 6.75 17.2501 7.08579 17.2501 7.5V15C17.2501 17.8995 14.8996 20.25 12.0001 20.25V21.75C15.728 21.75 18.7501 18.7279 18.7501 15V7.5C18.7501 6.25736 17.7427 5.25 16.5001 5.25C16.2371 5.25 15.9846 5.29512 15.7501 5.37803V4.5C15.7501 3.25736 14.7427 2.25 13.5001 2.25C12.4625 2.25 11.5889 2.95235 11.3289 3.90757C11.0724 3.80589 10.7927 3.75 10.5001 3.75C9.25742 3.75 8.25006 4.75736 8.25006 6V12.5344L7.77377 11.5689L7.77221 11.5657C7.21726 10.4539 5.86607 10.0024 4.75422 10.5574C3.65214 11.1075 3.1989 12.4399 3.7315 13.546L5.03741 16.7808L5.06205 16.8354C6.16787 19.047 7.45919 20.2994 8.73651 20.9857C10.0096 21.6696 11.194 21.75 12.0001 21.75V20.25C11.3061 20.25 10.4069 20.1803 9.44641 19.6643C8.49439 19.1528 7.40758 18.1618 6.41695 16.191L5.11239 12.9597L5.08798 12.9055C4.903 12.5349 5.05349 12.0845 5.4241 11.8995C5.79428 11.7147 6.24405 11.8646 6.42944 12.2343L8.32743 16.0818L9.75004 15.75V14.25H9.75006V6C9.75006 5.58579 10.0858 5.25 10.5001 5.25C10.9143 5.25 11.2501 5.58579 11.2501 6V12.75H12.7501V6V4.5C12.7501 4.08579 13.0858 3.75 13.5001 3.75Z"
+      />
+    </svg>
+  );
+}
+
+function VideoMutedIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M3.75 7.5A2.25 2.25 0 0 1 6 5.25h6a2.25 2.25 0 0 1 2.25 2.25v2.94l3.52-2.64a.75.75 0 0 1 1.23.6v7.58a.75.75 0 0 1-1.23.6l-3.52-2.64v2.94A2.25 2.25 0 0 1 12 18.75H6A2.25 2.25 0 0 1 3.75 16.5v-9Z"
+        stroke="currentColor"
+        strokeWidth={1.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M4 4 20 20" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" />
+    </svg>
+  );
+}
+
 const formatDuration = (totalSeconds: number): string => {
   const clamped = Math.max(0, totalSeconds);
   const hours = Math.floor(clamped / 3600);
@@ -2337,20 +2396,7 @@ export default function Call() {
           });
         };
 
-        const handleTrackUnmuted = () => {
-          runOrQueueParticipantUpdate(resolvedUserId, () => {
-            if (track.kind === 'audio') {
-              updateParticipant(resolvedUserId, { isAudioMuted: false });
-            }
-            if (track.kind === 'video') {
-              updateParticipant(resolvedUserId, { isVideoMuted: false });
-            }
-          });
-        };
-
         track.onended = handleTrackMuted;
-        track.onmute = handleTrackMuted;
-        track.onunmute = handleTrackUnmuted;
       }
     } catch (error) {
       consumingProducersRef.current.delete(producerId);
@@ -3379,7 +3425,7 @@ export default function Call() {
   const shouldShowActiveSpeakerOverlay = Boolean(
     showSplitLayout && activeSpeakerTile && activeSpeakerTile.userId !== pinnedScreenShareUserId
   );
-  const mainLayoutSpacingClass = isSidebarCollapsed ? 'gap-2 pt-0' : 'gap-4 pt-4';
+  const mainLayoutSpacingClass = isSidebarCollapsed ? 'gap-2 pt-0' : 'gap-4 pt-0';
 
   useEffect(() => {
     if (!showSplitLayout && isSidebarCollapsed) {
@@ -3480,11 +3526,27 @@ export default function Call() {
         }
 
         remoteVideoRefs.current.set(userId, element);
+        
+        // Immediately attach existing stream if available (fixes timing issue where stream arrives before video element)
+        const existingStream = remoteStreams.get(userId);
+        if (existingStream) {
+          console.log('Attaching existing stream on video element mount:', {
+            userId,
+            trackCount: existingStream.getTracks().length,
+            tracks: existingStream.getTracks().map(t => ({ kind: t.kind, id: t.id, state: t.readyState })),
+          });
+          element.srcObject = existingStream;
+          if (element.paused) {
+            element.play().catch(err => {
+              console.error('Error playing video on mount for user:', userId, err);
+            });
+          }
+        }
       });
     }
 
     return remoteVideoRefCallbacks.current.get(userId)!;
-  }, []);
+  }, [remoteStreams]);
 
   const renderParticipantTile = (tile: ParticipantTile, index: number) => {
     const tileStream = tile.stream ?? null;
@@ -3529,40 +3591,43 @@ export default function Call() {
         />
 
         {!shouldShowVideo && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-900/80 text-white/70">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white/70">
             {tile.picture ? (
               <img
                 src={tile.picture}
                 alt={tile.name}
-                className="h-16 w-16 rounded-full border border-white/40 object-cover"
+                className="h-16 w-16 rounded-[18px] border border-white/40 object-cover"
               />
             ) : (
-              <svg className="h-16 w-16 text-white/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-              </svg>
+              <div className="flex h-16 w-16 items-center justify-center rounded-[18px] border border-white/30 bg-gradient-to-br from-cyan-500/50 via-sky-500/40 to-indigo-500/40 shadow-[0_18px_35px_-24px_rgba(14,165,233,0.65)] backdrop-blur">
+                <svg className="h-10 w-10 text-white/80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.6}
+                    d="M12 12.5c2.485 0 4.5-2.015 4.5-4.5S14.485 3.5 12 3.5 7.5 5.515 7.5 8s2.015 4.5 4.5 4.5zM5.25 20.5c.684-2.982 3.34-5.25 6.75-5.25s6.066 2.268 6.75 5.25"
+                  />
+                </svg>
+              </div>
             )}
-            <span className="text-sm font-medium">{tile.name}</span>
+            <span className="mt-3 text-sm font-medium capitalize">{tile.name}</span>
           </div>
         )}
 
         {tile.isAudioMuted && (
-          <div className="absolute left-4 top-4 rounded-full bg-rose-500 p-2 text-white shadow">
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-            </svg>
+          <div className="absolute left-4 top-4 rounded-full bg-rose-200/90 p-2 text-rose-700 shadow-sm backdrop-blur">
+            <MicMutedIcon className="h-4 w-4" />
           </div>
         )}
 
         {tile.hasRaisedHand && (
           <div className="absolute right-4 top-4 rounded-full bg-amber-300 p-2 text-amber-900 shadow">
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 0a1.5 1.5 0 00-3 0v2.5m6 0V11m0-5.5v-1a1.5 1.5 0 00-3 0v1m0 0V11m3-5.5a1.5 1.5 0 00-3 0v3m6 0V11" />
-            </svg>
+            <HandRaisedIcon className="h-4 w-4" />
           </div>
         )}
 
         <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur">
-          <span className="normal-case tracking-normal">
+          <span className="tracking-normal capitalize">
             {tile.name}
             {tile.isLocal ? ' (You)' : ''}
           </span>
@@ -3741,18 +3806,13 @@ export default function Call() {
                   : handleHostMuteAllAudio
               }
               className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
-                hostControls.audioForceAll ? 'bg-rose-500 text-white' : 'bg-white/90 text-slate-600'
+                hostControls.audioForceAll
+                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
+                  : 'bg-white text-slate-600 hover:bg-slate-100'
               }`}
               aria-pressed={hostControls.audioForceAll}
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M7 8V6a3 3 0 116 0v2m0 0v2a3 3 0 106 0V8m-6 0h6"
-                />
-              </svg>
+              <MicMutedIcon className="h-4 w-4" />
               <span className="hidden sm:inline">Mic</span>
               <span className="sm:hidden">M</span>
             </button>
@@ -3765,19 +3825,12 @@ export default function Call() {
               }
               className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
                 hostControls.videoForceAll
-                  ? 'bg-rose-500 text-white'
-                  : 'bg-white/90 text-slate-600'
+                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
+                  : 'bg-white text-slate-600 hover:bg-slate-100'
               }`}
               aria-pressed={hostControls.videoForceAll}
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M4 5a2 2 0 012-2h4a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V5zM16 7l3-2v10l-3-2"
-                />
-              </svg>
+              <VideoMutedIcon className="h-4 w-4" />
               <span className="hidden sm:inline">Camera</span>
               <span className="sm:hidden">Cam</span>
             </button>
@@ -3786,17 +3839,17 @@ export default function Call() {
               onClick={handleHostToggleChat}
               className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
                 hostControls.chatForceAll
-                  ? 'bg-rose-500 text-white'
-                  : 'bg-white/90 text-slate-600'
+                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
+                  : 'bg-white text-slate-600 hover:bg-slate-100'
               }`}
               aria-pressed={hostControls.chatForceAll}
             >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M17 8c0 3.866-3.582 7-8 7-1.01 0-1.98-.152-2.878-.432L3 15l.646-3.227C3.232 10.868 3 9.959 3 9c0-3.866 3.582-7 8-7s8 3.134 8 7z"
+                  strokeWidth={2}
+                  d="M7 8h10M7 12h6m7 0a9 9 0 11-4.219-7.516L21 4v8z"
                 />
               </svg>
               <span className="hidden sm:inline">Chat</span>
@@ -3928,7 +3981,7 @@ export default function Call() {
         )}
 
         <main
-          className={`relative flex min-h-0 flex-1 flex-col px-4 ${mainLayoutSpacingClass}`}
+          className={`relative flex min-h-0 flex-1 flex-col ${mainLayoutSpacingClass}`}
           style={{ paddingBottom: `calc(${bottomControlsOffset}px + env(safe-area-inset-bottom))` }}
         >
           {showSplitLayout ? (
@@ -4098,7 +4151,7 @@ export default function Call() {
               <div className="relative flex flex-1 overflow-hidden">
                 <div className="relative flex h-full w-full flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white/80 backdrop-blur">
                   <div
-                    className={`relative h-full w-full p-4 ${
+                    className={`relative h-full w-full ${
                       showSplitLayout ? 'overflow-y-auto pr-3 sm:pr-4' : 'overflow-hidden'
                     }`}
                     style={{ maxHeight: 'calc(100vh - 140px)' }}
@@ -4144,12 +4197,12 @@ export default function Call() {
             <button
               onClick={handleToggleAudio}
               disabled={audioForceActive}
-              className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
+              className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
                 audioForceActive
-                  ? 'bg-rose-600/80 cursor-not-allowed opacity-70'
+                  ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
                   : isAudioMuted
-                  ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
-                  : 'bg-slate-800 hover:bg-slate-900'
+                  ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
+                  : 'bg-slate-800 text-white hover:bg-slate-900'
               }`}
               title={
                 audioForceActive
@@ -4162,10 +4215,7 @@ export default function Call() {
               }
             >
               {isAudioMuted ? (
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                </svg>
+                <MicMutedIcon className="h-5 w-5" />
               ) : (
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
@@ -4176,12 +4226,12 @@ export default function Call() {
             <button
               onClick={handleToggleVideo}
               disabled={videoForceActive}
-              className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
+              className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
                 videoForceActive
-                  ? 'bg-rose-600/80 cursor-not-allowed opacity-70'
+                  ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
                   : isVideoMuted
-                  ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
-                  : 'bg-slate-800 hover:bg-slate-900'
+                  ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
+                  : 'bg-slate-800 text-white hover:bg-slate-900'
               }`}
               title={
                 videoForceActive
@@ -4194,9 +4244,7 @@ export default function Call() {
               }
             >
               {isVideoMuted ? (
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                </svg>
+                <VideoMutedIcon className="h-5 w-5" />
               ) : (
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -4213,9 +4261,7 @@ export default function Call() {
               }`}
               title={user?.id && raisedHands.has(user.id) ? 'Lower hand' : 'Raise hand'}
             >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 0a1.5 1.5 0 00-3 0v2.5m6 0V11m0-5.5v-1a1.5 1.5 0 00-3 0v1m0 0V11m3-5.5a1.5 1.5 0 00-3 0v3m6 0V11" />
-              </svg>
+              <HandRaisedIcon className="h-5 w-5" />
             </button>
 
             <button

@@ -151,8 +151,8 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
       title: option.title,
       participantIds: option.participantIds,
       unreadCount: existing?.unreadCount ?? 0,
-      lastMessageAt: existing?.lastMessageAt,
-      lastMessagePreview: existing?.lastMessagePreview,
+      ...(existing?.lastMessageAt ? { lastMessageAt: existing.lastMessageAt } : {}),
+      ...(existing?.lastMessagePreview ? { lastMessagePreview: existing.lastMessagePreview } : {}),
       nextCursor: existing?.nextCursor ?? null,
       hasMoreHistory: existing?.hasMoreHistory ?? true,
     });
@@ -191,11 +191,17 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
       const participantId = activeConversation.type === 'direct'
         ? activeParticipantId
         : undefined;
-      const response = await socketManager.requestChatHistory({
-        participantId,
-        cursor: activeConversation.nextCursor ?? undefined,
+      const historyOptions: { participantId?: string; cursor?: string; limit?: number } = {
         limit: 50,
-      });
+      };
+      if (participantId) {
+        historyOptions.participantId = participantId;
+      }
+      if (activeConversation.nextCursor !== null) {
+        historyOptions.cursor = activeConversation.nextCursor;
+      }
+
+      const response = await socketManager.requestChatHistory(historyOptions);
 
       const normalizedMessages = Array.isArray(response.messages)
         ? response.messages.map(normalizeChatMessage)
@@ -262,7 +268,7 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
             id: activeParticipant.userId,
             name: activeParticipant.name,
             email: activeParticipant.email,
-            picture: activeParticipant.picture,
+            picture: activeParticipant.picture ?? null,
           }
         : participantId
         ? {
@@ -286,7 +292,7 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
         id: currentUser.id,
         name: currentUser.name,
         email: currentUser.email,
-        picture: currentUser.picture,
+        picture: currentUser.picture ?? null,
       },
       recipient: recipientInfo,
       clientMessageId,
@@ -297,10 +303,14 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
       addPendingChatMessage(activeConversationId, pendingMessage);
       setDraft('');
 
-      const response = await socketManager.sendChatMessage(trimmed, {
-        participantId,
+      const sendOptions: { participantId?: string; clientMessageId?: string } = {
         clientMessageId,
-      });
+      };
+      if (participantId) {
+        sendOptions.participantId = participantId;
+      }
+
+      const response = await socketManager.sendChatMessage(trimmed, sendOptions);
 
       resolvePendingChatMessage(activeConversationId, clientMessageId, {
         ...pendingMessage,

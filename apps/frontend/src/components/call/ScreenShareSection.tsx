@@ -62,7 +62,7 @@ export default function ScreenShareSection({
           <div className="flex-1 overflow-hidden rounded-[24px] border border-slate-200 bg-slate-950/85 shadow-[0_22px_55px_-28px_rgba(15,23,42,0.6)]">
             <PinnedScreenShare
               share={pinnedShare}
-              stream={remoteStreams.get(pinnedShare.userId)}
+              stream={remoteStreams.get(pinnedShare.userId) ?? null}
               onUnpin={() => onPin(pinnedShare.userId)}
             />
           </div>
@@ -73,7 +73,7 @@ export default function ScreenShareSection({
                 <ScreenShareThumbnail
                   key={share.userId}
                   share={share}
-                  stream={remoteStreams.get(share.userId)}
+                  stream={remoteStreams.get(share.userId) ?? null}
                   onPin={() => onPin(share.userId)}
                 />
               ))}
@@ -92,7 +92,7 @@ export default function ScreenShareSection({
               <ScreenShareThumbnail
                 key={share.userId}
                 share={share}
-                stream={remoteStreams.get(share.userId)}
+                stream={remoteStreams.get(share.userId) ?? null}
                 onPin={() => onPin(share.userId)}
               />
             ))}

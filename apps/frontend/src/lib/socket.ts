@@ -258,14 +258,22 @@ class SocketManager {
         return reject(new Error('Not connected'));
       }
 
-      this.socket.emit(
-        'chat:send',
-        {
-          content,
-          recipientId: options.participantId,
-          clientMessageId: options.clientMessageId,
-        },
-        (response: any) => {
+      const payload: {
+        content: string;
+        recipientId?: string;
+        clientMessageId?: string;
+      } = {
+        content,
+      };
+
+      if (options.participantId) {
+        payload.recipientId = options.participantId;
+      }
+      if (options.clientMessageId) {
+        payload.clientMessageId = options.clientMessageId;
+      }
+
+      this.socket.emit('chat:send', payload, (response: any) => {
           if (!response?.success) {
             return reject(new Error(response?.error || 'Failed to send message'));
           }
@@ -284,10 +292,13 @@ class SocketManager {
     content: string,
     options: { clientMessageId?: string } = {}
   ) {
-    return this.sendChatMessage(content, {
+    const directOptions: { participantId?: string; clientMessageId?: string } = {
       participantId,
-      clientMessageId: options.clientMessageId,
-    });
+    };
+    if (options.clientMessageId) {
+      directOptions.clientMessageId = options.clientMessageId;
+    }
+    return this.sendChatMessage(content, directOptions);
   }
 
   requestChatHistory(options: {
@@ -300,14 +311,23 @@ class SocketManager {
         return reject(new Error('Not connected'));
       }
 
-      this.socket.emit(
-        'chat:history',
-        {
-          participantId: options?.participantId,
-          cursor: options?.cursor,
-          limit: options?.limit,
-        },
-        (response: any) => {
+      const payload: {
+        participantId?: string;
+        cursor?: string;
+        limit?: number;
+      } = {};
+
+      if (options?.participantId) {
+        payload.participantId = options.participantId;
+      }
+      if (options?.cursor) {
+        payload.cursor = options.cursor;
+      }
+      if (options?.limit !== undefined) {
+        payload.limit = options.limit;
+      }
+
+      this.socket.emit('chat:history', payload, (response: any) => {
           if (!response?.success) {
             return reject(new Error(response?.error || 'Failed to load messages'));
           }
