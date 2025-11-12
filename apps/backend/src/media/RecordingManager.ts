@@ -82,6 +82,23 @@ interface ProducerMetadata {
   source?: string;
 }
 
+interface RecordingStartCleanupContext {
+  roomId: string;
+  audioTransport?: PlainTransport;
+  videoTransport?: PlainTransport;
+  allocatedPorts: number[];
+  session?: RecordingSessionRecord;
+  state?: RecordingState;
+  stateRegistered: boolean;
+  redisEntryCreated: boolean;
+}
+
+interface RecordingPersistenceResult {
+  asset: RecordingAssetRecord | null;
+  uploaded: boolean;
+  error?: Error;
+}
+
 type RecordingEventPayloads = {
   'recording-started': { roomId: string; roomCode?: string; session: RecordingSessionRecord };
   'recording-stopped': {
@@ -165,102 +182,134 @@ export class RecordingManager {
     await this.ensureTmpDir();
 
     // Allocate dedicated ports for FFmpeg to listen on
-    const audioFfmpegPort = await this.allocateFfmpegPort();
-    const videoFfmpegPort = await this.allocateFfmpegPort();
+    const allocatedPorts: number[] = [];
+    let audioFfmpegPort: number | undefined;
+    let videoFfmpegPort: number | undefined;
+    let audioTransport: PlainTransport | undefined;
+    let videoTransport: PlainTransport | undefined;
+    let session: RecordingSessionRecord | undefined;
+    let state: RecordingState | undefined;
+    let stateRegistered = false;
+    let redisEntryCreated = false;
 
-    logger.info(`Allocated FFmpeg listening ports for room ${roomId}`, {
-      audioPort: audioFfmpegPort,
-      videoPort: videoFfmpegPort,
-      roomId,
-    });
+    try {
+      audioFfmpegPort = await this.allocateFfmpegPort();
+      allocatedPorts.push(audioFfmpegPort);
+      videoFfmpegPort = await this.allocateFfmpegPort();
+      allocatedPorts.push(videoFfmpegPort);
 
-    // Create PlainTransports and configure them to send to FFmpeg
-    const audioTransport = await this.createPlainTransport(router);
-    const videoTransport = await this.createPlainTransport(router);
+      logger.info(`Allocated FFmpeg listening ports for room ${roomId}`, {
+        audioPort: audioFfmpegPort,
+        videoPort: videoFfmpegPort,
+        roomId,
+      });
 
-    // Tell mediasoup where to send RTP (to FFmpeg's listening ports)
-    await audioTransport.connect({
-      ip: config.recording.network.ip,
-      port: audioFfmpegPort,
-    });
+      // Create PlainTransports and configure them to send to FFmpeg
+      audioTransport = await this.createPlainTransport(router);
+      videoTransport = await this.createPlainTransport(router);
 
-    await videoTransport.connect({
-      ip: config.recording.network.ip,
-      port: videoFfmpegPort,
-    });
+      // Tell mediasoup where to send RTP (to FFmpeg's listening ports)
+      await audioTransport.connect({
+        ip: config.recording.network.ip,
+        port: audioFfmpegPort,
+      });
 
-    logger.info(`Connected PlainTransports to FFmpeg ports for room ${roomId}`, {
-      audio: {
-        mediasoupPort: audioTransport.tuple.localPort,
-        ffmpegPort: audioFfmpegPort,
-      },
-      video: {
-        mediasoupPort: videoTransport.tuple.localPort,
-        ffmpegPort: videoFfmpegPort,
-      },
-      roomId,
-    });
+      await videoTransport.connect({
+        ip: config.recording.network.ip,
+        port: videoFfmpegPort,
+      });
 
-    // Use FFmpeg ports for the SDP (where FFmpeg will listen)
-    const audioPort = audioFfmpegPort;
-    const videoPort = videoFfmpegPort;
+      logger.info(`Connected PlainTransports to FFmpeg ports for room ${roomId}`, {
+        audio: {
+          mediasoupPort: audioTransport.tuple.localPort,
+          ffmpegPort: audioFfmpegPort,
+        },
+        video: {
+          mediasoupPort: videoTransport.tuple.localPort,
+          ffmpegPort: videoFfmpegPort,
+        },
+        roomId,
+      });
 
-    const sessionOptions: RecordingSessionCreateOptions = {
-      roomId,
-      hostId,
-      status: RecordingStatus.STARTING,
-    };
+      // Use FFmpeg ports for the SDP (where FFmpeg will listen)
+      const audioPort = audioFfmpegPort;
+      const videoPort = videoFfmpegPort;
 
-    const session = await RoomService.createRecordingSession(sessionOptions);
+      const sessionOptions: RecordingSessionCreateOptions = {
+        roomId,
+        hostId,
+        status: RecordingStatus.STARTING,
+      };
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const baseName = `${roomId}-${session.id}-${timestamp}`;
-    const files: RecordingFiles = {
-      sdpPath: path.join(config.recording.tmpDir, `${baseName}.sdp`),
-      rawOutputPath: path.join(config.recording.tmpDir, `${baseName}.webm`),
-      compositeOutputPath: path.join(config.recording.tmpDir, `${baseName}.mp4`),
-      logPath: path.join(config.recording.tmpDir, `${baseName}.log`),
-    };
+      session = await RoomService.createRecordingSession(sessionOptions);
 
-    const state: RecordingState = {
-      session,
-      roomId,
-      roomCode,
-      hostId,
-      router,
-      transports: {
-        audio: { transport: audioTransport, port: audioPort, tuple: audioTransport.tuple },
-        video: { transport: videoTransport, port: videoPort, tuple: videoTransport.tuple },
-      },
-      consumers: new Map(),
-      files,
-      status: RecordingStatus.STARTING,
-      startedAt: new Date(),
-      stopRequested: false,
-      uploadQueued: false,
-    };
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const baseName = `${roomId}-${session.id}-${timestamp}`;
+      const files: RecordingFiles = {
+        sdpPath: path.join(config.recording.tmpDir, `${baseName}.sdp`),
+        rawOutputPath: path.join(config.recording.tmpDir, `${baseName}.webm`),
+        compositeOutputPath: path.join(config.recording.tmpDir, `${baseName}.mp4`),
+        logPath: path.join(config.recording.tmpDir, `${baseName}.log`),
+      };
 
-    this.recordings.set(roomId, state);
+      state = {
+        session,
+        roomId,
+        roomCode,
+        hostId,
+        router,
+        transports: {
+          audio: { transport: audioTransport, port: audioPort, tuple: audioTransport.tuple },
+          video: { transport: videoTransport, port: videoPort, tuple: videoTransport.tuple },
+        },
+        consumers: new Map(),
+        files,
+        status: RecordingStatus.STARTING,
+        startedAt: new Date(),
+        stopRequested: false,
+        uploadQueued: false,
+      };
 
-    await RedisStateService.storeRecordingState({
-      roomId,
-      sessionId: session.id,
-      status: RecordingStatus.STARTING,
-      startedAt: state.startedAt.getTime(),
-      updatedAt: Date.now(),
-      hostId,
-    });
-    this.recorderEmitter.emit('recording-started', { roomId, roomCode, session });
+      this.recordings.set(roomId, state);
+      stateRegistered = true;
 
-    logger.info(`Recording session ${session.id} initialised for room ${roomId}`, {
-      roomId,
-      sessionId: session.id,
-      audioPort,
-      videoPort,
-      tmpDir: config.recording.tmpDir,
-    });
+      await RedisStateService.storeRecordingState({
+        roomId,
+        sessionId: session.id,
+        status: RecordingStatus.STARTING,
+        startedAt: state.startedAt.getTime(),
+        updatedAt: Date.now(),
+        hostId,
+      });
+      redisEntryCreated = true;
 
-    return session;
+      this.recorderEmitter.emit('recording-started', { roomId, roomCode, session });
+
+      logger.info(`Recording session ${session.id} initialised for room ${roomId}`, {
+        roomId,
+        sessionId: session.id,
+        audioPort,
+        videoPort,
+        tmpDir: config.recording.tmpDir,
+      });
+
+      return session;
+    } catch (error) {
+      await this.rollbackFailedStart(
+        {
+          roomId,
+          audioTransport,
+          videoTransport,
+          allocatedPorts,
+          session,
+          state,
+          stateRegistered,
+          redisEntryCreated,
+        },
+        error as Error
+      );
+      throw error;
+    }
   }
 
   static async stopRecording(params: StopRecordingParams): Promise<void> {
@@ -325,7 +374,10 @@ export class RecordingManager {
 
     const endedAt = new Date();
     const durationSeconds = Math.max(0, Math.round((endedAt.getTime() - state.startedAt.getTime()) / 1000));
-    const nextStatus = failure ? RecordingStatus.FAILED : RecordingStatus.UPLOADING;
+    let finalFailure = failure ?? false;
+    let finalFailureReason =
+      finalFailure && reason ? reason : finalFailure ? 'Recording stopped due to failure' : null;
+    const nextStatus = finalFailure ? RecordingStatus.FAILED : RecordingStatus.UPLOADING;
 
     const updates = {
       status: nextStatus,
@@ -344,9 +396,13 @@ export class RecordingManager {
       updatedAt: Date.now(),
       hostId: state.hostId,
     });
-    const { asset: assetRecord, uploaded } = await this.persistCompositeAsset(
+    const {
+      asset: assetRecord,
+      uploaded,
+      error: persistenceError,
+    } = await this.persistCompositeAsset(
       state,
-      failure ?? false
+      finalFailure
     );
 
     if (uploaded) {
@@ -362,11 +418,42 @@ export class RecordingManager {
         hostId: state.hostId,
       });
     }
+    if (!uploaded && !finalFailure) {
+      if (config.recording.s3.bucket && persistenceError) {
+        finalFailure = true;
+        finalFailureReason = persistenceError.message || 'Recording upload failed';
+        session = await RoomService.updateRecordingSession(state.session.id, {
+          status: RecordingStatus.FAILED,
+          failureReason: finalFailureReason,
+        });
+        await RedisStateService.storeRecordingState({
+          roomId,
+          sessionId: session.id,
+          status: RecordingStatus.FAILED,
+          startedAt: state.startedAt.getTime(),
+          updatedAt: Date.now(),
+          hostId: state.hostId,
+        });
+      } else {
+        session = await RoomService.updateRecordingSession(state.session.id, {
+          status: RecordingStatus.COMPLETED,
+          failureReason: null,
+        });
+        await RedisStateService.storeRecordingState({
+          roomId,
+          sessionId: session.id,
+          status: RecordingStatus.COMPLETED,
+          startedAt: state.startedAt.getTime(),
+          updatedAt: Date.now(),
+          hostId: state.hostId,
+        });
+      }
+    }
 
     this.recordings.delete(roomId);
     await RedisStateService.removeRecordingState(roomId);
 
-    const error = failure && reason ? new Error(reason) : undefined;
+    const error = finalFailureReason ? new Error(finalFailureReason) : undefined;
     this.recorderEmitter.emit('recording-stopped', {
       roomId,
       roomCode: roomCode ?? state.roomCode,
@@ -878,7 +965,7 @@ export class RecordingManager {
   private static async persistCompositeAsset(
     state: RecordingState,
     failed: boolean
-  ): Promise<{ asset: RecordingAssetRecord | null; uploaded: boolean }> {
+  ): Promise<RecordingPersistenceResult> {
     if (failed) {
       return { asset: null, uploaded: false };
     }
@@ -945,6 +1032,11 @@ export class RecordingManager {
             sessionId: state.session.id,
             error: uploadError,
           });
+          const normalized =
+            uploadError instanceof Error
+              ? uploadError
+              : new Error('Failed to upload recording artifact to S3');
+          return { asset, uploaded: false, error: normalized };
         }
       }
 
@@ -955,8 +1047,107 @@ export class RecordingManager {
         sessionId: state.session.id,
         error,
       });
-      return { asset: null, uploaded: false };
+      const normalized = error instanceof Error ? error : new Error('Failed to persist recording asset metadata');
+      return { asset: null, uploaded: false, error: normalized };
     }
+  }
+
+  private static async rollbackFailedStart(
+    context: RecordingStartCleanupContext,
+    error: Error
+  ): Promise<void> {
+    logger.error('Recording start failed, rolling back', {
+      roomId: context.roomId,
+      error: error.message,
+    });
+
+    if (context.stateRegistered) {
+      this.recordings.delete(context.roomId);
+    }
+
+    const cleanupTasks: Promise<unknown>[] = [];
+
+    if (context.audioTransport) {
+      cleanupTasks.push(
+        Promise.resolve().then(() => {
+          try {
+            context.audioTransport?.close();
+          } catch (closeError) {
+            logger.warn('Failed to close audio transport during rollback', {
+              roomId: context.roomId,
+              error: closeError,
+            });
+          }
+        })
+      );
+    }
+
+    if (context.videoTransport) {
+      cleanupTasks.push(
+        Promise.resolve().then(() => {
+          try {
+            context.videoTransport?.close();
+          } catch (closeError) {
+            logger.warn('Failed to close video transport during rollback', {
+              roomId: context.roomId,
+              error: closeError,
+            });
+          }
+        })
+      );
+    }
+
+    const portsToRelease = new Set<number>();
+    context.allocatedPorts.forEach(port => portsToRelease.add(port));
+    if (context.state) {
+      portsToRelease.add(context.state.transports.audio.port);
+      portsToRelease.add(context.state.transports.video.port);
+    }
+    portsToRelease.forEach(port => {
+      if (typeof port === 'number' && Number.isFinite(port)) {
+        this.releaseFfmpegPort(port);
+      }
+    });
+
+    if (context.redisEntryCreated) {
+      cleanupTasks.push(
+        RedisStateService.removeRecordingState(context.roomId).catch(removeError => {
+          logger.warn('Failed to remove Redis recording state during rollback', {
+            roomId: context.roomId,
+            error: removeError,
+          });
+        })
+      );
+    }
+
+    if (context.session) {
+      cleanupTasks.push(
+        RoomService.updateRecordingSession(context.session.id, {
+          status: RecordingStatus.FAILED,
+          failureReason: error.message,
+          endedAt: new Date(),
+        }).catch(updateError => {
+          logger.warn('Failed to update recording session during rollback', {
+            roomId: context.roomId,
+            error: updateError,
+          });
+        })
+      );
+    }
+
+    if (context.state?.files) {
+      const { sdpPath, rawOutputPath, compositeOutputPath, logPath } = context.state.files;
+      const filePaths = [sdpPath, rawOutputPath, compositeOutputPath, logPath];
+      for (const filePath of filePaths) {
+        if (filePath) {
+          cleanupTasks.push(
+            fs.rm(filePath, { force: true }).catch(() => undefined)
+          );
+        }
+      }
+    }
+
+    await Promise.allSettled(cleanupTasks);
   }
 }
 
