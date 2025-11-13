@@ -28,156 +28,20 @@ import DeviceDropdown from '../components/shared/DeviceDropdown';
 import WarningBadge from '../components/shared/WarningBadge';
 import DevicePermissionDialog from '../components/call/DevicePermissionDialog';
 import { getAudioDeviceStatus, getVideoDeviceStatus, setupPermissionListener, setupDeviceChangeListener } from '../lib/deviceStatus';
-
-function MicMutedIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 1920 1920"
-      fill="currentColor"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        fillRule="evenodd"
-        d="M621.452 435.678c0-186.858 152.004-338.862 338.862-338.862 159.316 0 293.306 110.504 329.336 258.896L724.351 1162.76c-63.433-61.62-102.899-147.78-102.899-242.994V435.678Zm46.834 807.122c-88.168-79.79-143.65-195.06-143.65-323.033V435.679C524.636 195.475 720.111 0 960.315 0c176.955 0 329.645 106.09 397.775 257.997L1538.8 0l92.38 64.669L333.381 1917.48 241 1852.81l305.287-435.84C414.414 1301.53 331 1132.02 331 943.411V709.984h96.818v233.427c0 155.809 67.319 296.239 174.392 393.719l66.076-94.33Zm292.028 15.83c-9.387 0-18.687-.39-27.883-1.14l-62.071 88.62c29.036 6.12 59.127 9.34 89.955 9.34 240.205 0 435.675-195.48 435.675-435.683V595.685l-96.81 138.223v185.858c0 186.854-152.01 338.864-338.866 338.864Zm-162.996 191.75-57.715 82.4c54.294 20.4 112.13 33.5 172.305 38.1v252.3H669.861V1920h580.909v-96.82h-242.044v-252.3c324.464-24.8 580.904-296.76 580.904-627.469V709.984h-96.82v233.427c0 293.549-238.94 532.499-532.495 532.499-56.824 0-111.602-8.96-162.997-25.53Z"
-      />
-    </svg>
-  );
-}
-
-function HandRaisedIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        fillRule="evenodd"
-        clipRule="evenodd"
-        d="M13.5001 3.75C13.9143 3.75 14.2501 4.08579 14.2501 4.5V7.5V12.75H15.7501V7.5C15.7501 7.08579 16.0858 6.75 16.5001 6.75C16.9143 6.75 17.2501 7.08579 17.2501 7.5V15C17.2501 17.8995 14.8996 20.25 12.0001 20.25V21.75C15.728 21.75 18.7501 18.7279 18.7501 15V7.5C18.7501 6.25736 17.7427 5.25 16.5001 5.25C16.2371 5.25 15.9846 5.29512 15.7501 5.37803V4.5C15.7501 3.25736 14.7427 2.25 13.5001 2.25C12.4625 2.25 11.5889 2.95235 11.3289 3.90757C11.0724 3.80589 10.7927 3.75 10.5001 3.75C9.25742 3.75 8.25006 4.75736 8.25006 6V12.5344L7.77377 11.5689L7.77221 11.5657C7.21726 10.4539 5.86607 10.0024 4.75422 10.5574C3.65214 11.1075 3.1989 12.4399 3.7315 13.546L5.03741 16.7808L5.06205 16.8354C6.16787 19.047 7.45919 20.2994 8.73651 20.9857C10.0096 21.6696 11.194 21.75 12.0001 21.75V20.25C11.3061 20.25 10.4069 20.1803 9.44641 19.6643C8.49439 19.1528 7.40758 18.1618 6.41695 16.191L5.11239 12.9597L5.08798 12.9055C4.903 12.5349 5.05349 12.0845 5.4241 11.8995C5.79428 11.7147 6.24405 11.8646 6.42944 12.2343L8.32743 16.0818L9.75004 15.75V14.25H9.75006V6C9.75006 5.58579 10.0858 5.25 10.5001 5.25C10.9143 5.25 11.2501 5.58579 11.2501 6V12.75H12.7501V6V4.5C12.7501 4.08579 13.0858 3.75 13.5001 3.75Z"
-      />
-    </svg>
-  );
-}
-
-function VideoMutedIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d="M3.75 7.5A2.25 2.25 0 0 1 6 5.25h6a2.25 2.25 0 0 1 2.25 2.25v2.94l3.52-2.64a.75.75 0 0 1 1.23.6v7.58a.75.75 0 0 1-1.23.6l-3.52-2.64v2.94A2.25 2.25 0 0 1 12 18.75H6A2.25 2.25 0 0 1 3.75 16.5v-9Z"
-        stroke="currentColor"
-        strokeWidth={1.6}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M4 4 20 20" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" />
-    </svg>
-  );
-}
-
-const formatDuration = (totalSeconds: number): string => {
-  const clamped = Math.max(0, totalSeconds);
-  const hours = Math.floor(clamped / 3600);
-  const minutes = Math.floor((clamped % 3600) / 60);
-  const seconds = clamped % 60;
-  const segments = [
-    hours > 0 ? String(hours).padStart(2, '0') : null,
-    String(minutes).padStart(2, '0'),
-    String(seconds).padStart(2, '0'),
-  ].filter(Boolean);
-  return segments.join(':');
-};
-
-interface RecordingStateEventPayload {
-  active?: boolean;
-  status?: RecordingStatus | string | null;
-  sessionId?: string | null;
-  hostId?: string | null;
-  serverInstanceId?: string | null;
-  startedAt?: string | null;
-  endedAt?: string | null;
-  failureReason?: string | null;
-  updatedAt?: string | null;
-}
-
-interface RecordingErrorEventPayload {
-  message?: string;
-}
-
-type SocketEventKey =
-  | 'user-joined'
-  | 'user-left'
-  | 'new-producer'
-  | 'producer-closed'
-  | 'chat:message'
-  | 'chat'
-  | 'audio-mute'
-  | 'video-mute'
-  | 'active-speaker'
-  | 'raised-hand'
-  | 'join-request'
-  | 'pending-requests-loaded'
-  | 'screen-share-started'
-  | 'screen-share-stopped'
-  | 'host-control:participant-state'
-  | 'host-control:room-state'
-  | 'host-control:chat-state'
-  | 'host-control:participant-removed'
-  | 'host-control:role-updated'
-  | 'recording:state'
-  | 'recording:error';
-
-type ServerParticipant = {
-  userId: string;
-  name: string;
-  email: string;
-  picture?: string | null;
-  role?: ParticipantRole;
-  isAdmin?: boolean;
-  isAudioMuted?: boolean;
-  isVideoMuted?: boolean;
-  isAudioForceMuted?: boolean;
-  isVideoForceMuted?: boolean;
-  isSpeaking?: boolean;
-  hasRaisedHand?: boolean;
-  joinedAt?: string;
-  audioMutedAt?: string | null;
-  videoMutedAt?: string | null;
-  audioForceMutedAt?: string | null;
-  videoForceMutedAt?: string | null;
-  audioForceMutedBy?: string | null;
-  videoForceMutedBy?: string | null;
-  forceMuteReason?: string | null;
-};
-
-interface ParticipantTile {
-  userId: string;
-  name: string;
-  email: string;
-  picture?: string | null;
-  isLocal: boolean;
-  isHost: boolean;
-  isModerator: boolean;
-  role: ParticipantRole;
-  stream?: MediaStream | null;
-  isAudioMuted: boolean;
-  isVideoMuted: boolean;
-  isSpeaking: boolean;
-  hasRaisedHand: boolean;
-}
+import { MicMutedIcon, HandRaisedIcon, VideoMutedIcon } from '../components/call/icons';
+import type {
+  RecordingStateEventPayload,
+  RecordingErrorEventPayload,
+  SocketEventKey,
+  ServerParticipant,
+  ParticipantTile,
+} from '../types/call';
+import { formatDuration } from '../utils/call';
+import { getNonSplitLayoutConfig, getGridTemplateClasses } from '../utils/callLayout';
+import CallParticipantTile from '../components/call/CallParticipantTile';
+import { useCallMedia } from '../hooks/call/useCallMedia';
+import { useCallScreenShare } from '../hooks/call/useCallScreenShare';
+import { useCallHostControls } from '../hooks/call/useCallHostControls';
 
 export default function Call() {
   const { roomCode } = useParams<{ roomCode: string }>();
@@ -577,104 +441,6 @@ export default function Call() {
 
   const hasPermissionIssue = permissionErrors.audio || permissionErrors.video;
 
-  const handleDeviceSelect = useCallback(
-    async (kind: 'audio' | 'video', deviceId: string) => {
-      const previousDeviceId = kind === 'audio' ? selectedDevices.audioInput : selectedDevices.videoInput;
-      if (previousDeviceId === deviceId) {
-        return;
-      }
-
-      try {
-        const newTrack = await mediaManager.getSingleTrack(kind, deviceId || undefined);
-        const existingStream = localStream;
-        const remainingTracks = existingStream?.getTracks().filter(track => track.kind !== kind) ?? [];
-        const updatedStream = new MediaStream([...remainingTracks, newTrack]);
-
-        const isMuted = kind === 'audio' ? isAudioMuted : isVideoMuted;
-        newTrack.enabled = !isMuted;
-
-        if (kind === 'video') {
-          const targetElement = localVideoElement ?? localVideoRef.current;
-          if (targetElement) {
-            targetElement.srcObject = updatedStream;
-          }
-        }
-
-        setLocalStream(updatedStream);
-        (mediaManager as any).localStream = updatedStream;
-
-        existingStream
-          ?.getTracks()
-          .filter(track => track.kind === kind)
-          .forEach(track => {
-            if (track !== newTrack) {
-              track.stop();
-            }
-          });
-
-        const existingProducer = webrtcManager.getProducer(kind);
-        if (existingProducer) {
-          if (kind === 'audio') {
-            await webrtcManager.replaceAudioTrack(newTrack);
-          } else {
-            await webrtcManager.replaceVideoTrack(newTrack);
-          }
-        } else {
-          if (kind === 'audio') {
-            await webrtcManager.produceAudio(newTrack);
-          } else {
-            await webrtcManager.produceVideo(newTrack);
-          }
-        }
-
-        if (existingProducer) {
-          try {
-            if (isMuted) {
-              await webrtcManager.pauseProducer(kind);
-            } else {
-              await webrtcManager.resumeProducer(kind);
-            }
-          } catch (producerError) {
-            console.warn('Failed to update producer state after switching device:', producerError);
-          }
-        }
-
-        if (kind === 'audio') {
-          useCallStore.getState().setSelectedDevices({ audioInput: deviceId });
-          setPermissionError('audio', false);
-        } else {
-          useCallStore.getState().setSelectedDevices({ videoInput: deviceId });
-          setPermissionError('video', false);
-        }
-
-        const label = kind === 'audio' ? 'Microphone' : 'Camera';
-        toast.success(`${label} switched successfully.`);
-      } catch (error: any) {
-        console.error(`Failed to switch ${kind}:`, error);
-        const label = kind === 'audio' ? 'microphone' : 'camera';
-        if (error.name === 'NotAllowedError') {
-          toast.error(`${label.charAt(0).toUpperCase()}${label.slice(1)} permission denied.`);
-        } else if (error.name === 'NotFoundError') {
-          toast.error(`Selected ${label} not found.`);
-        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-          toast.error(`${label.charAt(0).toUpperCase()}${label.slice(1)} is busy or unavailable.`);
-        } else {
-          toast.error(`Failed to switch ${label}.`);
-        }
-      }
-    },
-    [
-      isAudioMuted,
-      isVideoMuted,
-      localStream,
-      localVideoElement,
-      selectedDevices.audioInput,
-      selectedDevices.videoInput,
-      setLocalStream,
-      setPermissionError,
-    ]
-  );
-
   const chatUnreadCount = useMemo(() => {
     let total = 0;
     chat.conversations.forEach(conversation => {
@@ -689,6 +455,36 @@ export default function Call() {
     (!isAdmin && hostControls.audioForceAll) || localForceState.audio;
   const videoForceActive =
     (!isAdmin && hostControls.videoForceAll) || localForceState.video;
+
+  const {
+    handleToggleAudio,
+    handleToggleVideo,
+    handleToggleRaiseHand,
+    handleDeviceSelect,
+    handleShowAudioDialog,
+    handleShowVideoDialog,
+  } = useCallMedia({
+    localStream,
+    localVideoElement,
+    localVideoRef,
+    isAudioMuted,
+    isVideoMuted,
+    selectedDevices,
+    deviceStatus,
+    permissionErrors,
+    audioForceActive,
+    videoForceActive,
+    hostControls,
+    setLocalStream,
+    setLocalAudioMuted,
+    setLocalVideoMuted,
+    setPermissionError,
+    toggleAudio,
+    toggleVideo,
+    setShowDeviceDialog,
+    setDeviceDialogType,
+    setRaiseHand,
+  });
   const recordingStatusValue = recording.status ?? null;
   const recordingIsRecording =
     recording.active && recordingStatusValue === 'RECORDING';
@@ -820,129 +616,25 @@ export default function Call() {
       }
     });
   };
-  const cleanupScreenShare = (userId?: string, producerId?: string) => {
-    console.log('cleanupScreenShare called:', { userId, producerId, localUserId: user?.id });
-
-    if (!userId) {
-      if (producerId) {
-        const metadata = producerMetadataRef.current.get(producerId);
-        if (metadata?.userId) {
-          cleanupScreenShare(metadata.userId, producerId);
-        } else {
-          producerMetadataRef.current.delete(producerId);
-          activeScreenShareProducersRef.current.delete(producerId);
-        }
-      }
-      return;
-    }
-
-    const currentActiveId = screenShareProducersRef.current.get(userId);
-    const targetProducerId = producerId ?? null;
-
-    console.log('cleanupScreenShare - current state:', {
-      currentActiveId,
-      targetProducerId,
-      isLocalUser: user?.id === userId,
-      currentIsScreenSharing: isScreenSharing
-    });
-
-    // If a different screen share is currently active for this user, only clear metadata for the old producer
-    if (currentActiveId && targetProducerId && currentActiveId !== targetProducerId) {
-      console.log('Stale producer event detected, ignoring cleanup for active share');
-      activeScreenShareProducersRef.current.delete(targetProducerId);
-      producerMetadataRef.current.delete(targetProducerId);
-      return;
-    }
-
-    const producerIds = new Set<string>();
-    if (producerId) {
-      producerIds.add(producerId);
-    }
-
-    const mappedId = screenShareProducersRef.current.get(userId);
-    if (mappedId) {
-      producerIds.add(mappedId);
-    }
-
-    producerMetadataRef.current.forEach((meta, id) => {
-      if (meta.userId === userId && (meta.source === 'screen' || !meta.source)) {
-        producerIds.add(id);
-      }
-    });
-
-    console.log('Cleaning up producer IDs:', Array.from(producerIds));
-
-    setScreenShareStreams(prev => {
-      const next = new Map(prev);
-      const stream = next.get(userId);
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        next.delete(userId);
-      }
-      return next;
-    });
-
-    screenShareProducersRef.current.delete(userId);
-
-    producerIds.forEach(id => {
-      webrtcManager.closeConsumerByProducerId(id);
-      activeScreenShareProducersRef.current.delete(id);
-      producerMetadataRef.current.delete(id);
-    });
-
-    removeScreenShare(userId);
-
-    const { pinnedScreenShareUserId: currentPinned, screenShares: updatedShares } = useCallStore.getState();
-    if (currentPinned === userId) {
-      const nextShare = Array.from(updatedShares.values()).find(share => share.userId !== userId);
-      setPinnedScreenShare(nextShare?.userId || null);
-    }
-
-    // If cleaning up local user's screen share, update state
-    if (user?.id === userId) {
-      console.log('Setting isScreenSharing to false for local user');
-      setIsScreenSharing(false);
-    }
-
-    console.log('cleanupScreenShare complete');
-  };
-
-  const waitForScreenShareTeardown = async (context: string) => {
-    const timeoutMs = 5000;
-    const intervalMs = 100;
-    const startTime = Date.now();
-    let attempts = 0;
-
-    while (isStoppingScreenShareRef.current || webrtcManager.getScreenShareProducer()) {
-      if (Date.now() - startTime > timeoutMs) {
-        console.warn('Timeout waiting for screen share teardown', {
-          context,
-          isStopping: isStoppingScreenShareRef.current,
-          hasProducer: !!webrtcManager.getScreenShareProducer(),
-        });
-        break;
-      }
-
-      if (attempts % 10 === 0) {
-        console.log('Waiting for screen share teardown...', {
-          context,
-          attempt: attempts,
-          isStopping: isStoppingScreenShareRef.current,
-          hasProducer: !!webrtcManager.getScreenShareProducer(),
-        });
-      }
-
-      attempts += 1;
-      await new Promise(resolve => setTimeout(resolve, intervalMs));
-    }
-
-    console.log('Screen share teardown wait complete', {
-      context,
-      elapsed: Date.now() - startTime,
-      isStopping: isStoppingScreenShareRef.current,
-      hasProducer: !!webrtcManager.getScreenShareProducer(),
-    });
-  };
+  const {
+    handleStartScreenShare,
+    handleStopScreenShare,
+    handlePinScreenShare,
+    cleanupScreenShare,
+  } = useCallScreenShare({
+    isScreenSharing,
+    screenShareStreams,
+    setScreenShareStreams,
+    setIsScreenSharing,
+    addScreenShare,
+    removeScreenShare,
+    setPinnedScreenShare,
+    pinnedScreenShareUserId,
+    screenShareProducersRef,
+    producerMetadataRef,
+    activeScreenShareProducersRef,
+    isStoppingScreenShareRef,
+  });
 
   useEffect(() => {
     // Wait for auth check to complete
@@ -2935,692 +2627,22 @@ export default function Call() {
     }
   };
 
-  const handleShowAudioDialog = () => {
-    setDeviceDialogType('audio');
-    setShowDeviceDialog(true);
-  };
 
-  const handleShowVideoDialog = () => {
-    setDeviceDialogType('video');
-    setShowDeviceDialog(true);
-  };
+  const {
+    handleHostMuteAllAudio,
+    handleHostUnmuteAllAudio,
+    handleHostMuteAllVideo,
+    handleHostUnmuteAllVideo,
+    handleHostToggleChat,
+    handleHostToggleLock,
+    handleHostStartRecording,
+    handleHostStopRecording,
+    handleHostControlParticipant,
+    handleHostRemoveParticipant,
+    handlePromoteToCoHost,
+    handleDemoteFromCoHost,
+  } = useCallHostControls({ hostControls });
 
-  const handleToggleAudio = async () => {
-    // Check if there are device issues - if so, show dialog instead of toggling
-    if (deviceStatus.audio.issueType !== 'none') {
-      handleShowAudioDialog();
-      return;
-    }
-
-    // User is manually toggling - reset auto-mute tracking
-    audioAutoMutedRef.current = false;
-
-    const desiredMutedState = !isAudioMuted;
-    if (audioForceActive && !desiredMutedState) {
-      toast.error('The host has muted your microphone.');
-      return;
-    }
-
-    if (permissionErrors.audio) {
-      try {
-        const newAudioTrack = await mediaManager.getSingleTrack('audio', selectedDevices.audioInput);
-
-        // Remove any existing audio tracks
-        if (localStream) {
-          localStream.getAudioTracks().forEach(track => {
-            track.stop();
-            localStream.removeTrack(track);
-          });
-          localStream.addTrack(newAudioTrack);
-          setLocalStream(new MediaStream(localStream.getTracks()));
-        } else {
-          const newStream = new MediaStream([newAudioTrack]);
-          setLocalStream(newStream);
-        }
-
-        newAudioTrack.enabled = !isAudioMuted;
-
-        const existingProducer = webrtcManager.getProducer('audio');
-        if (existingProducer) {
-          await webrtcManager.replaceAudioTrack(newAudioTrack);
-        } else {
-          await webrtcManager.produceAudio(newAudioTrack);
-        }
-
-        if (isAudioMuted) {
-          newAudioTrack.enabled = false;
-          try {
-            await webrtcManager.pauseProducer('audio');
-          } catch (pauseError) {
-            console.warn('Failed to pause audio producer after replacing track:', pauseError);
-          }
-        } else {
-          try {
-            await webrtcManager.resumeProducer('audio');
-          } catch (resumeError) {
-            console.warn('Failed to resume audio producer after replacing track:', resumeError);
-          }
-        }
-
-        setPermissionError('audio', false);
-        toast.success('Microphone ready');
-      } catch (error: any) {
-        console.error('Failed to enable microphone after permission retry:', error);
-        setPermissionError('audio', true);
-
-        if (error.name === 'NotAllowedError') {
-          toast.error('Microphone permission denied');
-        } else if (error.name === 'NotFoundError') {
-          toast.error('No microphone found');
-        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-          toast.error('Microphone is busy or unavailable');
-        } else {
-          toast.error('Failed to start microphone');
-        }
-      }
-      return;
-    }
-
-    const wasMuted = isAudioMuted; // Store BEFORE toggle
-    const newMuted = desiredMutedState;
-    toggleAudio();
-    
-    // Emit mute event to other participants
-    const socket = (socketManager as any).socket;
-    if (socket && roomCode) {
-      socket.emit('audio-mute', {
-        isAudioMuted: newMuted,
-        uid: user?.id || '',
-      });
-    }
-    
-    const audioProducer = webrtcManager.getProducer('audio');
-    const audioTrack = localStream?.getAudioTracks()[0];
-    
-    if (audioTrack) {
-      if (!wasMuted) {
-        // Turning OFF - mute track and pause producer
-        audioTrack.enabled = false;
-        if (audioProducer) {
-          try {
-            await webrtcManager.pauseProducer('audio');
-          } catch (error) {
-            console.error('Error pausing audio producer:', error);
-          }
-        }
-      } else {
-        // Turning ON - unmute track and resume producer
-        audioTrack.enabled = true;
-        if (audioProducer) {
-          try {
-            await webrtcManager.resumeProducer('audio');
-          } catch (error) {
-            console.error('Error resuming audio producer:', error);
-          }
-        }
-      }
-    }
-  };
-
-  const handleToggleRaiseHand = () => {
-    if (!user?.id) return;
-    
-    const userId = user.id;
-    const isCurrentlyRaised = raisedHands.has(userId);
-    const newRaisedState = !isCurrentlyRaised;
-    
-    // Emit socket event to notify others
-    socketManager.raiseHand(newRaisedState, userId);
-    
-    // Update local state immediately for better UX
-    setRaiseHand(userId, newRaisedState);
-    
-    // Show toast notification
-    if (newRaisedState) {
-      toast.success('Hand raised');
-    } else {
-      toast('Hand lowered');
-    }
-  };
-
-  const handleToggleVideo = async () => {
-    // Check if there are device issues - if so, show dialog instead of toggling
-    if (deviceStatus.video.issueType !== 'none') {
-      handleShowVideoDialog();
-      return;
-    }
-
-    // User is manually toggling - reset auto-mute tracking
-    videoAutoMutedRef.current = false;
-
-    const desiredMutedState = !isVideoMuted;
-    if (videoForceActive && !desiredMutedState) {
-      toast.error('The host has disabled your camera.');
-      return;
-    }
-
-    if (permissionErrors.video) {
-      try {
-        const newVideoTrack = await mediaManager.getSingleTrack('video', selectedDevices.videoInput);
-        const targetMuted = desiredMutedState;
-
-        if (localStream) {
-          localStream.getVideoTracks().forEach(track => {
-            track.stop();
-            localStream.removeTrack(track);
-          });
-          localStream.addTrack(newVideoTrack);
-          setLocalStream(new MediaStream(localStream.getTracks()));
-        } else {
-          const newStream = new MediaStream([newVideoTrack]);
-          setLocalStream(newStream);
-        }
-
-        newVideoTrack.enabled = !targetMuted;
-
-        const existingProducer = webrtcManager.getProducer('video');
-        if (existingProducer) {
-          await webrtcManager.replaceVideoTrack(newVideoTrack);
-        } else {
-          await webrtcManager.produceVideo(newVideoTrack);
-        }
-
-        if (targetMuted) {
-          newVideoTrack.enabled = false;
-          try {
-            await webrtcManager.pauseProducer('video');
-          } catch (pauseError) {
-            console.warn('Failed to pause video producer after replacing track:', pauseError);
-          }
-        } else {
-          newVideoTrack.enabled = true;
-          try {
-            await webrtcManager.resumeProducer('video');
-          } catch (resumeError) {
-            console.warn('Failed to resume video producer after replacing track:', resumeError);
-          }
-        }
-
-        setLocalVideoMuted(targetMuted);
-        setPermissionError('video', false);
-        toast.success('Camera ready');
-      } catch (error: any) {
-        console.error('Failed to enable camera after permission retry:', error);
-        setPermissionError('video', true);
-
-        if (error.name === 'NotAllowedError') {
-          toast.error('Camera permission denied');
-        } else if (error.name === 'NotFoundError') {
-          toast.error('No camera found');
-        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-          toast.error('Camera is busy or unavailable');
-        } else {
-          toast.error('Failed to start camera');
-        }
-      }
-      return;
-    }
-
-    const wasMuted = isVideoMuted; // Store BEFORE toggle
-    toggleVideo();
-    
-    const videoProducer = webrtcManager.getProducer('video');
-    const videoTrack = localStream?.getVideoTracks()[0];
-    
-    if (!wasMuted) {
-      // Turning OFF - PHYSICALLY STOP CAMERA
-      if (videoTrack) {
-        videoTrack.stop(); // This physically stops the camera
-        console.log('Camera stopped');
-        
-        // Pause producer on server
-        if (videoProducer) {
-          try {
-            await webrtcManager.pauseProducer('video');
-          } catch (error) {
-            console.error('Error pausing video producer:', error);
-          }
-        }
-        
-        // Remove video track from stream
-        if (localStream) {
-          localStream.removeTrack(videoTrack);
-          setLocalStream(new MediaStream(localStream.getTracks()));
-        }
-        
-        // Emit video mute event
-        const socket = (socketManager as any).socket;
-        if (socket && roomCode) {
-          socket.emit('video-mute', {
-            isVideoMuted: true,
-            uid: user?.id || '',
-          });
-        }
-      }
-    } else {
-      // Turning ON - Get new video track and replace in producer
-      try {
-        const newVideoTrack = await mediaManager.getSingleTrack('video', selectedDevices.videoInput);
-        newVideoTrack.enabled = true;
-
-        if (videoProducer) {
-          // Replace track in producer
-          await webrtcManager.replaceVideoTrack(newVideoTrack);
-
-          // Resume producer if it was paused
-          try {
-            await webrtcManager.resumeProducer('video');
-          } catch (error) {
-            console.error('Error resuming video producer:', error);
-          }
-        } else {
-          // Producer doesn't exist, create it
-          await webrtcManager.produceVideo(newVideoTrack);
-        }
-
-        // Remove any stale/ended tracks from local stream before adding the new one
-        if (localStream) {
-          const existingVideoTracks = localStream.getVideoTracks();
-          existingVideoTracks.forEach(track => {
-            if (track !== newVideoTrack) {
-              track.stop();
-              localStream.removeTrack(track);
-            }
-          });
-
-          if (!localStream.getVideoTracks().includes(newVideoTrack)) {
-            localStream.addTrack(newVideoTrack);
-          }
-          setLocalStream(new MediaStream(localStream.getTracks()));
-        } else {
-          const newStream = new MediaStream([newVideoTrack]);
-          setLocalStream(newStream);
-        }
-
-        console.log('Camera restarted');
-
-        // Emit video mute event
-        const socket = (socketManager as any).socket;
-        if (socket && roomCode) {
-          socket.emit('video-mute', {
-            isVideoMuted: false,
-            uid: user?.id || '',
-          });
-        }
-      } catch (error: any) {
-        console.error('Error turning video on:', error);
-        // Revert toggle on error
-        toggleVideo();
-        
-        if (error.name === 'NotAllowedError') {
-          toast.error('Camera permission denied');
-        } else if (error.name === 'NotFoundError') {
-          toast.error('No camera found');
-        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-          toast.error('Camera is busy or not available');
-        } else {
-          toast.error('Failed to start camera');
-        }
-      }
-    }
-  };
-
-  const emitHostControl = useCallback(
-    (
-      event: string,
-      payload: Record<string, unknown>,
-      successMessage?: string,
-      fallbackErrorMessage: string = 'Host action failed'
-    ) => {
-      const socket = socketManager.getSocket
-        ? socketManager.getSocket()
-        : (socketManager as any).socket;
-      if (!socket) {
-        toast.error('Not connected to signaling server.');
-        return;
-      }
-
-      socket.emit(event, payload, (response?: { success?: boolean; error?: string }) => {
-        if (response && response.success === false) {
-          toast.error(response.error ?? fallbackErrorMessage);
-          return;
-        }
-        if (successMessage) {
-          toast.success(successMessage);
-        }
-      });
-    },
-    []
-  );
-
-  const handleHostMuteAllAudio = useCallback(() => {
-    emitHostControl(
-      'host-control:mute-all',
-      { targets: ['audio'], mute: true },
-      'Muted all microphones',
-      'Failed to mute microphones'
-    );
-  }, [emitHostControl]);
-
-  const handleHostUnmuteAllAudio = useCallback(() => {
-    emitHostControl(
-      'host-control:mute-all',
-      { targets: ['audio'], mute: false },
-      'Released microphones',
-      'Failed to unmute microphones'
-    );
-  }, [emitHostControl]);
-
-  const handleHostMuteAllVideo = useCallback(() => {
-    emitHostControl(
-      'host-control:mute-all',
-      { targets: ['video'], mute: true },
-      'Disabled all cameras',
-      'Failed to disable cameras'
-    );
-  }, [emitHostControl]);
-
-  const handleHostUnmuteAllVideo = useCallback(() => {
-    emitHostControl(
-      'host-control:mute-all',
-      { targets: ['video'], mute: false },
-      'Enabled cameras',
-      'Failed to enable cameras'
-    );
-  }, [emitHostControl]);
-
-  const handleHostToggleChat = useCallback(() => {
-    const shouldMute = !hostControls.chatForceAll;
-    emitHostControl(
-      'host-control:mute-chat',
-      { mute: shouldMute },
-      shouldMute ? 'Muted chat for everyone' : 'Chat reopened for participants',
-      shouldMute ? 'Failed to mute chat' : 'Failed to reopen chat'
-    );
-  }, [emitHostControl, hostControls.chatForceAll]);
-
-  const handleHostToggleLock = useCallback(() => {
-    const nextLocked = !hostControls.locked;
-    emitHostControl(
-      'host-control:lock-room',
-      { locked: nextLocked },
-      nextLocked ? 'Room locked' : 'Room unlocked',
-      'Failed to update room lock'
-    );
-  }, [emitHostControl, hostControls.locked]);
-
-  const handleHostStartRecording = useCallback(() => {
-    emitHostControl(
-      'host-control:start-recording',
-      {},
-      'Starting recording…',
-      'Failed to start recording'
-    );
-  }, [emitHostControl]);
-
-  const handleHostStopRecording = useCallback(() => {
-    emitHostControl(
-      'host-control:stop-recording',
-      {},
-      'Stopping recording…',
-      'Failed to stop recording'
-    );
-  }, [emitHostControl]);
-
-  const handleHostControlParticipant = useCallback(
-    (userId: string, targets: { audio?: boolean; video?: boolean }, mute: boolean) => {
-      emitHostControl(
-        'host-control:mute-participant',
-        {
-          targetUserId: userId,
-          audio: targets.audio ?? false,
-          video: targets.video ?? false,
-          mute,
-        },
-        mute ? 'Participant muted' : 'Participant unmuted',
-        'Failed to update participant state'
-      );
-    },
-    [emitHostControl]
-  );
-
-  const handleHostRemoveParticipant = useCallback(
-    (userId: string) => {
-      emitHostControl(
-        'host-control:remove-participant',
-        { targetUserId: userId },
-        'Participant removed',
-        'Failed to remove participant'
-      );
-    },
-    [emitHostControl]
-  );
-
-  const handlePromoteToCoHost = useCallback(
-    (userId: string) => {
-      emitHostControl(
-        'host-control:update-role',
-        { targetUserId: userId, role: 'cohost' },
-        'Participant promoted to co-host',
-        'Failed to promote participant to co-host'
-      );
-    },
-    [emitHostControl]
-  );
-
-  const handleDemoteFromCoHost = useCallback(
-    (userId: string) => {
-      emitHostControl(
-        'host-control:update-role',
-        { targetUserId: userId, role: 'participant' },
-        'Co-host privileges revoked',
-        'Failed to update participant role'
-      );
-    },
-    [emitHostControl]
-  );
-
-  const handleStartScreenShare = async () => {
-    console.log('handleStartScreenShare called, current state:', {
-      isScreenSharing,
-      userId: user?.id,
-      hasExistingProducer: !!webrtcManager.getScreenShareProducer(),
-      isStopping: isStoppingScreenShareRef.current,
-    });
-
-    if (isStoppingScreenShareRef.current) {
-      await waitForScreenShareTeardown('pre-start');
-    }
-
-    if (isScreenSharing) {
-      console.log('Screen share already active, stopping first...');
-      await handleStopScreenShare();
-      await waitForScreenShareTeardown('after-handleStop');
-    }
-
-    const lingeringProducer = webrtcManager.getScreenShareProducer();
-    if (lingeringProducer) {
-      console.log('Lingering screen share producer detected before starting new share, forcing cleanup', {
-        producerId: lingeringProducer.id,
-      });
-      const { producerId: forcedClosedId } = await webrtcManager.closeScreenShareProducer();
-      if (forcedClosedId && user?.id) {
-        cleanupScreenShare(user.id, forcedClosedId);
-      }
-      await waitForScreenShareTeardown('after-forced-close');
-    }
-
-    try {
-      console.log('Starting screen share...');
-
-      // 1. Get screen stream
-      const screenStream = await mediaManager.startScreenShare();
-      const screenTrack = screenStream.getVideoTracks()[0];
-
-      if (!screenTrack) {
-        throw new Error('Failed to get screen share track');
-      }
-
-      console.log('Screen share stream obtained, track:', {
-        id: screenTrack.id,
-        kind: screenTrack.kind,
-        enabled: screenTrack.enabled,
-        readyState: screenTrack.readyState
-      });
-
-      if (!user?.id) {
-        throw new Error('User not found');
-      }
-
-      // 2. Create producer
-      console.log('Creating screen share producer...');
-      const producer = await webrtcManager.produceScreenShare(screenTrack);
-
-      console.log('Screen share producer created:', producer.id);
-
-      // 3. Notify backend
-      console.log('Notifying backend of screen share start...');
-      await socketManager.startScreenShare(producer.id);
-      console.log('Backend notified');
-
-      // 4. Update state
-      setIsScreenSharing(true);
-      console.log('Set isScreenSharing to true');
-      
-      // Store producer mapping FIRST (so consumeProducer can skip it)
-      screenShareProducersRef.current.set(user.id, producer.id);
-      producerMetadataRef.current.set(producer.id, {
-        userId: user.id,
-        source: 'screen',
-        kind: 'video',
-      });
-      activeScreenShareProducersRef.current.add(producer.id);
-      
-      console.log('Producer metadata stored:', {
-        userId: user.id,
-        producerId: producer.id,
-        totalActiveProducers: activeScreenShareProducersRef.current.size
-      });
-      
-      // Add to screen shares (will be filtered out in UI for current user)
-      addScreenShare({
-        userId: user.id,
-        producerId: producer.id,
-        name: user.name,
-        stream: screenStream,
-      });
-
-      console.log('Screen share state updated, isScreenSharing:', true);
-
-      // Note: We don't auto-pin our own screen share (user won't see it anyway)
-
-      toast.success('Screen sharing started');
-
-      // 6. Handle track end (user stops via browser)
-      screenTrack.onended = async () => {
-        console.log('Screen track ended via browser');
-        await handleStopScreenShare();
-      };
-    } catch (error: any) {
-      console.error('Error starting screen share:', error);
-      setIsScreenSharing(false);
-      if (error.name === 'NotAllowedError') {
-        toast.error('Screen sharing permission denied');
-      } else if (error.name === 'NotReadableError') {
-        toast.error('Screen is not available');
-      } else {
-        toast.error('Failed to start screen sharing');
-      }
-    }
-  };
-
-  const handleStopScreenShare = async () => {
-    if (!user?.id) {
-      return;
-    }
-
-    console.log('handleStopScreenShare called, current isScreenSharing:', isScreenSharing, 'isStopping:', isStoppingScreenShareRef.current);
-
-    // Prevent double-calls (e.g., from track.onended + user click)
-    if (isStoppingScreenShareRef.current) {
-      console.log('Already stopping screen share, ignoring duplicate call');
-      return;
-    }
-
-    const producer = webrtcManager.getScreenShareProducer();
-    const fallbackProducerId = screenShareProducersRef.current.get(user.id);
-    const producerId = producer?.id ?? fallbackProducerId ?? null;
-
-    console.log('Stop screen share - producerId:', producerId, 'hasProducer:', !!producer);
-
-    // If no producer and no state, already stopped
-    if (!producer && !producerId && !isScreenSharing) {
-      console.log('Already stopped, nothing to do');
-      return;
-    }
-
-    // Set stopping flag to prevent duplicate calls
-    isStoppingScreenShareRef.current = true;
-    console.log('Set isStoppingScreenShareRef to true');
-
-    try {
-      // Set UI state immediately to prevent UI actions
-      setIsScreenSharing(false);
-      console.log('Set isScreenSharing to false immediately');
-
-      // 1. Close producer if still active
-      if (producer) {
-        const { producerId: closedId } = await webrtcManager.closeScreenShareProducer();
-        console.log('Closed producer:', closedId);
-        if (closedId) {
-          cleanupScreenShare(user.id, closedId);
-          toast.success('Screen sharing stopped');
-          return;
-        }
-      }
-
-      // 2. Stop media
-      mediaManager.stopScreenShare();
-
-      // 3. Notify backend (best-effort)
-      if (producerId) {
-        try {
-          await socketManager.stopScreenShare(producerId);
-          console.log('Notified backend - screen share stopped');
-        } catch (socketError) {
-          console.warn('stopScreenShare emit failed, attempting closeProducer fallback', socketError);
-          try {
-            await socketManager.closeProducer(producerId);
-          } catch (closeError) {
-            console.warn('closeProducer fallback failed', closeError);
-          }
-        }
-      }
-
-      // 4. Update state
-      cleanupScreenShare(user.id, producerId ?? undefined);
-
-      console.log('Screen share stop complete, isScreenSharing should be false');
-      toast.success('Screen sharing stopped');
-    } catch (error) {
-      console.error('Error stopping screen share:', error);
-      setIsScreenSharing(false);
-      toast.error('Failed to stop screen sharing');
-    } finally {
-      isStoppingScreenShareRef.current = false;
-      console.log('Reset isStoppingScreenShareRef to false (finally)');
-    }
-  };
-
-  const handlePinScreenShare = (userId: string) => {
-    if (pinnedScreenShareUserId === userId) {
-      // Unpin
-      setPinnedScreenShare(null);
-    } else {
-      // Pin this share
-      setPinnedScreenShare(userId);
-    }
-  };
 
   const remoteParticipantTiles: ParticipantTile[] = participants
     .filter(participant => participant.userId !== user?.id)
@@ -3774,65 +2796,6 @@ export default function Call() {
     });
   }, [activeSpeakerHasLiveVideo, activeSpeakerStream, shouldShowActiveSpeakerOverlay]);
 
-  function getNonSplitLayoutConfig(count: number) {
-    const baseGrid = 'grid h-full w-full gap-4 grid-cols-1 sm:grid-cols-2';
-
-    if (count <= 0) {
-      return {
-        gridClasses: `${baseGrid} content-center justify-items-center`,
-        autoRowsClass: '',
-        tileBaseClass: '',
-      };
-    }
-
-    if (count === 1) {
-      return {
-        gridClasses: 'grid h-full w-full gap-4 grid-cols-1',
-        autoRowsClass: 'auto-rows-[minmax(100%,1fr)]',
-        tileBaseClass: 'min-h-full h-full max-h-full',
-      };
-    }
-
-    if (count === 2) {
-      return {
-        gridClasses: `${baseGrid} items-stretch`,
-        autoRowsClass: 'auto-rows-[minmax(260px,1fr)] sm:auto-rows-[minmax(340px,1fr)]',
-        tileBaseClass: 'min-h-[260px] sm:min-h-[340px] max-h-full sm:max-h-[560px]',
-      };
-    }
-
-    if (count === 3) {
-      return {
-        gridClasses: `${baseGrid} items-stretch`,
-        autoRowsClass: 'auto-rows-[minmax(260px,1fr)] sm:auto-rows-[minmax(320px,1fr)]',
-        tileBaseClass: 'min-h-[260px] sm:min-h-[320px] max-h-full sm:max-h-[520px]',
-        tileClassForIndex: (index: number) =>
-          index === 2 ? 'sm:col-span-2 sm:justify-self-center sm:w-full sm:max-w-[600px]' : '',
-      };
-    }
-
-    return {
-      gridClasses: `${baseGrid} items-stretch`,
-      autoRowsClass: 'auto-rows-[minmax(220px,1fr)] sm:auto-rows-[minmax(280px,1fr)]',
-      tileBaseClass: 'min-h-[220px] sm:min-h-[280px] max-h-full sm:max-h-[480px]',
-    };
-  }
-
-  function getGridTemplateClasses(count: number) {
-    if (count <= 1) {
-      return 'grid-cols-1';
-    }
-    if (count === 2) {
-      return 'grid-cols-1 md:grid-cols-2';
-    }
-    if (count === 3) {
-      return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
-    }
-    if (count >= 4 && count <= 6) {
-      return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
-    }
-    return 'grid-cols-1 sm:grid-cols-2';
-  }
 
   const getRemoteVideoRef = useCallback((userId: string) => {
     if (!remoteVideoRefCallbacks.current.has(userId)) {
@@ -3866,100 +2829,17 @@ export default function Call() {
   }, [remoteStreams]);
 
   const renderParticipantTile = (tile: ParticipantTile, index: number) => {
-    const tileStream = tile.stream ?? null;
-    const videoTracks = tileStream?.getVideoTracks() ?? [];
-    const hasLiveVideo = videoTracks.some(track => track.readyState === 'live');
-    const shouldShowVideo = Boolean(tileStream && !tile.isVideoMuted && hasLiveVideo);
-    const firstVideoTrack = videoTracks[0];
-    const facingMode = firstVideoTrack?.getSettings?.().facingMode;
-    const trackLabel = firstVideoTrack?.label?.toLowerCase() ?? '';
-    const isProbableScreenShare = trackLabel.includes('screen') || trackLabel.includes('display') || trackLabel.includes('window');
-    const isFrontFacingCamera =
-      facingMode === 'user' ||
-      (!facingMode && !isProbableScreenShare);
-    const shouldMirrorVideo = tile.isLocal || isFrontFacingCamera;
-    const layoutTileBaseClass = !showSplitLayout ? nonSplitLayoutConfig?.tileBaseClass ?? '' : '';
-    const layoutTileIndexClass =
-      !showSplitLayout && nonSplitLayoutConfig?.tileClassForIndex
-        ? nonSplitLayoutConfig.tileClassForIndex(index)
-        : '';
-
-    const tileClasses = [
-      'relative overflow-hidden rounded-3xl border border-slate-200 bg-white/90 shadow-[0_24px_60px_-35px_rgba(14,165,233,0.35)] transition-all',
-      'w-full',
-      tile.isSpeaking ? 'ring-2 ring-cyan-400 shadow-[0_0_0_4px_rgba(14,165,233,0.15)]' : '',
-      tile.isLocal ? 'ring-1 ring-cyan-200/60' : '',
-      showSplitLayout ? 'aspect-[4/3]' : isSoloLayout ? 'h-full' : '',
-      layoutTileBaseClass,
-      layoutTileIndexClass,
-    ]
-      .filter(Boolean)
-      .join(' ');
-
     return (
-      <div key={`${tile.userId}-${tile.isLocal ? 'local' : 'remote'}`} className={tileClasses}>
-        <video
-          ref={tile.isLocal ? setLocalVideoRef : getRemoteVideoRef(tile.userId)}
-          autoPlay
-          playsInline
-          muted={tile.isLocal}
-          className={`h-full w-full bg-slate-950/90 object-cover ${shouldMirrorVideo ? 'mirror-video' : ''}`}
-          style={{ visibility: shouldShowVideo ? 'visible' : 'hidden' }}
-        />
-
-        {!shouldShowVideo && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white/70">
-            {tile.picture ? (
-              <img
-                src={tile.picture}
-                alt={tile.name}
-                className="h-16 w-16 rounded-[18px] border border-white/40 object-cover"
-              />
-            ) : (
-              <div className="flex h-16 w-16 items-center justify-center rounded-[18px] border border-white/30 bg-gradient-to-br from-cyan-500/50 via-sky-500/40 to-indigo-500/40 shadow-[0_18px_35px_-24px_rgba(14,165,233,0.65)] backdrop-blur">
-                <svg className="h-10 w-10 text-white/80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.6}
-                    d="M12 12.5c2.485 0 4.5-2.015 4.5-4.5S14.485 3.5 12 3.5 7.5 5.515 7.5 8s2.015 4.5 4.5 4.5zM5.25 20.5c.684-2.982 3.34-5.25 6.75-5.25s6.066 2.268 6.75 5.25"
-                  />
-                </svg>
-              </div>
-            )}
-            <span className="mt-3 text-sm font-medium capitalize">{tile.name}</span>
-          </div>
-        )}
-
-        {tile.isAudioMuted && (
-          <div className="absolute left-4 top-4 rounded-full bg-rose-200/90 p-2 text-rose-700 shadow-sm backdrop-blur">
-            <MicMutedIcon className="h-4 w-4" />
-          </div>
-        )}
-
-        {tile.hasRaisedHand && (
-          <div className="absolute right-4 top-4 rounded-full bg-amber-300 p-2 text-amber-900 shadow">
-            <HandRaisedIcon className="h-4 w-4" />
-          </div>
-        )}
-
-        <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur">
-          <span className="tracking-normal capitalize">
-            {tile.name}
-            {tile.isLocal ? ' (You)' : ''}
-          </span>
-          {tile.isHost && (
-            <span className="rounded-full bg-cyan-200/80 px-2 py-0.5 text-[10px] font-semibold uppercase text-cyan-900">
-              Host
-            </span>
-          )}
-          {!tile.isHost && tile.role === 'COHOST' && (
-            <span className="rounded-full bg-indigo-200/80 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-900">
-              Co-host
-            </span>
-          )}
-        </div>
-      </div>
+      <CallParticipantTile
+        key={`${tile.userId}-${tile.isLocal ? 'local' : 'remote'}`}
+        tile={tile}
+        index={index}
+        showSplitLayout={showSplitLayout}
+        isSoloLayout={isSoloLayout}
+        nonSplitLayoutConfig={nonSplitLayoutConfig}
+        setLocalVideoRef={setLocalVideoRef}
+        getRemoteVideoRef={getRemoteVideoRef}
+      />
     );
   };
 

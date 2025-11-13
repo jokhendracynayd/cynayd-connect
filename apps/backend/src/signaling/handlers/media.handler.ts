@@ -267,13 +267,18 @@ export function mediaHandler(_io: SocketIOServer, socket: Socket) {
   socket.on('screen-share-started', async (_data: unknown, callback) => {
     // This is mainly for acknowledgment
     // The actual producer was created via 'produce' event
-    callback({ success: true });
+    if (typeof callback === 'function') {
+      callback({ success: true });
+    }
   });
 
   // Screen share stopped (acknowledgment handler)
   socket.on('screen-share-stopped', async (_data: unknown, callback) => {
     // Mainly for acknowledgment
-    callback({ success: true });
+    // Callback is optional - some clients emit without callback
+    if (typeof callback === 'function') {
+      callback({ success: true });
+    }
   });
 
   // Pause producer

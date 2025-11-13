@@ -1,5 +1,6 @@
 import { Device } from 'mediasoup-client';
 import { socketManager } from './socket';
+import { useCallStore } from '../store/callStore';
 
 type RouterRtpCapabilities = Parameters<Device['load']>[0]['routerRtpCapabilities'];
 
@@ -12,6 +13,90 @@ class WebRTCManager {
   private screenShareProducer: any = null; // Store separately from video producer
   private consumers: Map<string, any> = new Map();
   private consumeLock: Promise<void> = Promise.resolve();
+
+  /**
+   * Get participant count from store
+   * Returns 0 if store is not available (safe fallback)
+   * Note: participants array may or may not include current user, so we add 1 to ensure total count
+   */
+  private getParticipantCount(): number {
+    try {
+      const state = useCallStore.getState();
+      // Get count of other participants and add 1 for current user
+      // This gives us total room size for bitrate optimization
+      const otherParticipants = state.participants?.length || 0;
+      return Math.max(1, otherParticipants + 1); // At least 1 (self), add others
+    } catch (error) {
+      console.warn('Failed to get participant count from store, using default:', error);
+      return 0; // Safe default - will use default bitrates
+    }
+  }
+
+  /**
+   * Get video encoding bitrates based on room size
+   * Optimizes bitrates for large rooms to reduce bandwidth and CPU usage
+   */
+  private getVideoEncodings(participantCount: number): Array<{ rid: string; maxBitrate: number; scalabilityMode: string }> {
+    // Thresholds: 50+ = large, 25-49 = medium, <25 = small
+    if (participantCount >= 50) {
+      // Large room: Reduce bitrates significantly
+      return [
+        { 
+          rid: 'r0',
+          maxBitrate: 50000, // 50k (was 100k)
+          scalabilityMode: 'S1T3',
+        },
+        { 
+          rid: 'r1',
+          maxBitrate: 150000, // 150k (was 300k)
+          scalabilityMode: 'S1T3',
+        },
+        { 
+          rid: 'r2',
+          maxBitrate: 400000, // 400k (was 900k)
+          scalabilityMode: 'S1T3',
+        },
+      ];
+    } else if (participantCount >= 25) {
+      // Medium room: Moderate reduction
+      return [
+        { 
+          rid: 'r0',
+          maxBitrate: 75000, // 75k (was 100k)
+          scalabilityMode: 'S1T3',
+        },
+        { 
+          rid: 'r1',
+          maxBitrate: 200000, // 200k (was 300k)
+          scalabilityMode: 'S1T3',
+        },
+        { 
+          rid: 'r2',
+          maxBitrate: 600000, // 600k (was 900k)
+          scalabilityMode: 'S1T3',
+        },
+      ];
+    } else {
+      // Small room: Use default bitrates
+      return [
+        { 
+          rid: 'r0',
+          maxBitrate: 100000,
+          scalabilityMode: 'S1T3',
+        },
+        { 
+          rid: 'r1',
+          maxBitrate: 300000,
+          scalabilityMode: 'S1T3',
+        },
+        { 
+          rid: 'r2',
+          maxBitrate: 900000,
+          scalabilityMode: 'S1T3',
+        },
+      ];
+    }
+  }
 
   async initialize(rtpCapabilities: RouterRtpCapabilities) {
     this.device = new Device();
@@ -146,13 +231,15 @@ class WebRTCManager {
       throw new Error('Send transport not created');
     }
 
+    // Get participant count and determine optimal encoding bitrates
+    const participantCount = this.getParticipantCount();
+    const encodings = this.getVideoEncodings(participantCount);
+    
+    console.log(`Creating video producer with ${participantCount} participants, using ${participantCount >= 50 ? 'large' : participantCount >= 25 ? 'medium' : 'small'} room bitrates`);
+
     const producer = await this.sendTransport.produce({
       track,
-      encodings: [
-        { maxBitrate: 100000 },
-        { maxBitrate: 300000 },
-        { maxBitrate: 900000 },
-      ],
+      encodings,
       appData: {
         source: 'camera',
       },
@@ -441,9 +528,21 @@ class WebRTCManager {
     const producer = await this.sendTransport.produce({
       track,
       encodings: [
-        { maxBitrate: 2500000 }, // Higher bitrate for screen
-        { maxBitrate: 1000000 },
-        { maxBitrate: 500000 },
+        { 
+          rid: 'r0',
+          maxBitrate: 2500000, // Higher bitrate for screen
+          scalabilityMode: 'S1T3',
+        },
+        { 
+          rid: 'r1',
+          maxBitrate: 1000000,
+          scalabilityMode: 'S1T3',
+        },
+        { 
+          rid: 'r2',
+          maxBitrate: 500000,
+          scalabilityMode: 'S1T3',
+        },
       ],
       codecOptions: {
         videoGoogleStartBitrate: 1500,

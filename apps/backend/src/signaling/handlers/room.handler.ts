@@ -384,7 +384,7 @@ interface HandleSocketLeaveResult {
 }
 
 export async function handleSocketLeave(
-  _io: SocketIOServer,
+  io: SocketIOServer,
   socket: Socket,
   options: HandleSocketLeaveOptions = {}
 ): Promise<HandleSocketLeaveResult> {
@@ -434,6 +434,16 @@ export async function handleSocketLeave(
 
   try {
     await RoomService.leaveRoom(userId, roomCode);
+    
+    // Invalidate participant count cache (will refresh on next transport creation)
+    if (roomId) {
+      try {
+        await RedisStateService.invalidateRoomParticipantCount(roomId);
+      } catch (cacheError) {
+        logger.warn(`Failed to invalidate participant count cache for room ${roomId} on leave:`, cacheError);
+        // Continue - cache will refresh naturally
+      }
+    }
   } catch (error: any) {
     logger.warn('handleSocketLeave: error updating participant record during leave', {
       socketId: socket.id,
@@ -486,7 +496,7 @@ export async function handleSocketLeave(
 
   if (roomId) {
     try {
-      const remainingSockets = await socket.server.in(roomCode).fetchSockets();
+      const remainingSockets = await io.in(roomCode).fetchSockets();
       const hostStillPresent = remainingSockets.some(participantSocket => {
         const participantAdminId: string | undefined = participantSocket.data?.roomAdminId;
         return (
@@ -1087,6 +1097,14 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
       
       // Use the updated room from joinRoom (ensures we have latest data)
       const roomId = updatedRoom.id;
+
+      // Invalidate participant count cache (will refresh on next transport creation)
+      try {
+        await RedisStateService.invalidateRoomParticipantCount(roomId);
+      } catch (error) {
+        logger.warn(`Failed to invalidate participant count cache for room ${roomId} on join:`, error);
+        // Continue - cache will refresh naturally
+      }
 
       // Check/assign room to server (sticky session routing)
       const assignedServer = await RoomRoutingService.getOrAssignServer(roomId);

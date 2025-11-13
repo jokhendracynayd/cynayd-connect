@@ -65,6 +65,7 @@ export class RedisStateService {
   private static readonly MUTE_STATE_TTL_SECONDS = 3600; // 1 hour, refreshed on updates
   private static readonly ROOM_CONTROL_TTL_SECONDS = 3600;
   private static readonly RECORDING_STATE_TTL_SECONDS = 900; // 15 minutes
+  private static readonly PARTICIPANT_COUNT_TTL_SECONDS = 30; // 30 seconds cache for participant count
 
   // Producer metadata storage
   static async storeProducerMetadata(
@@ -828,6 +829,87 @@ export class RedisStateService {
   static async clearRoomControlState(roomCode: string): Promise<void> {
     const key = `${this.KEY_PREFIX}:room:${roomCode}:control`;
     await redis.del(key);
+  }
+
+  // Participant count caching for dynamic bitrate optimization
+  static async getRoomParticipantCount(roomId: string): Promise<number> {
+    const key = `${this.KEY_PREFIX}:room:${roomId}:participantCount`;
+    
+    try {
+      // Try to get from cache first
+      const cached = await redis.get(key);
+      if (cached !== null) {
+        const count = parseInt(cached, 10);
+        if (!isNaN(count) && count >= 0) {
+          logger.debug(`Participant count from cache for room ${roomId}: ${count}`);
+          return count;
+        }
+      }
+    } catch (error) {
+      logger.warn(`Failed to get participant count from cache for room ${roomId}:`, error);
+      // Fall through to database query
+    }
+
+    // Cache miss or error - query database directly by roomId
+    try {
+      const prisma = (await import('../database/prisma')).default;
+      const count = await prisma.participant.count({
+        where: {
+          roomId,
+          leftAt: null, // Only count active participants
+        },
+      });
+      
+      // Cache the result
+      try {
+        await redis.setex(key, this.PARTICIPANT_COUNT_TTL_SECONDS, count.toString());
+        logger.debug(`Cached participant count for room ${roomId}: ${count}`);
+      } catch (cacheError) {
+        logger.warn(`Failed to cache participant count for room ${roomId}:`, cacheError);
+        // Continue without caching
+      }
+      
+      return count;
+    } catch (error) {
+      logger.error(`Failed to get participant count for room ${roomId}:`, error);
+      // Return 0 as safe default (will use default bitrate config)
+      return 0;
+    }
+  }
+
+  static async updateRoomParticipantCount(roomId: string, delta: number): Promise<void> {
+    const key = `${this.KEY_PREFIX}:room:${roomId}:participantCount`;
+    
+    try {
+      // Try to update cached count atomically
+      const current = await redis.get(key);
+      if (current !== null) {
+        const currentCount = parseInt(current, 10);
+        if (!isNaN(currentCount)) {
+          const newCount = Math.max(0, currentCount + delta);
+          await redis.setex(key, this.PARTICIPANT_COUNT_TTL_SECONDS, newCount.toString());
+          logger.debug(`Updated participant count cache for room ${roomId}: ${currentCount} + ${delta} = ${newCount}`);
+          return;
+        }
+      }
+      
+      // Cache miss - invalidate to force refresh on next query
+      await redis.del(key);
+      logger.debug(`Invalidated participant count cache for room ${roomId} (delta: ${delta})`);
+    } catch (error) {
+      logger.warn(`Failed to update participant count cache for room ${roomId}:`, error);
+      // Continue without caching - next query will refresh from DB
+    }
+  }
+
+  static async invalidateRoomParticipantCount(roomId: string): Promise<void> {
+    const key = `${this.KEY_PREFIX}:room:${roomId}:participantCount`;
+    try {
+      await redis.del(key);
+      logger.debug(`Invalidated participant count cache for room ${roomId}`);
+    } catch (error) {
+      logger.warn(`Failed to invalidate participant count cache for room ${roomId}:`, error);
+    }
   }
 }
 

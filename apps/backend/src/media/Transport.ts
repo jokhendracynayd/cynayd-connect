@@ -16,13 +16,55 @@ export class TransportManager {
   private static transports: Map<string, WebRtcTransport> = new Map();
   private static eventHandlers: Map<string, TransportEventHandlers> = new Map();
 
+  /**
+   * Get dynamic transport configuration based on room size
+   * Optimizes bitrates for large rooms to improve scalability
+   */
+  private static async getDynamicTransportConfig(roomId: string): Promise<typeof mediasoupConfig.webRtcTransport> {
+    // Get participant count (with caching)
+    let participantCount = 0;
+    try {
+      participantCount = await RedisStateService.getRoomParticipantCount(roomId);
+    } catch (error) {
+      logger.warn(`Failed to get participant count for room ${roomId}, using default config:`, error);
+      // Fall back to default config
+      return mediasoupConfig.webRtcTransport;
+    }
+
+    // Clone base config to avoid mutating the original
+    const config = { ...mediasoupConfig.webRtcTransport };
+
+    // Adjust bitrates based on room size
+    // Thresholds: 50+ = large, 25-49 = medium, <25 = small
+    if (participantCount >= 50) {
+      // Large room: Reduce bitrates significantly
+      config.maxIncomingBitrate = 1500000; // 1.5 Mbps (was 2.5 Mbps)
+      config.initialAvailableOutgoingBitrate = 2000000; // 2 Mbps (was 2.5 Mbps)
+      config.minimumAvailableOutgoingBitrate = 1000000; // 1 Mbps (was 1.5 Mbps)
+      logger.info(`Using large room bitrate config for room ${roomId} (${participantCount} participants)`);
+    } else if (participantCount >= 25) {
+      // Medium room: Moderate reduction
+      config.maxIncomingBitrate = 2000000; // 2 Mbps (was 2.5 Mbps)
+      config.initialAvailableOutgoingBitrate = 2200000; // 2.2 Mbps (was 2.5 Mbps)
+      config.minimumAvailableOutgoingBitrate = 1200000; // 1.2 Mbps (was 1.5 Mbps)
+      logger.info(`Using medium room bitrate config for room ${roomId} (${participantCount} participants)`);
+    } else {
+      // Small room: Use default config
+      logger.debug(`Using default bitrate config for room ${roomId} (${participantCount} participants)`);
+    }
+
+    return config;
+  }
+
   static async createTransport(
     router: Router,
     socketId: string,
     roomId: string,
     isProducer: boolean
   ): Promise<WebRtcTransport> {
-    const transport = await router.createWebRtcTransport(mediasoupConfig.webRtcTransport);
+    // Get dynamic transport config based on room size
+    const transportConfig = await this.getDynamicTransportConfig(roomId);
+    const transport = await router.createWebRtcTransport(transportConfig);
 
     // Create event handlers that can be cleaned up
     const handlers: TransportEventHandlers = {
