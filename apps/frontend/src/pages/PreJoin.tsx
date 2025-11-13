@@ -3,6 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useCallStore } from '../store/callStore';
 import { mediaManager } from '../lib/media';
 import { toast } from 'react-hot-toast';
+import WarningBadge from '../components/shared/WarningBadge';
+import DevicePermissionDialog from '../components/call/DevicePermissionDialog';
+import { getAudioDeviceStatus, getVideoDeviceStatus, setupPermissionListener, setupDeviceChangeListener } from '../lib/deviceStatus';
 
 interface MediaDeviceInfo {
   deviceId: string;
@@ -23,6 +26,8 @@ export default function PreJoin() {
     setPermissionError,
     clearPermissionErrors,
     setPreJoinCompleted,
+    deviceStatus,
+    setDeviceStatus,
   } = useCallStore();
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -33,12 +38,78 @@ export default function PreJoin() {
   }>({ audioInput: [], videoInput: [], audioOutput: [] });
   const [isLoading, setIsLoading] = useState(false);
   const [hasDevices, setHasDevices] = useState(false);
+  const [showDeviceDialog, setShowDeviceDialog] = useState(false);
+  const [deviceDialogType, setDeviceDialogType] = useState<'audio' | 'video'>('audio');
+  const audioAutoMutedRef = useRef(false);
+  const videoAutoMutedRef = useRef(false);
 
   useEffect(() => {
     clearPermissionErrors();
     setPreJoinCompleted(false);
     loadDevices();
   }, [clearPermissionErrors, setPreJoinCompleted]);
+
+  // Monitor device status for audio and video
+  useEffect(() => {
+    const updateDeviceStatus = async () => {
+      const audioTrack = localStream?.getAudioTracks()[0];
+      const videoTrack = localStream?.getVideoTracks()[0];
+      
+      const [audioStatus, videoStatus] = await Promise.all([
+        getAudioDeviceStatus(audioTrack),
+        getVideoDeviceStatus(videoTrack),
+      ]);
+
+      setDeviceStatus('audio', audioStatus);
+      setDeviceStatus('video', videoStatus);
+
+      // Handle audio: Track if we should force disable, but DON'T change settings here to avoid loop
+      if (audioStatus.issueType !== 'none') {
+        if (settings.joinWithAudio && !audioAutoMutedRef.current) {
+          audioAutoMutedRef.current = true;
+        }
+      } else {
+        if (audioAutoMutedRef.current) {
+          audioAutoMutedRef.current = false;
+        }
+      }
+
+      // Handle video: Track if we should force disable, but DON'T change settings here to avoid loop
+      if (videoStatus.issueType !== 'none') {
+        if (settings.joinWithVideo && !videoAutoMutedRef.current) {
+          videoAutoMutedRef.current = true;
+        }
+      } else {
+        if (videoAutoMutedRef.current) {
+          videoAutoMutedRef.current = false;
+        }
+      }
+    };
+
+    updateDeviceStatus();
+
+    // Setup permission listeners
+    const cleanupAudioPermission = setupPermissionListener('microphone', async () => {
+      const audioTrack = localStream?.getAudioTracks()[0];
+      const status = await getAudioDeviceStatus(audioTrack);
+      setDeviceStatus('audio', status);
+    });
+
+    const cleanupVideoPermission = setupPermissionListener('camera', async () => {
+      const videoTrack = localStream?.getVideoTracks()[0];
+      const status = await getVideoDeviceStatus(videoTrack);
+      setDeviceStatus('video', status);
+    });
+
+    // Setup device change listener
+    const cleanupDeviceChange = setupDeviceChangeListener(updateDeviceStatus);
+
+    return () => {
+      cleanupAudioPermission?.();
+      cleanupVideoPermission?.();
+      cleanupDeviceChange();
+    };
+  }, [localStream, setDeviceStatus, settings.joinWithAudio, settings.joinWithVideo]);
 
   useEffect(() => {
     // Start preview if either audio or video is enabled
@@ -154,7 +225,26 @@ export default function PreJoin() {
     setLocalStream(null);
   };
 
+  const handleShowAudioDialog = () => {
+    setDeviceDialogType('audio');
+    setShowDeviceDialog(true);
+  };
+
+  const handleShowVideoDialog = () => {
+    setDeviceDialogType('video');
+    setShowDeviceDialog(true);
+  };
+
   const handleToggleAudio = () => {
+    // Check if there are device issues - if so, show dialog instead of toggling
+    if (deviceStatus.audio.issueType !== 'none') {
+      handleShowAudioDialog();
+      return;
+    }
+
+    // User is manually toggling - reset auto-mute tracking
+    audioAutoMutedRef.current = false;
+
     const newAudioState = !settings.joinWithAudio;
 
     if (!newAudioState) {
@@ -185,6 +275,15 @@ export default function PreJoin() {
   };
 
   const handleToggleVideo = () => {
+    // Check if there are device issues - if so, show dialog instead of toggling
+    if (deviceStatus.video.issueType !== 'none') {
+      handleShowVideoDialog();
+      return;
+    }
+
+    // User is manually toggling - reset auto-mute tracking
+    videoAutoMutedRef.current = false;
+
     const newVideoState = !settings.joinWithVideo;
 
     if (!newVideoState) {
@@ -338,36 +437,42 @@ export default function PreJoin() {
               </div>
 
               <div className="grid gap-2 border-t border-slate-100 bg-white/92 px-6 py-4 sm:grid-cols-2">
-                <button
-                  onClick={handleToggleAudio}
-                  className={`flex items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
-                    settings.joinWithAudio
-                      ? 'bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 text-white shadow-[0_22px_45px_-24px_rgba(14,165,233,0.65)] hover:shadow-[0_26px_55px_-26px_rgba(14,165,233,0.7)]'
-                      : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
-                  }`}
-                >
-                  {settings.joinWithAudio ? (
-                    <>
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                      </svg>
-                      Mic active
-                    </>
-                  ) : (
-                    <>
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                      </svg>
-                      Mic muted
-                    </>
+                <div className="relative">
+                  <button
+                    onClick={handleToggleAudio}
+                    className={`flex w-full items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
+                      settings.joinWithAudio
+                        ? 'bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 text-white shadow-[0_22px_45px_-24px_rgba(14,165,233,0.65)] hover:shadow-[0_26px_55px_-26px_rgba(14,165,233,0.7)]'
+                        : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
+                    }`}
+                  >
+                    {settings.joinWithAudio ? (
+                      <>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                        </svg>
+                        Mic active
+                      </>
+                    ) : (
+                      <>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                        </svg>
+                        Mic muted
+                      </>
+                    )}
+                  </button>
+                  {deviceStatus.audio.issueType !== 'none' && (
+                    <WarningBadge onClick={handleShowAudioDialog} />
                   )}
-                </button>
-                <button
-                  onClick={handleToggleVideo}
-                  className={`flex items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
-                    settings.joinWithVideo
-                      ? 'border border-cyan-200 bg-white text-slate-700 shadow-[0_18px_40px_-28px_rgba(14,165,233,0.55)] hover:border-cyan-300 hover:bg-cyan-50'
+                </div>
+                <div className="relative">
+                  <button
+                    onClick={handleToggleVideo}
+                    className={`flex w-full items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
+                      settings.joinWithVideo
+                        ? 'border border-cyan-200 bg-white text-slate-700 shadow-[0_18px_40px_-28px_rgba(14,165,233,0.55)] hover:border-cyan-300 hover:bg-cyan-50'
                       : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
                   }`}
                 >
@@ -387,6 +492,10 @@ export default function PreJoin() {
                     </>
                   )}
                 </button>
+                {deviceStatus.video.issueType !== 'none' && (
+                  <WarningBadge onClick={handleShowVideoDialog} />
+                )}
+              </div>
               </div>
             </div>
           </div>
@@ -475,6 +584,16 @@ export default function PreJoin() {
           </div>
         </div>
       </div>
+
+      <DevicePermissionDialog
+        isOpen={showDeviceDialog}
+        onClose={() => setShowDeviceDialog(false)}
+        onRetry={deviceDialogType === 'audio' ? handleToggleAudio : handleToggleVideo}
+        deviceType={deviceDialogType}
+        issueType={deviceStatus[deviceDialogType].issueType}
+        errorReason={deviceStatus[deviceDialogType].errorReason}
+        canRetry={deviceStatus[deviceDialogType].canRetry}
+      />
     </div>
   );
 }

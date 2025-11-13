@@ -24,6 +24,10 @@ import ScreenShareSection from '../components/call/ScreenShareSection';
 import { getPendingRequests, requestRoomJoin } from '../lib/api';
 import api from '../lib/api';
 import { storage } from '../lib/storage';
+import DeviceDropdown from '../components/shared/DeviceDropdown';
+import WarningBadge from '../components/shared/WarningBadge';
+import DevicePermissionDialog from '../components/call/DevicePermissionDialog';
+import { getAudioDeviceStatus, getVideoDeviceStatus, setupPermissionListener, setupDeviceChangeListener } from '../lib/deviceStatus';
 
 function MicMutedIcon({ className }: { className?: string }) {
   return (
@@ -222,6 +226,8 @@ export default function Call() {
     permissionErrors,
     setPermissionError,
     clearPermissionErrors,
+    deviceStatus,
+    setDeviceStatus,
     chat,
     ingestChatMessage,
     setChatActiveConversation,
@@ -269,6 +275,10 @@ export default function Call() {
   const [showParticipantList, setShowParticipantList] = useState(false);
   const [showChatPanel, setShowChatPanel] = useState(false);
   const [permissionBannerDismissed, setPermissionBannerDismissed] = useState(false);
+  const [showDeviceDialog, setShowDeviceDialog] = useState(false);
+  const [deviceDialogType, setDeviceDialogType] = useState<'audio' | 'video'>('audio');
+  const audioAutoMutedRef = useRef(false); // Track if we auto-muted due to device issue
+  const videoAutoMutedRef = useRef(false); // Track if we auto-muted due to device issue
   const showChatPanelRef = useRef(showChatPanel);
   const [localForceState, setLocalForceState] = useState<{
     audio: boolean;
@@ -281,8 +291,189 @@ export default function Call() {
     audioReason: null,
     videoReason: null,
   });
+  const [showAudioDropdown, setShowAudioDropdown] = useState(false);
+  const [showVideoDropdown, setShowVideoDropdown] = useState(false);
+  const [availableDevices, setAvailableDevices] = useState<{
+    audioInput: MediaDeviceInfo[];
+    videoInput: MediaDeviceInfo[];
+  }>({ audioInput: [], videoInput: [] });
   const previousRecordingStatusRef = useRef<RecordingStatus | null>(recording.status ?? null);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    const loadDevices = async () => {
+      try {
+        const devices = await mediaManager.getDevices();
+        setAvailableDevices({
+          audioInput: devices.audioInput,
+          videoInput: devices.videoInput,
+        });
+      } catch (error) {
+        console.error('Failed to load devices:', error);
+      }
+    };
+
+    loadDevices();
+
+    const handleDeviceChange = () => {
+      loadDevices();
+    };
+
+    if (navigator.mediaDevices?.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    }
+
+    return () => {
+      if (navigator.mediaDevices?.removeEventListener) {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      }
+    };
+  }, []);
+
+  // Monitor device status for audio and video
+  useEffect(() => {
+    const updateDeviceStatus = async () => {
+      const audioTrack = localStream?.getAudioTracks()[0];
+      const videoTrack = localStream?.getVideoTracks()[0];
+      
+      const [audioStatus, videoStatus] = await Promise.all([
+        getAudioDeviceStatus(audioTrack),
+        getVideoDeviceStatus(videoTrack),
+      ]);
+
+      setDeviceStatus('audio', audioStatus);
+      setDeviceStatus('video', videoStatus);
+
+      // Handle audio: Force mute when issues exist, auto-unmute when resolved
+      if (audioStatus.issueType !== 'none') {
+        if (!isAudioMuted) {
+          setLocalAudioMuted(true);
+          audioAutoMutedRef.current = true;
+        }
+      } else if (audioAutoMutedRef.current && isAudioMuted) {
+        // Issue resolved and we had auto-muted it - unmute it
+        setLocalAudioMuted(false);
+        audioAutoMutedRef.current = false;
+      }
+
+      // Handle video: Force mute when issues exist, auto-unmute when resolved
+      if (videoStatus.issueType !== 'none') {
+        if (!isVideoMuted) {
+          setLocalVideoMuted(true);
+          videoAutoMutedRef.current = true;
+        }
+      } else if (videoAutoMutedRef.current && isVideoMuted) {
+        // Issue resolved and we had auto-muted it - unmute it
+        setLocalVideoMuted(false);
+        videoAutoMutedRef.current = false;
+      }
+    };
+
+    updateDeviceStatus();
+
+    // Setup permission listeners
+    const cleanupAudioPermission = setupPermissionListener('microphone', async () => {
+      const audioTrack = localStream?.getAudioTracks()[0];
+      const status = await getAudioDeviceStatus(audioTrack);
+      setDeviceStatus('audio', status);
+      
+      // Handle audio: Force mute when issues exist, auto-unmute when resolved
+      if (status.issueType !== 'none') {
+        if (!isAudioMuted) {
+          setLocalAudioMuted(true);
+          audioAutoMutedRef.current = true;
+        }
+      } else if (audioAutoMutedRef.current && isAudioMuted) {
+        setLocalAudioMuted(false);
+        audioAutoMutedRef.current = false;
+      }
+    });
+
+    const cleanupVideoPermission = setupPermissionListener('camera', async () => {
+      const videoTrack = localStream?.getVideoTracks()[0];
+      const status = await getVideoDeviceStatus(videoTrack);
+      setDeviceStatus('video', status);
+      
+      // Handle video: Force mute when issues exist, auto-unmute when resolved
+      if (status.issueType !== 'none') {
+        if (!isVideoMuted) {
+          setLocalVideoMuted(true);
+          videoAutoMutedRef.current = true;
+        }
+      } else if (videoAutoMutedRef.current && isVideoMuted) {
+        setLocalVideoMuted(false);
+        videoAutoMutedRef.current = false;
+      }
+    });
+
+    // Setup device change listener
+    const cleanupDeviceChange = setupDeviceChangeListener(updateDeviceStatus);
+
+    return () => {
+      cleanupAudioPermission?.();
+      cleanupVideoPermission?.();
+      cleanupDeviceChange();
+    };
+  }, [localStream, setDeviceStatus, isAudioMuted, isVideoMuted, setLocalAudioMuted, setLocalVideoMuted]);
+
+  // Monitor track mute state changes
+  useEffect(() => {
+    const audioTrack = localStream?.getAudioTracks()[0];
+    const videoTrack = localStream?.getVideoTracks()[0];
+
+    const handleTrackMuteChange = async () => {
+      const [audioStatus, videoStatus] = await Promise.all([
+        getAudioDeviceStatus(audioTrack),
+        getVideoDeviceStatus(videoTrack),
+      ]);
+
+      setDeviceStatus('audio', audioStatus);
+      setDeviceStatus('video', videoStatus);
+
+      // Handle audio: Force mute when issues exist, auto-unmute when resolved
+      if (audioStatus.issueType !== 'none') {
+        if (!isAudioMuted) {
+          setLocalAudioMuted(true);
+          audioAutoMutedRef.current = true;
+        }
+      } else if (audioAutoMutedRef.current && isAudioMuted) {
+        setLocalAudioMuted(false);
+        audioAutoMutedRef.current = false;
+      }
+
+      // Handle video: Force mute when issues exist, auto-unmute when resolved
+      if (videoStatus.issueType !== 'none') {
+        if (!isVideoMuted) {
+          setLocalVideoMuted(true);
+          videoAutoMutedRef.current = true;
+        }
+      } else if (videoAutoMutedRef.current && isVideoMuted) {
+        setLocalVideoMuted(false);
+        videoAutoMutedRef.current = false;
+      }
+    };
+
+    if (audioTrack) {
+      audioTrack.addEventListener('mute', handleTrackMuteChange);
+      audioTrack.addEventListener('unmute', handleTrackMuteChange);
+    }
+
+    if (videoTrack) {
+      videoTrack.addEventListener('mute', handleTrackMuteChange);
+      videoTrack.addEventListener('unmute', handleTrackMuteChange);
+    }
+
+    return () => {
+      if (audioTrack) {
+        audioTrack.removeEventListener('mute', handleTrackMuteChange);
+        audioTrack.removeEventListener('unmute', handleTrackMuteChange);
+      }
+      if (videoTrack) {
+        videoTrack.removeEventListener('mute', handleTrackMuteChange);
+        videoTrack.removeEventListener('unmute', handleTrackMuteChange);
+      }
+    };
+  }, [localStream, setDeviceStatus, isAudioMuted, isVideoMuted, setLocalAudioMuted, setLocalVideoMuted]);
 
   useEffect(() => {
     if (!hasCheckedAuth || isLeaving || isLeavingRef.current) {
@@ -385,6 +576,104 @@ export default function Call() {
   }, [recording.active, recording.startedAt]);
 
   const hasPermissionIssue = permissionErrors.audio || permissionErrors.video;
+
+  const handleDeviceSelect = useCallback(
+    async (kind: 'audio' | 'video', deviceId: string) => {
+      const previousDeviceId = kind === 'audio' ? selectedDevices.audioInput : selectedDevices.videoInput;
+      if (previousDeviceId === deviceId) {
+        return;
+      }
+
+      try {
+        const newTrack = await mediaManager.getSingleTrack(kind, deviceId || undefined);
+        const existingStream = localStream;
+        const remainingTracks = existingStream?.getTracks().filter(track => track.kind !== kind) ?? [];
+        const updatedStream = new MediaStream([...remainingTracks, newTrack]);
+
+        const isMuted = kind === 'audio' ? isAudioMuted : isVideoMuted;
+        newTrack.enabled = !isMuted;
+
+        if (kind === 'video') {
+          const targetElement = localVideoElement ?? localVideoRef.current;
+          if (targetElement) {
+            targetElement.srcObject = updatedStream;
+          }
+        }
+
+        setLocalStream(updatedStream);
+        (mediaManager as any).localStream = updatedStream;
+
+        existingStream
+          ?.getTracks()
+          .filter(track => track.kind === kind)
+          .forEach(track => {
+            if (track !== newTrack) {
+              track.stop();
+            }
+          });
+
+        const existingProducer = webrtcManager.getProducer(kind);
+        if (existingProducer) {
+          if (kind === 'audio') {
+            await webrtcManager.replaceAudioTrack(newTrack);
+          } else {
+            await webrtcManager.replaceVideoTrack(newTrack);
+          }
+        } else {
+          if (kind === 'audio') {
+            await webrtcManager.produceAudio(newTrack);
+          } else {
+            await webrtcManager.produceVideo(newTrack);
+          }
+        }
+
+        if (existingProducer) {
+          try {
+            if (isMuted) {
+              await webrtcManager.pauseProducer(kind);
+            } else {
+              await webrtcManager.resumeProducer(kind);
+            }
+          } catch (producerError) {
+            console.warn('Failed to update producer state after switching device:', producerError);
+          }
+        }
+
+        if (kind === 'audio') {
+          useCallStore.getState().setSelectedDevices({ audioInput: deviceId });
+          setPermissionError('audio', false);
+        } else {
+          useCallStore.getState().setSelectedDevices({ videoInput: deviceId });
+          setPermissionError('video', false);
+        }
+
+        const label = kind === 'audio' ? 'Microphone' : 'Camera';
+        toast.success(`${label} switched successfully.`);
+      } catch (error: any) {
+        console.error(`Failed to switch ${kind}:`, error);
+        const label = kind === 'audio' ? 'microphone' : 'camera';
+        if (error.name === 'NotAllowedError') {
+          toast.error(`${label.charAt(0).toUpperCase()}${label.slice(1)} permission denied.`);
+        } else if (error.name === 'NotFoundError') {
+          toast.error(`Selected ${label} not found.`);
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          toast.error(`${label.charAt(0).toUpperCase()}${label.slice(1)} is busy or unavailable.`);
+        } else {
+          toast.error(`Failed to switch ${label}.`);
+        }
+      }
+    },
+    [
+      isAudioMuted,
+      isVideoMuted,
+      localStream,
+      localVideoElement,
+      selectedDevices.audioInput,
+      selectedDevices.videoInput,
+      setLocalStream,
+      setPermissionError,
+    ]
+  );
 
   const chatUnreadCount = useMemo(() => {
     let total = 0;
@@ -2646,7 +2935,26 @@ export default function Call() {
     }
   };
 
+  const handleShowAudioDialog = () => {
+    setDeviceDialogType('audio');
+    setShowDeviceDialog(true);
+  };
+
+  const handleShowVideoDialog = () => {
+    setDeviceDialogType('video');
+    setShowDeviceDialog(true);
+  };
+
   const handleToggleAudio = async () => {
+    // Check if there are device issues - if so, show dialog instead of toggling
+    if (deviceStatus.audio.issueType !== 'none') {
+      handleShowAudioDialog();
+      return;
+    }
+
+    // User is manually toggling - reset auto-mute tracking
+    audioAutoMutedRef.current = false;
+
     const desiredMutedState = !isAudioMuted;
     if (audioForceActive && !desiredMutedState) {
       toast.error('The host has muted your microphone.');
@@ -2776,6 +3084,15 @@ export default function Call() {
   };
 
   const handleToggleVideo = async () => {
+    // Check if there are device issues - if so, show dialog instead of toggling
+    if (deviceStatus.video.issueType !== 'none') {
+      handleShowVideoDialog();
+      return;
+    }
+
+    // User is manually toggling - reset auto-mute tracking
+    videoAutoMutedRef.current = false;
+
     const desiredMutedState = !isVideoMuted;
     if (videoForceActive && !desiredMutedState) {
       toast.error('The host has disabled your camera.');
@@ -4194,63 +4511,127 @@ export default function Call() {
             className="pointer-events-auto flex flex-wrap items-center justify-center gap-3 rounded-full border border-white/60 bg-white/90 px-6 py-4 shadow-[0_22px_45px_-28px_rgba(14,165,233,0.45)]"
             style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}
           >
-            <button
-              onClick={handleToggleAudio}
-              disabled={audioForceActive}
-              className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
-                audioForceActive
-                  ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
-                  : isAudioMuted
-                  ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
-                  : 'bg-slate-800 text-white hover:bg-slate-900'
-              }`}
-              title={
-                audioForceActive
-                  ? hostControls.audioForceAll
-                    ? 'Host muted all microphones'
-                    : 'Host has muted your microphone'
-                  : isAudioMuted
-                  ? 'Unmute microphone'
-                  : 'Mute microphone'
-              }
-            >
-              {isAudioMuted ? (
-                <MicMutedIcon className="h-5 w-5" />
-              ) : (
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+            <div className="relative flex items-center gap-1">
+              <button
+                onClick={() => setShowAudioDropdown(prev => !prev)}
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+                title="Select microphone"
+                aria-expanded={showAudioDropdown}
+              >
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2.5}
+                    d={showAudioDropdown ? 'M19 9l-7 7-7-7' : 'M5 15l7-7 7 7'}
+                  />
                 </svg>
+              </button>
+              {showAudioDropdown && (
+                <DeviceDropdown
+                  kind="audio"
+                  devices={availableDevices.audioInput}
+                  selectedDeviceId={selectedDevices.audioInput}
+                  onSelect={(deviceId) => handleDeviceSelect('audio', deviceId)}
+                  onClose={() => setShowAudioDropdown(false)}
+                  position="top"
+                />
               )}
-            </button>
+              <div className="relative">
+                <button
+                  onClick={handleToggleAudio}
+                  disabled={audioForceActive}
+                  className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
+                    audioForceActive
+                      ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
+                      : isAudioMuted
+                      ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
+                      : 'bg-slate-800 text-white hover:bg-slate-900'
+                  }`}
+                  title={
+                    audioForceActive
+                      ? hostControls.audioForceAll
+                        ? 'Host muted all microphones'
+                        : 'Host has muted your microphone'
+                      : isAudioMuted
+                      ? 'Unmute microphone'
+                      : 'Mute microphone'
+                  }
+                >
+                  {isAudioMuted ? (
+                    <MicMutedIcon className="h-5 w-5" />
+                  ) : (
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                  )}
+                </button>
+                {deviceStatus.audio.issueType !== 'none' && (
+                  <WarningBadge onClick={handleShowAudioDialog} />
+                )}
+              </div>
+            </div>
 
-            <button
-              onClick={handleToggleVideo}
-              disabled={videoForceActive}
-              className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
-                videoForceActive
-                  ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
-                  : isVideoMuted
-                  ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
-                  : 'bg-slate-800 text-white hover:bg-slate-900'
-              }`}
-              title={
-                videoForceActive
-                  ? hostControls.videoForceAll
-                    ? 'Host disabled all cameras'
-                    : 'Host has disabled your camera'
-                  : isVideoMuted
-                  ? 'Turn camera on'
-                  : 'Turn camera off'
-              }
-            >
-              {isVideoMuted ? (
-                <VideoMutedIcon className="h-5 w-5" />
-              ) : (
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            <div className="relative flex items-center gap-1">
+              <button
+                onClick={() => setShowVideoDropdown(prev => !prev)}
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+                title="Select camera"
+                aria-expanded={showVideoDropdown}
+              >
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2.5}
+                    d={showVideoDropdown ? 'M19 9l-7 7-7-7' : 'M5 15l7-7 7 7'}
+                  />
                 </svg>
+              </button>
+              {showVideoDropdown && (
+                <DeviceDropdown
+                  kind="video"
+                  devices={availableDevices.videoInput}
+                  selectedDeviceId={selectedDevices.videoInput}
+                  onSelect={(deviceId) => handleDeviceSelect('video', deviceId)}
+                  onClose={() => setShowVideoDropdown(false)}
+                  position="top"
+                />
               )}
-            </button>
+              <div className="relative">
+                <button
+                  onClick={handleToggleVideo}
+                  disabled={videoForceActive}
+                  className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
+                    videoForceActive
+                      ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
+                      : isVideoMuted
+                      ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
+                      : 'bg-slate-800 text-white hover:bg-slate-900'
+                  }`}
+                  title={
+                    videoForceActive
+                      ? hostControls.videoForceAll
+                        ? 'Host disabled all cameras'
+                        : 'Host has disabled your camera'
+                      : isVideoMuted
+                      ? 'Turn camera on'
+                      : 'Turn camera off'
+                  }
+                >
+                  {isVideoMuted ? (
+                    <VideoMutedIcon className="h-5 w-5" />
+                  ) : (
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </button>
+                {deviceStatus.video.issueType !== 'none' && (
+                  <WarningBadge onClick={handleShowVideoDialog} />
+                )}
+              </div>
+            </div>
 
             <button
               onClick={handleToggleRaiseHand}
@@ -4422,6 +4803,16 @@ export default function Call() {
           </div>,
           document.body
         )}
+      
+      <DevicePermissionDialog
+        isOpen={showDeviceDialog}
+        onClose={() => setShowDeviceDialog(false)}
+        onRetry={deviceDialogType === 'audio' ? handleToggleAudio : handleToggleVideo}
+        deviceType={deviceDialogType}
+        issueType={deviceStatus[deviceDialogType].issueType}
+        errorReason={deviceStatus[deviceDialogType].errorReason}
+        canRetry={deviceStatus[deviceDialogType].canRetry}
+      />
     </div>
   );
 }

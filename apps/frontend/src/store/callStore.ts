@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ScreenShare } from '../types/screenShare';
 import type { NetworkQualityLevel, NetworkSample } from '../lib/networkMonitor';
+import type { DeviceStatus } from '../lib/deviceStatus';
 
 export type ChatMessageType = 'BROADCAST' | 'DIRECT' | 'SYSTEM';
 
@@ -282,6 +283,10 @@ interface CallState {
     audio: boolean;
     video: boolean;
   };
+  deviceStatus: {
+    audio: DeviceStatus;
+    video: DeviceStatus;
+  };
   selectedDevices: {
     audioInput: string;
     videoInput: string;
@@ -341,6 +346,7 @@ interface CallState {
   setIsScreenSharing: (isSharing: boolean) => void;
   setPermissionError: (kind: 'audio' | 'video', hasError: boolean) => void;
   clearPermissionErrors: () => void;
+  setDeviceStatus: (kind: 'audio' | 'video', status: DeviceStatus) => void;
   setSelectedDevices: (devices: Partial<CallState['selectedDevices']>) => void;
   setSettings: (settings: Partial<CallState['settings']>) => void;
   setChatActiveConversation: (conversationId: string) => void;
@@ -476,6 +482,24 @@ export const useCallStore = create<CallState>((set) => ({
   permissionErrors: {
     audio: false,
     video: false,
+  },
+  deviceStatus: {
+    audio: {
+      hasDevice: true,
+      permissionState: 'unknown',
+      isSystemMuted: false,
+      issueType: 'none',
+      errorReason: '',
+      canRetry: false,
+    },
+    video: {
+      hasDevice: true,
+      permissionState: 'unknown',
+      isSystemMuted: false,
+      issueType: 'none',
+      errorReason: '',
+      canRetry: false,
+    },
   },
   selectedDevices: {
     audioInput: '',
@@ -616,6 +640,12 @@ export const useCallStore = create<CallState>((set) => ({
       video: false,
     },
   }),
+  setDeviceStatus: (kind, status) => set((state) => ({
+    deviceStatus: {
+      ...state.deviceStatus,
+      [kind]: status,
+    },
+  })),
   setSelectedDevices: (devices) => set((state) => ({
     selectedDevices: { ...state.selectedDevices, ...devices },
   })),
@@ -1054,6 +1084,24 @@ export const useCallStore = create<CallState>((set) => ({
     permissionErrors: {
       audio: false,
       video: false,
+    },
+    deviceStatus: {
+      audio: {
+        hasDevice: true,
+        permissionState: 'unknown',
+        isSystemMuted: false,
+        issueType: 'none',
+        errorReason: '',
+        canRetry: false,
+      },
+      video: {
+        hasDevice: true,
+        permissionState: 'unknown',
+        isSystemMuted: false,
+        issueType: 'none',
+        errorReason: '',
+        canRetry: false,
+      },
     },
     selectedDevices: {
       audioInput: '',
