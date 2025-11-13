@@ -1,4 +1,3 @@
-import { useCallback } from 'react';
 import type { ParticipantTile } from '../../types/call';
 import type { NonSplitLayoutConfig } from '../../utils/callLayout';
 import { MicMutedIcon, HandRaisedIcon } from './icons';

@@ -474,9 +474,7 @@ export default function Call() {
     permissionErrors,
     audioForceActive,
     videoForceActive,
-    hostControls,
     setLocalStream,
-    setLocalAudioMuted,
     setLocalVideoMuted,
     setPermissionError,
     toggleAudio,
@@ -623,7 +621,6 @@ export default function Call() {
     cleanupScreenShare,
   } = useCallScreenShare({
     isScreenSharing,
-    screenShareStreams,
     setScreenShareStreams,
     setIsScreenSharing,
     addScreenShare,

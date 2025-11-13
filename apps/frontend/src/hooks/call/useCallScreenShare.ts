@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../../store/authStore';
 import { useCallStore } from '../../store/callStore';
@@ -8,22 +8,20 @@ import { webrtcManager } from '../../lib/webrtc';
 
 interface UseCallScreenShareProps {
   isScreenSharing: boolean;
-  screenShareStreams: Map<string, MediaStream>;
   setScreenShareStreams: React.Dispatch<React.SetStateAction<Map<string, MediaStream>>>;
   setIsScreenSharing: (sharing: boolean) => void;
   addScreenShare: (share: { userId: string; producerId: string; name: string; stream?: MediaStream }) => void;
   removeScreenShare: (userId: string) => void;
   setPinnedScreenShare: (userId: string | null) => void;
   pinnedScreenShareUserId: string | null;
-  screenShareProducersRef: React.MutableRefObject<Map<string, string>>;
-  producerMetadataRef: React.MutableRefObject<Map<string, { source?: string; userId?: string; kind?: 'audio' | 'video' }>>;
-  activeScreenShareProducersRef: React.MutableRefObject<Set<string>>;
-  isStoppingScreenShareRef: React.MutableRefObject<boolean>;
+  screenShareProducersRef: React.RefObject<Map<string, string>>;
+  producerMetadataRef: React.RefObject<Map<string, { source?: string; userId?: string; kind?: 'audio' | 'video' }>>;
+  activeScreenShareProducersRef: React.RefObject<Set<string>>;
+  isStoppingScreenShareRef: React.RefObject<boolean>;
 }
 
 export function useCallScreenShare({
   isScreenSharing,
-  screenShareStreams,
   setScreenShareStreams,
   setIsScreenSharing,
   addScreenShare,

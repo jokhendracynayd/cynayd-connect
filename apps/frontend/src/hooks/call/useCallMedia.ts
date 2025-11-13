@@ -21,9 +21,7 @@ interface UseCallMediaProps {
   permissionErrors: { audio: boolean; video: boolean };
   audioForceActive: boolean;
   videoForceActive: boolean;
-  hostControls: { audioForceAll: boolean; videoForceAll: boolean };
   setLocalStream: (stream: MediaStream | null) => void;
-  setLocalAudioMuted: (muted: boolean) => void;
   setLocalVideoMuted: (muted: boolean) => void;
   setPermissionError: (kind: 'audio' | 'video', error: boolean) => void;
   toggleAudio: () => void;
@@ -44,9 +42,7 @@ export function useCallMedia({
   permissionErrors,
   audioForceActive,
   videoForceActive,
-  hostControls,
   setLocalStream,
-  setLocalAudioMuted,
   setLocalVideoMuted,
   setPermissionError,
   toggleAudio,

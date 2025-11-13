@@ -1031,15 +1031,9 @@ export const useCallStore = create<CallState>((set) => ({
       p.userId === userId ? updatedParticipant : p
     );
 
-    const updatedScreenShares = new Map(existingState.screenShares);
-    if (videoForced && existingState.screenShares.has(userId)) {
-      updatedScreenShares.delete(userId);
-    }
-
     return {
       ...existingState,
       participants: updatedParticipants,
-      screenShares: updatedScreenShares,
     };
   }),
   setRecordingState: (nextState) =>

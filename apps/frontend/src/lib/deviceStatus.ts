@@ -88,7 +88,8 @@ function isTrackSystemMuted(track: MediaStreamTrack | undefined): boolean {
   try {
     const settings = track.getSettings();
     // Some browsers expose volume or deviceId changes when system muted
-    if (settings.volume !== undefined && settings.volume === 0) {
+    const { volume } = settings as Partial<{ volume?: number }>;
+    if (volume !== undefined && volume === 0) {
       return true;
     }
   } catch (error) {
@@ -159,6 +160,10 @@ export async function getVideoDeviceStatus(
   const hasDevice = await checkDeviceExists('videoinput');
   const permissionState = await checkPermissionState('camera');
   const isSystemMuted = false; // Video doesn't have system-mute concept typically
+  const trackInactive =
+    !!currentTrack &&
+    (currentTrack.readyState === 'ended' ||
+      (currentTrack.muted && currentTrack.enabled));
 
   let issueType: DeviceIssueType = 'none';
   let errorReason = '';
@@ -188,6 +193,10 @@ export async function getVideoDeviceStatus(
       errorReason = 'Camera is busy or unavailable';
       canRetry = true;
     }
+  } else if (trackInactive) {
+    issueType = 'device-busy';
+    errorReason = 'Camera feed is inactive';
+    canRetry = true;
   }
 
   return {
