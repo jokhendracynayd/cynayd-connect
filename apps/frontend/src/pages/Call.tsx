@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
@@ -15,20 +14,29 @@ import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
 import { webrtcManager } from '../lib/webrtc';
 import { NetworkMonitor } from '../lib/networkMonitor';
-import ChatPanel from '../components/call/ChatPanel';
 import ParticipantList from '../components/call/ParticipantList';
 import PendingRequestsPanel from '../components/call/PendingRequestsPanel';
 import RoomSettings from '../components/call/RoomSettings';
 import WaitingRoom from '../components/call/WaitingRoom';
 import ScreenShareSection from '../components/call/ScreenShareSection';
+import PermissionBanner from '../components/call/PermissionBanner';
+import RecordingIndicator from '../components/call/RecordingIndicator';
+import BackgroundGradients from '../components/call/BackgroundGradients';
+import ScreenShareBanner from '../components/call/ScreenShareBanner';
+import SidebarToggleButton from '../components/call/SidebarToggleButton';
+import ActiveSpeakerOverlay from '../components/call/ActiveSpeakerOverlay';
+import CollapsedSidebarButton from '../components/call/CollapsedSidebarButton';
+import ParticipantsSidebar from '../components/call/ParticipantsSidebar';
+import OverflowParticipantsButton from '../components/call/OverflowParticipantsButton';
+import LoadingState from '../components/call/LoadingState';
+import ErrorState from '../components/call/ErrorState';
+import BottomControlsBar from '../components/call/BottomControlsBar';
+import ChatPanelPortal from '../components/call/ChatPanelPortal';
 import { getPendingRequests, requestRoomJoin } from '../lib/api';
 import api from '../lib/api';
 import { storage } from '../lib/storage';
-import DeviceDropdown from '../components/shared/DeviceDropdown';
-import WarningBadge from '../components/shared/WarningBadge';
 import DevicePermissionDialog from '../components/call/DevicePermissionDialog';
 import { getAudioDeviceStatus, getVideoDeviceStatus, setupPermissionListener, setupDeviceChangeListener } from '../lib/deviceStatus';
-import { MicMutedIcon, HandRaisedIcon, VideoMutedIcon } from '../components/call/icons';
 import type {
   RecordingStateEventPayload,
   RecordingErrorEventPayload,
@@ -36,7 +44,6 @@ import type {
   ServerParticipant,
   ParticipantTile,
 } from '../types/call';
-import { formatDuration } from '../utils/call';
 import { getNonSplitLayoutConfig, getGridTemplateClasses } from '../utils/callLayout';
 import CallParticipantTile from '../components/call/CallParticipantTile';
 import { useCallMedia } from '../hooks/call/useCallMedia';
@@ -127,7 +134,6 @@ export default function Call() {
   const isStoppingScreenShareRef = useRef(false);
   const networkMonitorRef = useRef<NetworkMonitor | null>(null);
   const pendingParticipantEventsRef = useRef<Map<string, Array<() => void>>>(new Map());
-  const activeSpeakerVideoRef = useRef<HTMLVideoElement>(null);
   const [showPendingRequests, setShowPendingRequests] = useState(false);
   const [showRoomSettings, setShowRoomSettings] = useState(false);
   const [showWaitingRoom, setShowWaitingRoom] = useState(false);
@@ -490,12 +496,6 @@ export default function Call() {
   const recordingIsUploading = recordingStatusValue === 'UPLOADING';
   const recordingPending = recordingIsStarting || recordingIsUploading;
   const recordingIndicatorVisible = recordingIsRecording || recordingPending;
-  const recordingButtonDisabled = recordingPending;
-  const recordingButtonClass = recordingIsRecording
-    ? 'bg-rose-500 text-white shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:bg-rose-600'
-    : recordingPending
-    ? 'bg-amber-500/80 text-white'
-    : 'bg-white/90 text-slate-600';
   const recordingStatusText = recordingIsRecording
     ? 'Recording'
     : recordingIsUploading
@@ -2632,8 +2632,8 @@ export default function Call() {
     handleHostUnmuteAllVideo,
     handleHostToggleChat,
     handleHostToggleLock,
-    handleHostStartRecording,
-    handleHostStopRecording,
+    handleHostStartRecording: _handleHostStartRecording,
+    handleHostStopRecording: _handleHostStopRecording,
     handleHostControlParticipant,
     handleHostRemoveParticipant,
     handlePromoteToCoHost,
@@ -2769,29 +2769,6 @@ export default function Call() {
     }
   }, [showSplitLayout, isSidebarCollapsed]);
 
-  useEffect(() => {
-    const videoElement = activeSpeakerVideoRef.current;
-    const stream = shouldShowActiveSpeakerOverlay && activeSpeakerHasLiveVideo ? activeSpeakerStream : null;
-
-    if (!videoElement) {
-      return;
-    }
-
-    if (!stream) {
-      if (videoElement.srcObject) {
-        videoElement.srcObject = null;
-      }
-      return;
-    }
-
-    if (videoElement.srcObject !== stream) {
-      videoElement.srcObject = stream;
-    }
-
-    videoElement.play().catch(error => {
-      console.warn('Error playing active speaker overlay video:', error);
-    });
-  }, [activeSpeakerHasLiveVideo, activeSpeakerStream, shouldShowActiveSpeakerOverlay]);
 
 
   const getRemoteVideoRef = useCallback((userId: string) => {
@@ -2862,268 +2839,43 @@ export default function Call() {
    }
 
   if (!preJoinCompleted) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f7f9fc] text-slate-600">
-        <div className="text-center">
-          <div className="mx-auto h-12 w-12 rounded-full border-2 border-slate-200 border-t-cyan-400 animate-spin" />
-          <p className="mt-4 font-medium text-slate-800">Preparing room…</p>
-        </div>
-      </div>
-    );
+    return <LoadingState message="Preparing room…" />;
   }
 
-   // Show leaving state
-   if (isLeaving) {
-     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#f7f9fc] text-slate-600">
-        <div className="text-center space-y-3">
-          <div className="mx-auto h-12 w-12 rounded-full border-2 border-slate-200 border-t-cyan-400 animate-spin"></div>
-          <p className="text-slate-800 font-medium">Leaving room...</p>
-          <p className="text-sm text-slate-500">Please wait while we reset your session.</p>
-         </div>
-       </div>
-     );
-   }
+  // Show leaving state
+  if (isLeaving) {
+    return <LoadingState message="Leaving room..." subtitle="Please wait while we reset your session." />;
+  }
 
   if (isConnecting) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f7f9fc] text-slate-600">
-        <div className="text-center">
-          <div className="mx-auto h-12 w-12 rounded-full border-2 border-slate-200 border-t-cyan-400 animate-spin" />
-          <p className="mt-4 font-medium text-slate-800">Connecting to room...</p>
-        </div>
-      </div>
-    );
+    return <LoadingState message="Connecting to room..." />;
   }
 
   if (error) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#f7f9fc]">
-        <div className="max-w-md rounded-[24px] border border-rose-100 bg-white/90 px-8 py-10 text-center text-rose-500 shadow-[0_28px_70px_-40px_rgba(244,63,94,0.35)]">
-          <div className="mb-4 text-5xl">⚠️</div>
-          <h1 className="mb-2 text-2xl font-semibold text-slate-900">Connection error</h1>
-          <p className="mb-6 text-slate-500">{error}</p>
-          <button
-            onClick={() => navigate('/')}
-            className="rounded-full bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 px-6 py-3 font-semibold text-white shadow-[0_18px_45px_-28px_rgba(14,165,233,0.55)] transition hover:from-cyan-500 hover:via-sky-600 hover:to-indigo-600"
-          >
-            Go Home
-          </button>
-        </div>
-      </div>
-    );
+    return <ErrorState error={error} onGoHome={() => navigate('/')} />;
   }
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-[#f7f9fc] text-slate-900">
-      {hasPermissionIssue && !permissionBannerDismissed && (
-        <div className="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4">
-          <div className="pointer-events-auto flex w-full max-w-3xl flex-col gap-3 rounded-[24px] border border-amber-200 bg-white/95 p-4 shadow-[0_18px_55px_-28px_rgba(251,191,36,0.55)] backdrop-blur">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-amber-100 text-amber-600">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L4.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-amber-800">You're in listen-only mode</p>
-                  <p className="mt-1 text-sm text-amber-700">
-                    Your browser blocked access to {permissionErrors.audio && permissionErrors.video ? 'the microphone and camera' : permissionErrors.audio ? 'the microphone' : 'the camera'}. Use the controls below to grant permission and re-enable them.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPermissionBannerDismissed(true)}
-                className="flex h-8 w-8 flex-none items-center justify-center rounded-full border border-transparent text-amber-600 transition hover:border-amber-200 hover:bg-amber-50"
-                aria-label="Dismiss permission warning"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {permissionErrors.audio && (
-                <button
-                  type="button"
-                  onClick={() => handleToggleAudio()}
-                  className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white transition hover:bg-slate-700"
-                >
-                  Retry microphone
-                </button>
-              )}
-              {permissionErrors.video && (
-                <button
-                  type="button"
-                  onClick={() => handleToggleVideo()}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-900 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-900 transition hover:bg-slate-900 hover:text-white"
-                >
-                  Retry camera
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <PermissionBanner
+        hasPermissionIssue={hasPermissionIssue}
+        permissionBannerDismissed={permissionBannerDismissed}
+        permissionErrors={permissionErrors}
+        onDismiss={() => setPermissionBannerDismissed(true)}
+        onRetryAudio={handleToggleAudio}
+        onRetryVideo={handleToggleVideo}
+      />
 
-      {recordingIndicatorVisible && (
-        <div className="pointer-events-none fixed top-6 left-1/2 z-40 flex -translate-x-1/2 px-4">
-          <div className="pointer-events-auto flex items-center gap-2 rounded-full bg-slate-900/85 px-4 py-2 text-xs font-semibold text-white shadow-[0_18px_40px_-28px_rgba(15,23,42,0.6)]">
-            <span
-              className={`h-2.5 w-2.5 rounded-full ${
-                recordingIsRecording ? 'bg-red-500 animate-pulse' : 'bg-amber-400 animate-pulse'
-              }`}
-            />
-            <span>{recordingStatusText}</span>
-            {recordingIsRecording && (
-              <span className="font-mono text-sm">{formatDuration(recordingElapsedSeconds)}</span>
-            )}
-          </div>
-        </div>
-      )}
+      <RecordingIndicator
+        isVisible={recordingIndicatorVisible}
+        isRecording={recordingIsRecording}
+        isPending={recordingPending}
+        statusText={recordingStatusText}
+        elapsedSeconds={recordingElapsedSeconds}
+      />
 
-      {isAdmin && (
-        <div
-          className="fixed right-6 z-40 flex flex-col items-end gap-3"
-          style={{
-            bottom: 0,
-            paddingBottom: `calc(12px + env(safe-area-inset-bottom))`,
-          }}
-        >
-          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-white/60 bg-white/90 px-3 py-2 shadow-[0_22px_45px_-28px_rgba(14,165,233,0.45)] sm:gap-3 sm:px-6 sm:py-3">
-            <button
-              onClick={
-                hostControls.audioForceAll
-                  ? handleHostUnmuteAllAudio
-                  : handleHostMuteAllAudio
-              }
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
-                hostControls.audioForceAll
-                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
-                  : 'bg-white text-slate-600 hover:bg-slate-100'
-              }`}
-              aria-pressed={hostControls.audioForceAll}
-            >
-              <MicMutedIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Mic</span>
-              <span className="sm:hidden">M</span>
-            </button>
 
-            <button
-              onClick={
-                hostControls.videoForceAll
-                  ? handleHostUnmuteAllVideo
-                  : handleHostMuteAllVideo
-              }
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
-                hostControls.videoForceAll
-                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
-                  : 'bg-white text-slate-600 hover:bg-slate-100'
-              }`}
-              aria-pressed={hostControls.videoForceAll}
-            >
-              <VideoMutedIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Camera</span>
-              <span className="sm:hidden">Cam</span>
-            </button>
-
-            <button
-              onClick={handleHostToggleChat}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
-                hostControls.chatForceAll
-                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
-                  : 'bg-white text-slate-600 hover:bg-slate-100'
-              }`}
-              aria-pressed={hostControls.chatForceAll}
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M7 8h10M7 12h6m7 0a9 9 0 11-4.219-7.516L21 4v8z"
-                />
-              </svg>
-              <span className="hidden sm:inline">Chat</span>
-              <span className="sm:hidden">Chat</span>
-            </button>
-
-            <button
-              onClick={handleHostToggleLock}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
-                hostControls.locked ? 'bg-rose-500 text-white' : 'bg-white/90 text-slate-600'
-              }`}
-              aria-pressed={hostControls.locked}
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M7 9V7a3 3 0 016 0v2m-6 0h6a2 2 0 012 2v5a2 2 0 01-2 2H7a2 2 0 01-2-2v-5a2 2 0 012-2z"
-                />
-              </svg>
-              <span className="hidden sm:inline">Lock</span>
-              <span className="sm:hidden">L</span>
-            </button>
-
-            {false && (
-              <button
-                onClick={recordingIsRecording ? handleHostStopRecording : handleHostStartRecording}
-                disabled={recordingButtonDisabled}
-                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
-                  recordingButtonDisabled ? `${recordingButtonClass} cursor-wait` : recordingButtonClass
-                }`}
-                aria-pressed={recordingIsRecording}
-                title={
-                  recordingIsRecording
-                    ? 'Stop recording'
-                    : recordingPending
-                    ? 'Recording in progress'
-                    : 'Start recording'
-                }
-              >
-                {recordingPending ? (
-                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle
-                      className="opacity-25"
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="4"
-                    />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                    />
-                  </svg>
-                ) : recordingIsRecording ? (
-                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                    <rect x="6" y="6" width="8" height="8" rx="1.5" />
-                  </svg>
-                ) : (
-                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                    <circle cx="10" cy="10" r="6" />
-                  </svg>
-                )}
-                <span className="hidden sm:inline">
-                  {recordingIsRecording ? 'Stop Rec' : 'Start Rec'}
-                </span>
-                <span className="sm:hidden">{recordingIsRecording ? 'Stop' : 'Rec'}</span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -left-36 -top-24 h-[520px] w-[520px] rounded-full bg-gradient-to-br from-cyan-100 via-sky-100 to-indigo-100 opacity-70 blur-[170px]" />
-        <div className="absolute right-[-160px] bottom-[-180px] h-[520px] w-[520px] rounded-full bg-gradient-to-tl from-white via-cyan-100 to-indigo-100 opacity-60 blur-[180px]" />
-      </div>
+      <BackgroundGradients />
 
       <div className="relative z-10 flex h-full flex-col">
         {false && (
@@ -3157,22 +2909,10 @@ export default function Call() {
           </header>
         )}
 
-        {isScreenSharing && (
-          <div className="flex items-center justify-between border-b border-amber-200 bg-amber-100/90 px-6 py-3 text-amber-700 backdrop-blur">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              <span>You are sharing your screen</span>
-            </div>
-            <button
-              onClick={handleStopScreenShare}
-              className="text-sm font-semibold underline transition hover:text-amber-900"
-            >
-              Stop sharing
-            </button>
-          </div>
-        )}
+        <ScreenShareBanner
+          isScreenSharing={isScreenSharing}
+          onStopScreenShare={handleStopScreenShare}
+        />
 
         <main
           className={`relative flex min-h-0 flex-1 flex-col ${mainLayoutSpacingClass}`}
@@ -3192,140 +2932,31 @@ export default function Call() {
                   currentUserId={user?.id ?? ''}
                 />
 
-                <button
-                  type="button"
-                  onClick={() => setIsSidebarCollapsed(prev => !prev)}
-                  title={isSidebarCollapsed ? 'Show participants sidebar' : 'Hide participants sidebar'}
-                  aria-label={isSidebarCollapsed ? 'Show participants sidebar' : 'Hide participants sidebar'}
-                  aria-expanded={!isSidebarCollapsed}
-                  className="pointer-events-auto absolute right-6 top-6 hidden items-center gap-2 rounded-full border border-white/60 bg-white/85 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-600 shadow-sm transition hover:border-cyan-200 hover:text-cyan-600 lg:inline-flex"
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                    {isSidebarCollapsed ? (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 6l8 4-8 4V6z" />
-                    ) : (
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14 6l-8 4 8 4V6z" />
-                    )}
-                  </svg>
-                  {isSidebarCollapsed ? 'Show participants' : 'Hide participants'}
-                </button>
+                <SidebarToggleButton
+                  isCollapsed={isSidebarCollapsed}
+                  onToggle={() => setIsSidebarCollapsed(prev => !prev)}
+                />
 
                 {shouldShowActiveSpeakerOverlay && activeSpeakerTile && (
-                  <div className="pointer-events-auto absolute bottom-6 right-6 flex w-[min(240px,35%)] flex-col gap-2 rounded-3xl border border-white/40 bg-white/90 p-3 shadow-[0_22px_45px_-28px_rgba(15,23,42,0.45)] backdrop-blur">
-                    <div className="relative aspect-video overflow-hidden rounded-2xl bg-slate-900/85">
-                      {activeSpeakerHasLiveVideo ? (
-                        <video
-                          ref={activeSpeakerVideoRef}
-                          autoPlay
-                          muted
-                          playsInline
-                          className={`h-full w-full object-cover ${
-                            activeSpeakerTile?.isLocal ||
-                            activeSpeakerTileFacingMode === 'user' ||
-                            (!activeSpeakerTileFacingMode && !activeSpeakerIsProbableScreenShare)
-                              ? 'mirror-video'
-                              : ''
-                          }`}
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center bg-slate-900/80 text-white/70">
-                          {activeSpeakerTile.picture ? (
-                            <img
-                              src={activeSpeakerTile.picture}
-                              alt={activeSpeakerTile.name}
-                              className="h-12 w-12 rounded-full border border-white/40 object-cover"
-                            />
-                          ) : (
-                            <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                            </svg>
-                          )}
-                        </div>
-                      )}
-                      <div className="absolute left-3 top-3 rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.3em] text-white">
-                        Speaker
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-600">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-slate-700">
-                          {activeSpeakerTile.name}
-                          {activeSpeakerTile.isLocal ? ' (You)' : ''}
-                        </span>
-                        <span
-                          className={`flex h-6 w-6 items-center justify-center rounded-full ${
-                            activeSpeakerTile.isAudioMuted
-                              ? 'bg-rose-100 text-rose-500'
-                              : 'bg-cyan-100 text-cyan-600'
-                          }`}
-                        >
-                          {activeSpeakerTile.isAudioMuted ? (
-                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10v2a3 3 0 01-6 0V7m9 5a7 7 0 01-7 7m0 0a7 7 0 01-7-7v-2m7 7v4" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3l18 18" />
-                            </svg>
-                          ) : (
-                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5a3 3 0 016 0v6a3 3 0 11-6 0V5z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10v2a7 7 0 0014 0v-2" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 17v4" />
-                            </svg>
-                          )}
-                        </span>
-                      </div>
-                      {activeSpeakerTile.isHost && (
-                        <span className="rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.25em] text-cyan-700">
-                          Host
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <ActiveSpeakerOverlay
+                    tile={activeSpeakerTile}
+                    hasLiveVideo={activeSpeakerHasLiveVideo}
+                    stream={activeSpeakerStream}
+                    facingMode={activeSpeakerTileFacingMode}
+                    isProbableScreenShare={activeSpeakerIsProbableScreenShare}
+                  />
                 )}
               </div>
 
               {isSidebarCollapsed ? (
-                <div className="hidden lg:flex lg:flex-col lg:items-end">
-                  <button
-                    type="button"
-                    onClick={() => setIsSidebarCollapsed(false)}
-                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-cyan-200 hover:text-cyan-600"
-                  >
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 6l8 4-8 4V6z" />
-                    </svg>
-                    Show participants
-                  </button>
-                </div>
+                <CollapsedSidebarButton onExpand={() => setIsSidebarCollapsed(false)} />
               ) : (
-                <aside
-                  className="flex w-full min-h-0 flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white/80 backdrop-blur lg:basis-[22%] lg:max-w-[300px] xl:basis-[18%]"
-                  style={{ maxHeight: 'calc(100vh - 140px)' }}
-                >
-                  <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-                    <p className="text-[11px] uppercase tracking-[0.35em] text-slate-400">Participants</p>
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">
-                        {totalParticipants}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setIsSidebarCollapsed(true)}
-                        className="hidden rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 transition hover:border-cyan-200 hover:text-cyan-600 lg:inline-flex"
-                      >
-                        Hide
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 pr-5 min-h-0">
-                    {participantTilesForDisplay.length === 0 ? (
-                      <div className="flex h-full items-center justify-center text-sm font-medium text-slate-400">
-                        Waiting for participants…
-                      </div>
-                    ) : (
-                      participantTilesForDisplay.map((tile, index) => renderParticipantTile(tile, index))
-                    )}
-                  </div>
-                </aside>
+                <ParticipantsSidebar
+                  totalParticipants={totalParticipants}
+                  participantTiles={participantTilesForDisplay}
+                  renderParticipantTile={renderParticipantTile}
+                  onCollapse={() => setIsSidebarCollapsed(true)}
+                />
               )}
             </div>
           ) : (
@@ -3368,13 +2999,11 @@ export default function Call() {
                       </div>
                     )}
 
-                    {!showSplitLayout && overflowCount > 0 && (
-                      <button
+                    {!showSplitLayout && (
+                      <OverflowParticipantsButton
+                        overflowCount={overflowCount}
                         onClick={() => setShowParticipantList(true)}
-                        className="absolute right-6 top-6 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow transition hover:border-cyan-200 hover:text-cyan-600"
-                      >
-                        +{overflowCount} more participants
-                      </button>
+                      />
                     )}
                   </div>
                 </div>
@@ -3383,249 +3012,52 @@ export default function Call() {
           )}
         </main>
 
-        <div className="pointer-events-none absolute bottom-0 left-1/2 z-30 -translate-x-1/2 px-4 lg:max-w-4xl">
-          <div
-            className="pointer-events-auto flex flex-wrap items-center justify-center gap-3 rounded-full border border-white/60 bg-white/90 px-6 py-4 shadow-[0_22px_45px_-28px_rgba(14,165,233,0.45)]"
-            style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}
-          >
-            <div className="relative flex items-center gap-1">
-              <button
-                onClick={() => setShowAudioDropdown(prev => !prev)}
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
-                title="Select microphone"
-                aria-expanded={showAudioDropdown}
-              >
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2.5}
-                    d={showAudioDropdown ? 'M19 9l-7 7-7-7' : 'M5 15l7-7 7 7'}
-                  />
-                </svg>
-              </button>
-              {showAudioDropdown && (
-                <DeviceDropdown
-                  kind="audio"
-                  devices={availableDevices.audioInput}
-                  selectedDeviceId={selectedDevices.audioInput}
-                  onSelect={(deviceId) => handleDeviceSelect('audio', deviceId)}
-                  onClose={() => setShowAudioDropdown(false)}
-                  position="top"
-                />
-              )}
-              <div className="relative">
-                <button
-                  onClick={handleToggleAudio}
-                  disabled={audioForceActive}
-                  className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
-                    audioForceActive
-                      ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
-                      : isAudioMuted
-                      ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
-                      : 'bg-slate-800 text-white hover:bg-slate-900'
-                  }`}
-                  title={
-                    audioForceActive
-                      ? hostControls.audioForceAll
-                        ? 'Host muted all microphones'
-                        : 'Host has muted your microphone'
-                      : isAudioMuted
-                      ? 'Unmute microphone'
-                      : 'Mute microphone'
-                  }
-                >
-                  {isAudioMuted ? (
-                    <MicMutedIcon className="h-5 w-5" />
-                  ) : (
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                    </svg>
-                  )}
-                </button>
-                {deviceStatus.audio.issueType !== 'none' && (
-                  <WarningBadge onClick={handleShowAudioDialog} />
-                )}
-              </div>
-            </div>
-
-            <div className="relative flex items-center gap-1">
-              <button
-                onClick={() => setShowVideoDropdown(prev => !prev)}
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
-                title="Select camera"
-                aria-expanded={showVideoDropdown}
-              >
-                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2.5}
-                    d={showVideoDropdown ? 'M19 9l-7 7-7-7' : 'M5 15l7-7 7 7'}
-                  />
-                </svg>
-              </button>
-              {showVideoDropdown && (
-                <DeviceDropdown
-                  kind="video"
-                  devices={availableDevices.videoInput}
-                  selectedDeviceId={selectedDevices.videoInput}
-                  onSelect={(deviceId) => handleDeviceSelect('video', deviceId)}
-                  onClose={() => setShowVideoDropdown(false)}
-                  position="top"
-                />
-              )}
-              <div className="relative">
-                <button
-                  onClick={handleToggleVideo}
-                  disabled={videoForceActive}
-                  className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
-                    videoForceActive
-                      ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
-                      : isVideoMuted
-                      ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
-                      : 'bg-slate-800 text-white hover:bg-slate-900'
-                  }`}
-                  title={
-                    videoForceActive
-                      ? hostControls.videoForceAll
-                        ? 'Host disabled all cameras'
-                        : 'Host has disabled your camera'
-                      : isVideoMuted
-                      ? 'Turn camera on'
-                      : 'Turn camera off'
-                  }
-                >
-                  {isVideoMuted ? (
-                    <VideoMutedIcon className="h-5 w-5" />
-                  ) : (
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                  )}
-                </button>
-                {deviceStatus.video.issueType !== 'none' && (
-                  <WarningBadge onClick={handleShowVideoDialog} />
-                )}
-              </div>
-            </div>
-
-            <button
-              onClick={handleToggleRaiseHand}
-              className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
-                user?.id && raisedHands.has(user.id)
-                  ? 'bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 shadow-[0_15px_35px_-20px_rgba(251,191,36,0.65)] hover:from-amber-500 hover:via-amber-600 hover:to-amber-700'
-                  : 'bg-slate-800 hover:bg-slate-900'
-              }`}
-              title={user?.id && raisedHands.has(user.id) ? 'Lower hand' : 'Raise hand'}
-            >
-              <HandRaisedIcon className="h-5 w-5" />
-            </button>
-
-            <button
-              onClick={isScreenSharing ? handleStopScreenShare : handleStartScreenShare}
-              className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
-                isScreenSharing
-                  ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
-                  : 'bg-slate-800 hover:bg-slate-900'
-              }`}
-              title={isScreenSharing ? 'Stop sharing screen' : 'Share your screen'}
-            >
-              {isScreenSharing ? (
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              ) : (
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-              )}
-            </button>
-
-            <button
-              onClick={() => {
-                setShowChatPanel(true);
-                setChatActiveConversation(EVERYONE_CONVERSATION_ID);
-              }}
-              className="relative flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
-              title="Open chat"
-            >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M7 8h10M7 12h6m7 0a9 9 0 11-4.219-7.516L21 4v8z"
-                />
-              </svg>
-              {chatUnreadCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
-                  {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setShowParticipantList(true)}
-              className="flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
-              title="Show participants"
-            >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-              </svg>
-            </button>
-
-            {isAdmin && (
-              <>
-                <button
-                  onClick={() => setShowRoomSettings(true)}
-                  className="flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
-                  title="Room settings"
-                >
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </button>
-
-                <button
-                  onClick={() => setShowPendingRequests(!showPendingRequests)}
-                  className="relative flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
-                  title="Join requests"
-                >
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-                  </svg>
-                  {pendingRequests.length > 0 && (
-                    <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-semibold text-white">
-                      {pendingRequests.length}
-                    </span>
-                  )}
-                </button>
-              </>
-            )}
-
-            <button
-              onClick={() => {
-                void leaveRoom();
-              }}
-              disabled={isLeaving}
-              className="flex items-center gap-2 rounded-full bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_18px_40px_-24px_rgba(244,63,94,0.65)] transition hover:from-rose-600 hover:via-rose-700 hover:to-rose-800 disabled:cursor-not-allowed disabled:opacity-60"
-              title={isLeaving ? 'Leaving room...' : 'Leave room'}
-            >
-              {isLeaving ? (
-                <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              ) : (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              )}
-              <span className="hidden sm:inline">Leave</span>
-            </button>
-          </div>
-        </div>
+        <BottomControlsBar
+          isAudioMuted={isAudioMuted}
+          audioForceActive={audioForceActive}
+          hostControls={hostControls}
+          deviceStatus={deviceStatus}
+          showAudioDropdown={showAudioDropdown}
+          availableAudioDevices={availableDevices.audioInput}
+          selectedAudioDeviceId={selectedDevices.audioInput}
+          onToggleAudio={handleToggleAudio}
+          onToggleAudioDropdown={() => setShowAudioDropdown(prev => !prev)}
+          onSelectAudioDevice={(deviceId) => handleDeviceSelect('audio', deviceId)}
+          onShowAudioDialog={handleShowAudioDialog}
+          isVideoMuted={isVideoMuted}
+          videoForceActive={videoForceActive}
+          showVideoDropdown={showVideoDropdown}
+          availableVideoDevices={availableDevices.videoInput}
+          selectedVideoDeviceId={selectedDevices.videoInput}
+          onToggleVideo={handleToggleVideo}
+          onToggleVideoDropdown={() => setShowVideoDropdown(prev => !prev)}
+          onSelectVideoDevice={(deviceId) => handleDeviceSelect('video', deviceId)}
+          onShowVideoDialog={handleShowVideoDialog}
+          isHandRaised={user?.id ? raisedHands.has(user.id) : false}
+          onToggleRaiseHand={handleToggleRaiseHand}
+          isScreenSharing={isScreenSharing}
+          onToggleScreenShare={isScreenSharing ? handleStopScreenShare : handleStartScreenShare}
+          chatUnreadCount={chatUnreadCount}
+          onOpenChat={() => {
+            setShowChatPanel(true);
+            setChatActiveConversation(EVERYONE_CONVERSATION_ID);
+          }}
+          onShowParticipantList={() => setShowParticipantList(true)}
+          isAdmin={isAdmin}
+          onMuteAllAudio={handleHostMuteAllAudio}
+          onUnmuteAllAudio={handleHostUnmuteAllAudio}
+          onMuteAllVideo={handleHostMuteAllVideo}
+          onUnmuteAllVideo={handleHostUnmuteAllVideo}
+          onToggleChat={handleHostToggleChat}
+          onToggleLock={handleHostToggleLock}
+          onShowRoomSettings={() => setShowRoomSettings(true)}
+          onShowPendingRequests={() => setShowPendingRequests(!showPendingRequests)}
+          pendingRequestsCount={pendingRequests.length}
+          isLeaving={isLeaving}
+          onLeave={() => {
+            void leaveRoom();
+          }}
+        />
       </div>
 
       <ParticipantList
@@ -3655,31 +3087,16 @@ export default function Call() {
           />
         </>
       )}
-      {showChatPanel &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div className="fixed inset-0 z-50 flex justify-end">
-            <button
-              type="button"
-              onClick={() => setShowChatPanel(false)}
-              className="absolute inset-0 z-0 bg-slate-900/30 backdrop-blur-sm transition"
-              aria-label="Close chat panel"
-            />
-            <div className="relative z-10 h-full w-full max-w-[28rem]">
-              <ChatPanel
-                currentUser={{
-                  id: user?.id ?? 'local-user',
-                  name: user?.name ?? 'You',
-                  email: user?.email ?? '',
-                  picture: user?.picture ?? null,
-                }}
-                onClose={() => setShowChatPanel(false)}
-                className="h-full"
-              />
-            </div>
-          </div>,
-          document.body
-        )}
+      <ChatPanelPortal
+        isOpen={showChatPanel}
+        currentUser={{
+          id: user?.id ?? 'local-user',
+          name: user?.name ?? 'You',
+          email: user?.email ?? '',
+          picture: user?.picture ?? null,
+        }}
+        onClose={() => setShowChatPanel(false)}
+      />
       
       <DevicePermissionDialog
         isOpen={showDeviceDialog}
