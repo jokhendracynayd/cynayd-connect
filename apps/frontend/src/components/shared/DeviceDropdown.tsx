@@ -5,7 +5,7 @@ type DeviceKind = 'audio' | 'video';
 interface DeviceDropdownProps {
   kind: DeviceKind;
   devices: MediaDeviceInfo[];
-  selectedDeviceId: string;
+  selectedDeviceId: string | null;
   onSelect: (deviceId: string) => void;
   onClose: () => void;
   position?: 'top' | 'bottom';

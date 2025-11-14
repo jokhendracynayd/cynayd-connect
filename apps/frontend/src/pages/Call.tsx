@@ -504,6 +504,60 @@ export default function Call() {
     ? 'Preparing recording'
     : '';
 
+  // Enforce force mute by actually disabling tracks and pausing producers
+  useEffect(() => {
+    const audioTrack = localStream?.getAudioTracks()[0];
+    const audioProducer = webrtcManager.getProducer('audio');
+    
+    if (!audioTrack) return;
+    
+    if (audioForceActive) {
+      // Host has force-muted - actually disable the track and pause producer
+      if (audioTrack.enabled) {
+        console.log('Enforcing host force mute: disabling audio track');
+        audioTrack.enabled = false;
+        if (audioProducer) {
+          webrtcManager.pauseProducer('audio').catch(err => {
+            console.error('Error pausing audio producer on force mute:', err);
+          });
+        }
+        // Update state to reflect muted state if not already muted
+        if (!isAudioMuted) {
+          setLocalAudioMuted(true);
+        }
+      }
+    } else if (!audioForceActive && !localForceState.audio && isAudioMuted && !audioTrack.enabled) {
+      // Force mute released - if user wants audio on, re-enable track and resume producer
+      // Note: We don't auto-unmute here, user must manually unmute
+      // But if they do unmute, the track should be ready
+    }
+  }, [audioForceActive, localStream, isAudioMuted, localForceState.audio, setLocalAudioMuted]);
+
+  // Similar for video force mute
+  useEffect(() => {
+    const videoTrack = localStream?.getVideoTracks()[0];
+    const videoProducer = webrtcManager.getProducer('video');
+    
+    if (!videoTrack) return;
+    
+    if (videoForceActive) {
+      // Host has force-muted video - actually disable the track and pause producer
+      if (videoTrack.enabled) {
+        console.log('Enforcing host force mute: disabling video track');
+        videoTrack.enabled = false;
+        if (videoProducer) {
+          webrtcManager.pauseProducer('video').catch(err => {
+            console.error('Error pausing video producer on force mute:', err);
+          });
+        }
+        // Update state to reflect muted state if not already muted
+        if (!isVideoMuted) {
+          setLocalVideoMuted(true);
+        }
+      }
+    }
+  }, [videoForceActive, localStream, isVideoMuted, setLocalVideoMuted]);
+
   useEffect(() => {
     showChatPanelRef.current = showChatPanel;
   }, [showChatPanel]);
@@ -1518,15 +1572,30 @@ export default function Call() {
     const handleProducerClosed = (data: any) => {
       console.log('Producer closed:', data);
       const metadata = producerMetadataRef.current.get(data.producerId);
+      
       if (metadata?.source === 'screen') {
         cleanupScreenShare(metadata.userId, data.producerId);
-      } else {
-        producerMetadataRef.current.delete(data.producerId);
-        webrtcManager.closeConsumerByProducerId(data.producerId);
+        return; // Screen share cleanup handles its own stream removal
       }
 
       const userIdForProducer = metadata?.userId || data.userId;
       const kindForProducer = metadata?.kind || data.kind;
+
+      // IMPORTANT FIX: Don't remove camera video if user has active screen share
+      // Camera video and screen share should coexist
+      if (kindForProducer === 'video' && userIdForProducer) {
+        const hasActiveScreenShare = screenShareProducersRef.current.has(userIdForProducer);
+        if (hasActiveScreenShare) {
+          // Don't remove camera video track when screen sharing is active
+          // Just clean up the metadata but keep the stream
+          producerMetadataRef.current.delete(data.producerId);
+          webrtcManager.closeConsumerByProducerId(data.producerId);
+          return;
+        }
+      }
+
+      producerMetadataRef.current.delete(data.producerId);
+      webrtcManager.closeConsumerByProducerId(data.producerId);
 
       if (userIdForProducer && (kindForProducer === 'audio' || kindForProducer === 'video')) {
         runOrQueueParticipantUpdate(userIdForProducer, () => {
@@ -2214,14 +2283,31 @@ export default function Call() {
       
       // Skip if this is a screen share producer (screen shares are handled separately)
       const metadata = producerMetadataRef.current.get(producerId);
+      const resolvedUserId = userId ?? metadata?.userId;
+      
       if (metadata?.source === 'screen') {
-        console.log('Skipping screen share producer in consumeProducer:', producerId);
-        return;
+        // IMPORTANT: Double-check if this is really a screen share
+        // If user has no active screen share, this might be mislabeled camera video
+        if (resolvedUserId) {
+          const hasActiveScreenShare = screenShareProducersRef.current.has(resolvedUserId);
+          if (!hasActiveScreenShare) {
+            // Update metadata to treat as camera video and continue processing
+            producerMetadataRef.current.set(producerId, {
+              ...metadata,
+              source: 'camera',
+            });
+            // Continue to process as camera video instead of returning
+          } else {
+            console.log('Skipping screen share producer in consumeProducer:', producerId);
+            return;
+          }
+        } else {
+          console.log('Skipping screen share producer in consumeProducer:', producerId);
+          return;
+        }
       }
       
       consumingProducersRef.current.add(producerId);
-      
-      const resolvedUserId = userId ?? metadata?.userId;
 
       console.log('Starting to consume producer:', { producerId, userId: resolvedUserId, kind });
       

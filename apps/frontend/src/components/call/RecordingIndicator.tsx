@@ -11,7 +11,6 @@ interface RecordingIndicatorProps {
 export default function RecordingIndicator({
   isVisible,
   isRecording,
-  isPending,
   statusText,
   elapsedSeconds,
 }: RecordingIndicatorProps) {

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import type { ParticipantTile } from '../../types/call';
 import type { NonSplitLayoutConfig } from '../../utils/callLayout';
 import { MicMutedIcon, HandRaisedIcon } from './icons';
@@ -21,10 +22,27 @@ export default function CallParticipantTile({
   setLocalVideoRef,
   getRemoteVideoRef,
 }: CallParticipantTileProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const tileStream = tile.stream ?? null;
   const videoTracks = tileStream?.getVideoTracks() ?? [];
   const hasLiveVideo = videoTracks.some(track => track.readyState === 'live');
   const shouldShowVideo = Boolean(tileStream && !tile.isVideoMuted && hasLiveVideo);
+  
+  // Ensure stream is attached to video element whenever it changes
+  useEffect(() => {
+    if (videoRef.current && tileStream && !tile.isLocal) {
+      const currentSrcObject = videoRef.current.srcObject;
+      if (currentSrcObject !== tileStream) {
+        videoRef.current.srcObject = tileStream;
+        // Ensure video plays
+        if (videoRef.current.paused) {
+          videoRef.current.play().catch(err => {
+            console.error('Error playing video for user:', tile.userId, err);
+          });
+        }
+      }
+    }
+  }, [tileStream, tile.userId, tile.isLocal, tile.isVideoMuted, hasLiveVideo]);
   const firstVideoTrack = videoTracks[0];
   const facingMode = firstVideoTrack?.getSettings?.().facingMode;
   const trackLabel = firstVideoTrack?.label?.toLowerCase() ?? '';
@@ -51,10 +69,20 @@ export default function CallParticipantTile({
     .filter(Boolean)
     .join(' ');
 
+  // Handle ref assignment for both local and remote videos
+  const handleVideoRef = (element: HTMLVideoElement | null) => {
+    videoRef.current = element;
+    if (tile.isLocal) {
+      setLocalVideoRef(element);
+    } else {
+      getRemoteVideoRef(tile.userId)(element);
+    }
+  };
+
   return (
     <div key={`${tile.userId}-${tile.isLocal ? 'local' : 'remote'}`} className={tileClasses}>
       <video
-        ref={tile.isLocal ? setLocalVideoRef : getRemoteVideoRef(tile.userId)}
+        ref={handleVideoRef}
         autoPlay
         playsInline
         muted={tile.isLocal}
