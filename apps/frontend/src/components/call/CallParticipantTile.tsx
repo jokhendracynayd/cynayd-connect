@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { ParticipantTile } from '../../types/call';
 import type { NonSplitLayoutConfig } from '../../utils/callLayout';
 import { MicMutedIcon, HandRaisedIcon } from './icons';
@@ -23,6 +23,7 @@ export default function CallParticipantTile({
   getRemoteVideoRef,
 }: CallParticipantTileProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const lastStreamRef = useRef<MediaStream | null>(null);
   const tileStream = tile.stream ?? null;
   const videoTracks = tileStream?.getVideoTracks() ?? [];
   const hasLiveVideo = videoTracks.some(track => track.readyState === 'live');
@@ -31,9 +32,10 @@ export default function CallParticipantTile({
   // Ensure stream is attached to video element whenever it changes
   useEffect(() => {
     if (videoRef.current && tileStream && !tile.isLocal) {
-      const currentSrcObject = videoRef.current.srcObject;
-      if (currentSrcObject !== tileStream) {
+      // Only attach if stream reference actually changed (prevents unnecessary re-attachments)
+      if (lastStreamRef.current !== tileStream) {
         videoRef.current.srcObject = tileStream;
+        lastStreamRef.current = tileStream;
         // Ensure video plays
         if (videoRef.current.paused) {
           videoRef.current.play().catch(err => {
@@ -41,8 +43,11 @@ export default function CallParticipantTile({
           });
         }
       }
+    } else if (!tileStream && lastStreamRef.current) {
+      // Clear stream reference when tileStream becomes null
+      lastStreamRef.current = null;
     }
-  }, [tileStream, tile.userId, tile.isLocal, tile.isVideoMuted, hasLiveVideo]);
+  }, [tileStream, tile.userId, tile.isLocal]);
   const firstVideoTrack = videoTracks[0];
   const facingMode = firstVideoTrack?.getSettings?.().facingMode;
   const trackLabel = firstVideoTrack?.label?.toLowerCase() ?? '';
@@ -70,14 +75,15 @@ export default function CallParticipantTile({
     .join(' ');
 
   // Handle ref assignment for both local and remote videos
-  const handleVideoRef = (element: HTMLVideoElement | null) => {
+  // Use useCallback to prevent recreating the ref callback on every render
+  const handleVideoRef = useCallback((element: HTMLVideoElement | null) => {
     videoRef.current = element;
     if (tile.isLocal) {
       setLocalVideoRef(element);
     } else {
       getRemoteVideoRef(tile.userId)(element);
     }
-  };
+  }, [tile.isLocal, tile.userId, setLocalVideoRef, getRemoteVideoRef]);
 
   return (
     <div key={`${tile.userId}-${tile.isLocal ? 'local' : 'remote'}`} className={tileClasses}>

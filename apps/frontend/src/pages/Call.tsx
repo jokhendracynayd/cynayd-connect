@@ -2858,32 +2858,55 @@ export default function Call() {
 
 
   const getRemoteVideoRef = useCallback((userId: string) => {
-    if (!remoteVideoRefCallbacks.current.has(userId)) {
-      remoteVideoRefCallbacks.current.set(userId, (element: HTMLVideoElement | null) => {
-        if (!element) {
-          remoteVideoRefs.current.delete(userId);
-          return;
-        }
+    // Always create/update the callback to ensure it has the latest remoteStreams reference
+    remoteVideoRefCallbacks.current.set(userId, (element: HTMLVideoElement | null) => {
+      if (!element) {
+        remoteVideoRefs.current.delete(userId);
+        return;
+      }
 
-        remoteVideoRefs.current.set(userId, element);
-        
-        // Immediately attach existing stream if available (fixes timing issue where stream arrives before video element)
+      // Only update ref if element changed (prevents unnecessary updates)
+      const existingRef = remoteVideoRefs.current.get(userId);
+      if (existingRef === element) {
+        // Element hasn't changed, check if stream needs updating
         const existingStream = remoteStreams.get(userId);
-        if (existingStream) {
-          console.log('Attaching existing stream on video element mount:', {
-            userId,
-            trackCount: existingStream.getTracks().length,
-            tracks: existingStream.getTracks().map(t => ({ kind: t.kind, id: t.id, state: t.readyState })),
-          });
+        if (existingStream && element.srcObject !== existingStream) {
           element.srcObject = existingStream;
-          if (element.paused) {
+          // Let autoPlay handle initial play, only manually play if video is paused and ready
+          // This prevents AbortError when streams are updated rapidly
+          if (element.paused && element.readyState >= 2) {
             element.play().catch(err => {
-              console.error('Error playing video on mount for user:', userId, err);
+              // AbortError is harmless - it means a new play() was requested before the previous one completed
+              if (err.name !== 'AbortError') {
+                console.error('Error playing video on mount for user:', userId, err);
+              }
             });
           }
         }
-      });
-    }
+        return;
+      }
+
+      remoteVideoRefs.current.set(userId, element);
+      
+      // Immediately attach existing stream if available (fixes timing issue where stream arrives before video element)
+      const existingStream = remoteStreams.get(userId);
+      if (existingStream) {
+        // Only attach if stream is not already attached (prevents duplicate attachments and blinking)
+        if (element.srcObject !== existingStream) {
+          element.srcObject = existingStream;
+          // Let autoPlay handle initial play, only manually play if video is paused and ready
+          // This prevents AbortError when streams are attached rapidly
+          if (element.paused && element.readyState >= 2) {
+            element.play().catch(err => {
+              // AbortError is harmless - it means a new play() was requested before the previous one completed
+              if (err.name !== 'AbortError') {
+                console.error('Error playing video on mount for user:', userId, err);
+              }
+            });
+          }
+        }
+      }
+    });
 
     return remoteVideoRefCallbacks.current.get(userId)!;
   }, [remoteStreams]);

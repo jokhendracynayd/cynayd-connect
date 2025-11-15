@@ -17,10 +17,21 @@ export default function ScreenShareThumbnail({
 
   useEffect(() => {
     if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(err => {
-        console.error('Error playing screen share thumbnail:', err);
-      });
+      // Only update if stream actually changed (prevents duplicate play() calls and AbortError)
+      if (videoRef.current.srcObject !== stream) {
+        videoRef.current.srcObject = stream;
+        // Let autoPlay handle initial play, only manually play if video is paused and ready
+        // This prevents AbortError when pinning/unpinning causes rapid play() calls
+        if (videoRef.current.paused && videoRef.current.readyState >= 2) {
+          videoRef.current.play().catch(err => {
+            // AbortError is harmless - it means a new play() was requested before the previous one completed
+            // This commonly happens when pinning/unpinning screen shares
+            if (err.name !== 'AbortError') {
+              console.error('Error playing screen share thumbnail:', err);
+            }
+          });
+        }
+      }
     }
   }, [stream]);
 
