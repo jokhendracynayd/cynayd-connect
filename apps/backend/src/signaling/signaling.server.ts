@@ -5,6 +5,7 @@ import { config } from '../shared/config';
 import { logger } from '../shared/utils/logger';
 import { TokenService } from '../shared/services/token.service';
 import { createAdapterClients } from '../shared/database/redis';
+import { createConnectionRateLimitMiddleware, parseTimeWindow } from '../shared/utils/socket-rate-limiter';
 import { roomHandler, handleSocketLeave } from './handlers/room.handler';
 import { mediaHandler } from './handlers/media.handler';
 import { chatHandler } from './handlers/chat.handler';
@@ -28,6 +29,12 @@ export function createSignalingServer(httpServer: HTTPServer) {
     logger.warn('Socket.io will run in single-server mode (no horizontal scaling)');
     // Continue without adapter - single server mode
   }
+
+  // Rate limiting middleware (before authentication)
+  io.use(createConnectionRateLimitMiddleware({
+    maxConnections: config.socketRateLimit.maxConnections,
+    windowMs: parseTimeWindow(config.socketRateLimit.connectionWindow),
+  }));
 
   // Authentication middleware
   io.use(async (socket, next) => {

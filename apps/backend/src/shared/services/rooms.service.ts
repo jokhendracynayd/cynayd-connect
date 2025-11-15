@@ -746,14 +746,22 @@ export class RoomService {
 
     if (!nextForcedAudio && !nextForcedVideo) {
       if (existing) {
-        await prisma.roomControlState.delete({
-          where: {
-            roomId_userId: {
-              roomId,
-              userId,
+        try {
+          await prisma.roomControlState.delete({
+            where: {
+              roomId_userId: {
+                roomId,
+                userId,
+              },
             },
-          },
-        });
+          });
+        } catch (error: any) {
+          // Ignore if record was already deleted (race condition)
+          // P2025 is Prisma's "Record not found" error code
+          if (error.code !== 'P2025') {
+            throw error;
+          }
+        }
       }
 
       return null;

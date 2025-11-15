@@ -62,6 +62,13 @@ const baseConfig = {
     timeWindow: process.env.RATE_LIMIT_TIME_WINDOW || '15 minutes',
   },
   
+  socketRateLimit: {
+    maxConnections: parseInt(process.env.SOCKET_RATE_LIMIT_MAX_CONNECTIONS || '10', 10),
+    connectionWindow: process.env.SOCKET_RATE_LIMIT_CONNECTION_WINDOW || '1 minute',
+    maxEvents: parseInt(process.env.SOCKET_RATE_LIMIT_MAX_EVENTS || '100', 10),
+    eventWindow: process.env.SOCKET_RATE_LIMIT_EVENT_WINDOW || '15 minutes',
+  },
+  
   bcrypt: {
     saltRounds: 10,
   },
