@@ -9,10 +9,10 @@ export default function RaiseHandButton({ isRaised, onToggle }: RaiseHandButtonP
   return (
     <button
       onClick={onToggle}
-      className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
+      className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition-all duration-300 ${
         isRaised
-          ? 'bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 shadow-[0_15px_35px_-20px_rgba(251,191,36,0.65)] hover:from-amber-500 hover:via-amber-600 hover:to-amber-700'
-          : 'bg-slate-800 hover:bg-slate-900'
+          ? 'bg-blue-600 text-white shadow-sm hover:bg-blue-700'
+          : 'bg-gray-800/60 text-gray-400 hover:bg-gray-700/70 hover:text-gray-300'
       }`}
       title={isRaised ? 'Lower hand' : 'Raise hand'}
     >

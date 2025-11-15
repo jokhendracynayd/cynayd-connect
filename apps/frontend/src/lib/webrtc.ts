@@ -6,6 +6,7 @@ type RouterRtpCapabilities = Parameters<Device['load']>[0]['routerRtpCapabilitie
 
 class WebRTCManager {
   private device: Device | null = null;
+  private rtpCapabilities: RouterRtpCapabilities | null = null; // Store for re-initialization
   private sendTransport: any = null;
   private recvTransport: any = null;
   private producers: Map<string, any> = new Map(); // producerId -> producer
@@ -99,15 +100,39 @@ class WebRTCManager {
   }
 
   async initialize(rtpCapabilities: RouterRtpCapabilities) {
+    this.rtpCapabilities = rtpCapabilities; // Store for potential re-initialization
     this.device = new Device();
     await this.device.load({ routerRtpCapabilities: rtpCapabilities });
     console.log('Device initialized');
   }
 
+  /**
+   * Ensure device is initialized, re-initialize if needed
+   * This is useful when cleanup() was called but user is still in the room
+   */
+  private async ensureDeviceInitialized(): Promise<void> {
+    if (!this.device) {
+      if (!this.rtpCapabilities) {
+        throw new Error('Device not initialized and rtpCapabilities not available. Cannot re-initialize device.');
+      }
+      console.log('Device was null, re-initializing with stored rtpCapabilities...');
+      this.device = new Device();
+      await this.device.load({ routerRtpCapabilities: this.rtpCapabilities });
+      console.log('Device re-initialized successfully');
+    }
+  }
+
   async createSendTransport(): Promise<any> {
+    // Ensure device is initialized (re-initialize if needed)
+    await this.ensureDeviceInitialized();
+
+    if (!this.device) {
+      throw new Error('Device initialization failed');
+    }
+
     const params = await socketManager.createTransport(true);
     
-    const transport = this.device!.createSendTransport(params);
+    const transport = this.device.createSendTransport(params);
 
     // Debug: Log transport events
     transport.on('connect', async ({ dtlsParameters }, callback, errback) => {
@@ -165,9 +190,16 @@ class WebRTCManager {
   }
 
   async createRecvTransport(): Promise<any> {
+    // Ensure device is initialized (re-initialize if needed)
+    await this.ensureDeviceInitialized();
+
+    if (!this.device) {
+      throw new Error('Device initialization failed');
+    }
+
     const params = await socketManager.createTransport(false);
     
-    const transport = this.device!.createRecvTransport(params);
+    const transport = this.device.createRecvTransport(params);
 
     transport.on('connect', async ({ dtlsParameters }, callback, errback) => {
       try {
@@ -210,8 +242,10 @@ class WebRTCManager {
   }
 
   async produceAudio(track: MediaStreamTrack): Promise<any> {
+    // Ensure send transport exists before producing
     if (!this.sendTransport) {
-      throw new Error('Send transport not created');
+      console.log('Send transport not found, creating it...');
+      await this.createSendTransport();
     }
 
     const producer = await this.sendTransport.produce({
@@ -227,8 +261,10 @@ class WebRTCManager {
   }
 
   async produceVideo(track: MediaStreamTrack): Promise<any> {
+    // Ensure send transport exists before producing
     if (!this.sendTransport) {
-      throw new Error('Send transport not created');
+      console.log('Send transport not found, creating it...');
+      await this.createSendTransport();
     }
 
     // Get participant count and determine optimal encoding bitrates
@@ -270,106 +306,159 @@ class WebRTCManager {
   async consumeProducer(producerId: string): Promise<MediaStreamTrack | null> {
     return this.runConsumeTask(async () => {
       try {
-      // Check if already consuming this producer
-      if (this.consumers.has(producerId)) {
-        const existingConsumer = this.consumers.get(producerId);
-        console.log('Already consuming producer:', producerId, 'track state:', existingConsumer?.track?.readyState);
-        return existingConsumer?.track || null;
-      }
-
-      if (!this.recvTransport) {
-        console.log('Creating recv transport for consumer...');
-        await this.createRecvTransport();
-      }
-
-      console.log('Consuming producer:', producerId, 'transport:', this.recvTransport?.id);
-      
-      const params = await socketManager.consume(
-        this.recvTransport!.id,
-        producerId,
-        this.device!.rtpCapabilities
-      );
-
-      console.log('Consume params received:', { 
-        id: params.id, 
-        producerId: params.producerId, 
-        kind: params.kind 
-      });
-
-      const consumer = await this.recvTransport!.consume({
-        id: params.id,
-        producerId: params.producerId,
-        kind: params.kind,
-        rtpParameters: params.rtpParameters,
-      });
-
-      this.consumers.set(producerId, consumer);
-      
-      const trackInfo = {
-        id: consumer.track.id,
-        kind: consumer.track.kind,
-        enabled: consumer.track.enabled,
-        readyState: consumer.track.readyState,
-        muted: consumer.track.muted,
-      };
-      
-      console.log('Consumer created:', consumer.id, 'track:', trackInfo);
-      
-      // Verify track is actually live
-      if (consumer.track.readyState !== 'live') {
-        console.error('❌ WARNING: Track is not live! State:', consumer.track.readyState);
-      } else {
-        console.log('✅ Track is LIVE');
-      }
-      
-      if (consumer.track.muted) {
-        console.warn('⚠️ Track is muted:', producerId);
-      }
-
-      // Enable track explicitly (sometimes needed)
-      if (!consumer.track.enabled) {
-        consumer.track.enabled = true;
-        console.log('✅ Enabled track explicitly');
-      }
-
-      // Listen to track events
-      consumer.track.onended = () => {
-        console.error('❌ Consumer track ended:', producerId);
-      };
-
-      consumer.track.onmute = () => {
-        console.warn('⚠️ Consumer track muted:', producerId);
-      };
-
-      consumer.track.onunmute = () => {
-        console.log('✅ Consumer track unmuted:', producerId);
-      };
-      
-      // Monitor readyState changes
-      const checkReadyState = () => {
-        if (consumer.track.readyState === 'ended') {
-          console.error('❌ Track readyState changed to ended:', producerId);
-        } else if (consumer.track.readyState === 'live') {
-          console.log('✅ Track readyState is live:', producerId);
+        // Check if already consuming this producer
+        if (this.consumers.has(producerId)) {
+          const existingConsumer = this.consumers.get(producerId);
+          console.log('Already consuming producer:', producerId, 'track state:', existingConsumer?.track?.readyState);
+          return existingConsumer?.track || null;
         }
-      };
-      
-      // Monitor readyState (note: readyState is not directly observable, so we check periodically)
-      setTimeout(checkReadyState, 1000);
-      setTimeout(checkReadyState, 3000);
 
-      // Listen to consumer events
-      consumer.on('transportclose', () => {
-        console.error('❌ Consumer transport closed:', producerId);
-      });
+        if (!this.recvTransport) {
+          console.log('Creating recv transport for consumer...');
+          await this.createRecvTransport();
+        }
 
-      return consumer.track;
-    } catch (error) {
-      console.error('Error consuming producer:', producerId, error);
-      throw error;
-    }
+        // PERFORMANT: Check transport state but don't block on connection
+        // mediasoup-client handles connection automatically when consuming
+        // Only fail if transport is in a bad state (failed/closed)
+        const transportState = this.recvTransport.connectionState;
+        if (transportState === 'failed' || transportState === 'closed') {
+          throw new Error(`Cannot consume: transport is ${transportState}`);
+        }
+        
+        // Log state for debugging but proceed - transport will connect if needed
+        if (transportState !== 'connected') {
+          console.log(`Recv transport state: ${transportState} - will connect automatically during consume`);
+        }
+
+        console.log('Consuming producer:', producerId, 'transport:', this.recvTransport?.id);
+        
+        const params = await socketManager.consume(
+          this.recvTransport!.id,
+          producerId,
+          this.device!.rtpCapabilities
+        );
+
+        console.log('Consume params received:', { 
+          id: params.id, 
+          producerId: params.producerId, 
+          kind: params.kind 
+        });
+
+        // PERFORMANT: Minimal delay only when we have existing consumers
+        // First consumer doesn't need delay (no SDP conflict possible)
+        // Subsequent consumers need tiny delay to ensure SDP negotiation completes
+        if (this.consumers.size > 0) {
+          // Ultra-minimal delay: 30ms is usually enough for SDP to settle
+          // This is barely perceptible but prevents duplicate a=mid errors
+          await new Promise(resolve => setTimeout(resolve, 30));
+        }
+
+        // Retry logic only for duplicate a=mid errors (most common failure case)
+        let retries = 1; // Only 1 retry to keep it fast
+        let lastError: Error | null = null;
+        
+        while (retries >= 0) {
+          try {
+            const consumer = await this.recvTransport!.consume({
+              id: params.id,
+              producerId: params.producerId,
+              kind: params.kind,
+              rtpParameters: params.rtpParameters,
+            });
+
+            this.consumers.set(producerId, consumer);
+            
+            const trackInfo = {
+              id: consumer.track.id,
+              kind: consumer.track.kind,
+              enabled: consumer.track.enabled,
+              readyState: consumer.track.readyState,
+              muted: consumer.track.muted,
+            };
+            
+            console.log('Consumer created:', consumer.id, 'track:', trackInfo);
+            
+            // Verify track is actually live
+            if (consumer.track.readyState !== 'live') {
+              console.error('❌ WARNING: Track is not live! State:', consumer.track.readyState);
+            } else {
+              console.log('✅ Track is LIVE');
+            }
+            
+            if (consumer.track.muted) {
+              console.warn('⚠️ Track is muted:', producerId);
+            }
+
+            // Enable track explicitly (sometimes needed)
+            if (!consumer.track.enabled) {
+              consumer.track.enabled = true;
+              console.log('✅ Enabled track explicitly');
+            }
+
+            // Listen to track events
+            consumer.track.onended = () => {
+              console.error('❌ Consumer track ended:', producerId);
+            };
+
+            consumer.track.onmute = () => {
+              console.warn('⚠️ Consumer track muted:', producerId);
+            };
+
+            consumer.track.onunmute = () => {
+              console.log('✅ Consumer track unmuted:', producerId);
+            };
+            
+            // Monitor readyState changes
+            const checkReadyState = () => {
+              if (consumer.track.readyState === 'ended') {
+                console.error('❌ Track readyState changed to ended:', producerId);
+              } else if (consumer.track.readyState === 'live') {
+                console.log('✅ Track readyState is live:', producerId);
+              }
+            };
+            
+            // Monitor readyState (note: readyState is not directly observable, so we check periodically)
+            setTimeout(checkReadyState, 1000);
+            setTimeout(checkReadyState, 3000);
+
+            // Listen to consumer events
+            consumer.on('transportclose', () => {
+              console.error('❌ Consumer transport closed:', producerId);
+            });
+
+            return consumer.track;
+          } catch (error: any) {
+            lastError = error;
+            
+            // Only retry on duplicate a=mid errors (the specific issue we're fixing)
+            const isDuplicateMidError = error?.message?.includes('Duplicate a=mid') || 
+                                        error?.message?.includes('duplicate a=mid') ||
+                                        (error?.name === 'InvalidAccessError' && 
+                                         error?.message?.includes('setRemoteDescription'));
+            
+            if (isDuplicateMidError && retries > 0) {
+              console.warn(`⚠️ Duplicate a=mid error consuming ${producerId}, retrying... (${retries} retry left)`);
+              // Slightly longer delay on retry to ensure SDP state stabilizes
+              await new Promise(resolve => setTimeout(resolve, 50));
+              retries--;
+              continue;
+            }
+            
+            // If not retryable or out of retries, throw immediately
+            throw error;
+          }
+        }
+        
+        // Should never reach here, but TypeScript needs it
+        throw lastError || new Error('Failed to consume producer after retries');
+      } catch (error) {
+        console.error('Error consuming producer:', producerId, error);
+        throw error;
+      }
     });
   }
+
 
   closeProducers() {
     this.producers.forEach(producer => producer.close());

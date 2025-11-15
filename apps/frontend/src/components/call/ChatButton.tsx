@@ -7,7 +7,11 @@ export default function ChatButton({ unreadCount, onClick }: ChatButtonProps) {
   return (
     <button
       onClick={onClick}
-      className="relative flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+      className={`relative flex h-12 w-12 items-center justify-center rounded-full transition-all duration-300 ${
+        unreadCount > 0
+          ? 'bg-blue-600 text-white shadow-sm hover:bg-blue-700'
+          : 'bg-gray-800/60 text-gray-400 hover:bg-blue-600 hover:text-white hover:shadow-sm'
+      }`}
       title="Open chat"
     >
       <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

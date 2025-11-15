@@ -2812,19 +2812,21 @@ export default function Call() {
       : showSplitLayout
       ? 'auto-rows-[minmax(180px,1fr)]'
       : '';
-  const bottomControlsOffset = showSplitLayout ? 120 : 140;
+  const bottomControlsOffset = 80; // Height of bottom controls bar (48px button + 12px top padding + 12px bottom padding + 8px buffer)
+  const screenShareBannerHeight = 50; // Height of screen share banner (py-3 = 12px top + 12px bottom + ~20px content + 1px border + buffer)
+  const topOffset = isScreenSharing ? screenShareBannerHeight : 0;
   const splitLayoutContainerStyle = useMemo(() => {
     if (!showSplitLayout) {
       return undefined;
     }
     return {
-      maxHeight: `calc(100vh - (${bottomControlsOffset}px + env(safe-area-inset-bottom)) + 8px)`,
-      paddingBottom: '4px',
-      marginBottom: '-4px',
+      maxHeight: `calc(100vh - ${topOffset}px - ${bottomControlsOffset}px - env(safe-area-inset-bottom))`,
+      paddingBottom: 0,
+      marginBottom: 0,
     };
-  }, [showSplitLayout, bottomControlsOffset]);
+  }, [showSplitLayout, bottomControlsOffset, topOffset]);
   const sharePaneBaseClasses =
-    'flex-1 min-h-0 min-w-0 overflow-hidden rounded-[32px] border border-slate-200 bg-white/90 shadow-[0_30px_60px_-35px_rgba(14,165,233,0.35)] backdrop-blur';
+    'flex-1 min-h-0 min-w-0 overflow-hidden rounded-[32px] border border-gray-700/50 bg-gray-900/40 shadow-[0_30px_60px_-35px_rgba(0,0,0,0.5)] backdrop-blur';
   const sharePaneClassName = showSplitLayout
     ? `${sharePaneBaseClasses} ${isSidebarCollapsed ? 'lg:basis-full xl:basis-full' : 'lg:basis-[78%] xl:basis-[82%]'}`
     : sharePaneBaseClasses;
@@ -2847,7 +2849,7 @@ export default function Call() {
   const shouldShowActiveSpeakerOverlay = Boolean(
     showSplitLayout && activeSpeakerTile && activeSpeakerTile.userId !== pinnedScreenShareUserId
   );
-  const mainLayoutSpacingClass = isSidebarCollapsed ? 'gap-2 pt-0' : 'gap-4 pt-0';
+  const mainLayoutSpacingClass = isSidebarCollapsed ? 'gap-2 pt-0 pb-0 m-0' : 'gap-4 pt-0 pb-0 m-0';
 
   useEffect(() => {
     if (!showSplitLayout && isSidebarCollapsed) {
@@ -2965,7 +2967,7 @@ export default function Call() {
   }
 
   return (
-    <div className="relative flex h-screen flex-col overflow-hidden bg-[#f7f9fc] text-slate-900">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-black text-white">
       <PermissionBanner
         hasPermissionIssue={hasPermissionIssue}
         permissionBannerDismissed={permissionBannerDismissed}
@@ -2992,22 +2994,22 @@ export default function Call() {
             <div className="flex items-center gap-4">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.45em] text-slate-400">CYNAYD CONNECT</p>
-                <p className="text-sm font-semibold text-slate-700">Room {roomCode}</p>
+                <p className="text-sm font-semibold text-gray-200">Room {roomCode}</p>
               </div>
-              <span className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm sm:inline-flex">
+              <span className="hidden items-center gap-2 rounded-full border border-gray-700 bg-gray-800/80 px-3 py-1 text-xs font-medium text-gray-300 shadow-sm sm:inline-flex">
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7a3 3 0 11-6 0 3 3 0 016 0zM4 15.5a4 4 0 014-4h4a4 4 0 014 4v.5H4v-.5z" />
                 </svg>
                 {totalParticipants} participant{totalParticipants === 1 ? '' : 's'}
               </span>
             </div>
-            <div className="flex items-center gap-3 text-xs text-slate-500">
-              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 font-medium text-slate-500">
+            <div className="flex items-center gap-3 text-xs text-gray-400">
+              <span className="rounded-full border border-gray-700 bg-gray-800/80 px-3 py-1 font-medium text-gray-300">
                 Live
               </span>
               <button
                 onClick={() => setShowParticipantList(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 font-semibold text-slate-600 shadow-sm transition hover:border-cyan-200 hover:text-cyan-600"
+                className="inline-flex items-center gap-2 rounded-full border border-gray-700 bg-gray-800/80 px-3 py-1 font-semibold text-gray-300 shadow-sm transition hover:border-cyan-500 hover:text-cyan-400"
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7a3 3 0 11-6 0 3 3 0 016 0zM4 15.5a4 4 0 014-4h4a4 4 0 014 4v.5H4v-.5zM17 6v4m2-2h-4" />
@@ -3025,14 +3027,18 @@ export default function Call() {
 
         <main
           className={`relative flex min-h-0 flex-1 flex-col ${mainLayoutSpacingClass}`}
-          style={{ paddingBottom: `calc(${bottomControlsOffset}px + env(safe-area-inset-bottom))` }}
+          style={{ 
+            paddingTop: topOffset > 0 ? `${topOffset}px` : 0,
+            paddingBottom: `calc(${bottomControlsOffset}px + env(safe-area-inset-bottom))`, 
+            marginBottom: 0 
+          }}
         >
           {showSplitLayout ? (
             <div
               className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch lg:gap-6"
               style={splitLayoutContainerStyle}
             >
-              <div className={`${sharePaneClassName} relative`} style={{ maxHeight: 'calc(100vh - 140px)' }}>
+              <div className={`${sharePaneClassName} relative`} style={{ maxHeight: `calc(100vh - ${topOffset}px - ${bottomControlsOffset}px - env(safe-area-inset-bottom))` }}>
                 <ScreenShareSection
                   screenShares={screenShares}
                   pinnedUserId={pinnedScreenShareUserId}
@@ -3069,9 +3075,9 @@ export default function Call() {
               )}
             </div>
           ) : (
-            <>
+            <div className="flex flex-1 flex-col" style={{ marginBottom: 0, paddingBottom: 0, gap: 0 }}>
               {hasScreenShareStage && (
-                <div className="flex-none overflow-hidden rounded-[32px] border border-slate-200 bg-white/90 shadow-[0_30px_60px_-35px_rgba(14,165,233,0.35)]">
+                <div className="flex-none overflow-hidden rounded-[32px] border border-gray-700/50 bg-gray-900/40 shadow-[0_30px_60px_-35px_rgba(0,0,0,0.5)]" style={{ marginBottom: 0 }}>
                   <ScreenShareSection
                     screenShares={screenShares}
                     pinnedUserId={pinnedScreenShareUserId}
@@ -3082,16 +3088,15 @@ export default function Call() {
                 </div>
               )}
 
-              <div className="relative flex flex-1 overflow-hidden">
-                <div className="relative flex h-full w-full flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white/80 backdrop-blur">
+              <div className="relative flex flex-1 overflow-hidden" style={{ marginBottom: 0, paddingBottom: 0 }}>
+                <div className="relative flex h-full w-full flex-col overflow-hidden rounded-[32px] bg-gray-900/40 backdrop-blur" style={{ height: `calc(100vh - ${topOffset}px - ${bottomControlsOffset}px - env(safe-area-inset-bottom))`, marginBottom: 0, paddingBottom: 0 }}>
                   <div
                     className={`relative h-full w-full ${
                       showSplitLayout ? 'overflow-y-auto pr-3 sm:pr-4' : 'overflow-hidden'
                     }`}
-                    style={{ maxHeight: 'calc(100vh - 140px)' }}
                   >
                     {participantTilesForDisplay.length === 0 ? (
-                      <div className="flex h-full items-center justify-center text-sm font-medium text-slate-400">
+                      <div className="flex h-full items-center justify-center text-sm font-medium text-gray-400">
                         Waiting for participants…
                       </div>
                     ) : (
@@ -3117,7 +3122,7 @@ export default function Call() {
                   </div>
                 </div>
               </div>
-            </>
+            </div>
           )}
         </main>
 

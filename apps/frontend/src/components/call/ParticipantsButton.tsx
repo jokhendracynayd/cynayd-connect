@@ -6,7 +6,7 @@ export default function ParticipantsButton({ onClick }: ParticipantsButtonProps)
   return (
     <button
       onClick={onClick}
-      className="flex h-12 w-12 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+      className="flex h-12 w-12 items-center justify-center rounded-full bg-gray-800/60 text-gray-400 transition-all duration-300 hover:bg-blue-600 hover:text-white hover:shadow-sm"
       title="Show participants"
     >
       <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -53,7 +53,7 @@ export async function healthRoutes(fastify: FastifyInstance) {
       status: 'healthy',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
-      version: '1.0.0',
+      version: '1.0.1',
       server: {
         instanceId: config.server.instanceId,
         port: config.port,

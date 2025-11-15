@@ -113,12 +113,12 @@ export default function BottomControlsBar({
   onLeave,
 }: BottomControlsBarProps) {
   return (
-    <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 px-3 sm:px-4 lg:px-6">
-      <div className="mx-auto flex max-w-7xl flex-col gap-2 lg:flex-row lg:items-end lg:justify-between lg:gap-4">
-        {/* Main Controls Bar - Centered */}
+    <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 px-3 sm:px-4 lg:px-6" style={{ minHeight: 'calc(68px + env(safe-area-inset-bottom))' }}>
+      <div className="mx-auto flex max-w-7xl flex-col gap-2 lg:flex-row lg:items-end lg:justify-between lg:gap-4" style={{ minHeight: 'calc(68px + env(safe-area-inset-bottom))' }}>
+        {/* Main Controls Bar - Centered - Premium Design */}
         <div
-          className="pointer-events-auto mx-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-white/60 bg-white/90 px-3 py-2.5 shadow-[0_22px_45px_-28px_rgba(14,165,233,0.45)] backdrop-blur sm:gap-3 sm:px-5 sm:py-3 lg:px-6 lg:py-4"
-          style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}
+          className="pointer-events-auto mx-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-gray-800/60 bg-gray-950/85 px-2.5 py-2 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.85)] backdrop-blur-md sm:gap-2.5 sm:px-3 sm:py-2.5 lg:px-4 lg:py-3"
+          style={{ minHeight: 'calc(48px + 12px + env(safe-area-inset-bottom))', paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}
         >
           <AudioControlGroup
             isMuted={isAudioMuted}
@@ -170,49 +170,52 @@ export default function BottomControlsBar({
           {/* Admin Quick Actions - Integrated in main bar on mobile, separate on desktop */}
           {isAdmin && (
             <>
-              {/* Mobile: Show in main bar */}
-              <div className="flex items-center gap-2 lg:hidden">
-                <button
-                  onClick={hostControls.audioForceAll ? onUnmuteAllAudio : onMuteAllAudio}
-                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-semibold transition ${
-                    hostControls.audioForceAll
-                      ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
-                      : 'bg-white text-slate-600 hover:bg-slate-100'
-                  }`}
-                  aria-pressed={hostControls.audioForceAll}
-                  title={hostControls.audioForceAll ? 'Unmute all' : 'Mute all'}
-                >
-                  <MicMutedIcon className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  onClick={hostControls.videoForceAll ? onUnmuteAllVideo : onMuteAllVideo}
-                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-semibold transition ${
-                    hostControls.videoForceAll
-                      ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
-                      : 'bg-white text-slate-600 hover:bg-slate-100'
-                  }`}
-                  aria-pressed={hostControls.videoForceAll}
-                  title={hostControls.videoForceAll ? 'Enable all cams' : 'Disable all cams'}
-                >
-                  <VideoMutedIcon className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  onClick={onToggleLock}
-                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1.5 text-xs font-semibold transition ${
-                    hostControls.locked ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600' : 'bg-white/90 text-slate-600 hover:bg-slate-100'
-                  }`}
-                  aria-pressed={hostControls.locked}
-                  title={hostControls.locked ? 'Unlock' : 'Lock'}
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M7 9V7a3 3 0 016 0v2m-6 0h6a2 2 0 012 2v5a2 2 0 01-2 2H7a2 2 0 01-2-2v-5a2 2 0 012-2z"
-                    />
-                  </svg>
-                </button>
+              {/* Mobile: Show in main bar - Premium Design */}
+              <div className="flex items-center gap-1.5 lg:hidden">
+                <div className="flex items-center gap-1 rounded-full border border-gray-800/40 bg-gray-950/60 p-1 backdrop-blur-sm">
+                  <button
+                    onClick={hostControls.audioForceAll ? onUnmuteAllAudio : onMuteAllAudio}
+                     className={`flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200 ${
+                       hostControls.audioForceAll
+                         ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+                         : 'bg-gray-800/50 text-gray-400 hover:bg-gray-700/60'
+                     }`}
+                    aria-pressed={hostControls.audioForceAll}
+                    title={hostControls.audioForceAll ? 'Unmute all' : 'Mute all'}
+                  >
+                    <MicMutedIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={hostControls.videoForceAll ? onUnmuteAllVideo : onMuteAllVideo}
+                     className={`flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200 ${
+                       hostControls.videoForceAll
+                         ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+                         : 'bg-gray-800/50 text-gray-400 hover:bg-gray-700/60'
+                     }`}
+                    aria-pressed={hostControls.videoForceAll}
+                    title={hostControls.videoForceAll ? 'Enable all cams' : 'Disable all cams'}
+                  >
+                    <VideoMutedIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={onToggleLock}
+                     className={`flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200 ${
+                       hostControls.locked
+                         ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+                         : 'bg-gray-800/50 text-gray-400 hover:bg-gray-700/60'
+                     }`}
+                    aria-pressed={hostControls.locked}
+                    title={hostControls.locked ? 'Unlock' : 'Lock'}
+                  >
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor" strokeWidth={1.5}>
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M7 9V7a3 3 0 016 0v2m-6 0h6a2 2 0 012 2v5a2 2 0 01-2 2H7a2 2 0 01-2-2v-5a2 2 0 012-2z"
+                      />
+                    </svg>
+                  </button>
+                </div>
               </div>
               <AdminBottomButtons
                 onShowRoomSettings={onShowRoomSettings}
@@ -228,83 +231,79 @@ export default function BottomControlsBar({
           />
         </div>
 
-        {/* Admin Controls - Right Side (Desktop Only) */}
+        {/* Admin Controls - Right Side (Desktop Only) - Premium Design */}
         {isAdmin && (
           <div
-            className="pointer-events-auto hidden flex-wrap items-center justify-center gap-2 rounded-full border border-white/60 bg-white/90 px-4 py-3 shadow-[0_22px_45px_-28px_rgba(14,165,233,0.45)] backdrop-blur lg:flex lg:px-5 lg:py-3.5"
+            className="pointer-events-auto hidden items-center justify-center gap-1.5 rounded-full border border-gray-800/60 bg-gray-950/80 px-2 py-2 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.8)] backdrop-blur-md lg:flex"
             style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom))' }}
           >
-            <button
-              onClick={hostControls.audioForceAll ? onUnmuteAllAudio : onMuteAllAudio}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition sm:px-3.5 sm:py-2 sm:text-sm ${
-                hostControls.audioForceAll
-                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
-                  : 'bg-white text-slate-600 hover:bg-slate-100'
-              }`}
-              aria-pressed={hostControls.audioForceAll}
-              title={hostControls.audioForceAll ? 'Unmute all microphones' : 'Mute all microphones'}
-            >
-              <MicMutedIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Mic All</span>
-              <span className="sm:hidden">Mic</span>
-            </button>
+            <div className="flex items-center gap-1 rounded-l-full border-r border-gray-800/40 pr-1.5">
+              <button
+                onClick={hostControls.audioForceAll ? onUnmuteAllAudio : onMuteAllAudio}
+                 className={`group relative flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200 ${
+                   hostControls.audioForceAll
+                     ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+                     : 'bg-gray-800/50 text-gray-400 hover:bg-gray-700/60 hover:text-gray-300'
+                 }`}
+                aria-pressed={hostControls.audioForceAll}
+                title={hostControls.audioForceAll ? 'Unmute all microphones' : 'Mute all microphones'}
+              >
+                <MicMutedIcon className="h-4.5 w-4.5" />
+              </button>
 
-            <button
-              onClick={hostControls.videoForceAll ? onUnmuteAllVideo : onMuteAllVideo}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition sm:px-3.5 sm:py-2 sm:text-sm ${
-                hostControls.videoForceAll
-                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
-                  : 'bg-white text-slate-600 hover:bg-slate-100'
-              }`}
-              aria-pressed={hostControls.videoForceAll}
-              title={hostControls.videoForceAll ? 'Enable all cameras' : 'Disable all cameras'}
-            >
-              <VideoMutedIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Cam All</span>
-              <span className="sm:hidden">Cam</span>
-            </button>
+              <button
+                onClick={hostControls.videoForceAll ? onUnmuteAllVideo : onMuteAllVideo}
+                 className={`group relative flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200 ${
+                   hostControls.videoForceAll
+                     ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+                     : 'bg-gray-800/50 text-gray-400 hover:bg-gray-700/60 hover:text-gray-300'
+                 }`}
+                aria-pressed={hostControls.videoForceAll}
+                title={hostControls.videoForceAll ? 'Enable all cameras' : 'Disable all cameras'}
+              >
+                <VideoMutedIcon className="h-4.5 w-4.5" />
+              </button>
+            </div>
 
-            <button
-              onClick={onToggleChat}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition sm:px-3.5 sm:py-2 sm:text-sm ${
-                hostControls.chatForceAll
-                  ? 'bg-rose-200 text-rose-700 shadow-sm hover:bg-rose-300'
-                  : 'bg-white text-slate-600 hover:bg-slate-100'
-              }`}
-              aria-pressed={hostControls.chatForceAll}
-              title={hostControls.chatForceAll ? 'Enable chat' : 'Disable chat'}
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M7 8h10M7 12h6m7 0a9 9 0 11-4.219-7.516L21 4v8z"
-                />
-              </svg>
-              <span className="hidden sm:inline">Chat</span>
-              <span className="sm:hidden">Chat</span>
-            </button>
+            <div className="flex items-center gap-1 rounded-r-full pl-1.5">
+              <button
+                onClick={onToggleChat}
+                 className={`group relative flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200 ${
+                   hostControls.chatForceAll
+                     ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+                     : 'bg-gray-800/50 text-gray-400 hover:bg-gray-700/60 hover:text-gray-300'
+                 }`}
+                aria-pressed={hostControls.chatForceAll}
+                title={hostControls.chatForceAll ? 'Enable chat' : 'Disable chat'}
+              >
+                <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M7 8h10M7 12h6m7 0a9 9 0 11-4.219-7.516L21 4v8z"
+                  />
+                </svg>
+              </button>
 
-            <button
-              onClick={onToggleLock}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition sm:px-3.5 sm:py-2 sm:text-sm ${
-                hostControls.locked ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600' : 'bg-white/90 text-slate-600 hover:bg-slate-100'
-              }`}
-              aria-pressed={hostControls.locked}
-              title={hostControls.locked ? 'Unlock room' : 'Lock room'}
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 20 20" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M7 9V7a3 3 0 016 0v2m-6 0h6a2 2 0 012 2v5a2 2 0 01-2 2H7a2 2 0 01-2-2v-5a2 2 0 012-2z"
-                />
-              </svg>
-              <span className="hidden sm:inline">Lock</span>
-              <span className="sm:hidden">L</span>
-            </button>
+              <button
+                onClick={onToggleLock}
+                 className={`group relative flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200 ${
+                   hostControls.locked
+                     ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+                     : 'bg-gray-800/50 text-gray-400 hover:bg-gray-700/60 hover:text-gray-300'
+                 }`}
+                aria-pressed={hostControls.locked}
+                title={hostControls.locked ? 'Unlock room' : 'Lock room'}
+              >
+                <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 20 20" stroke="currentColor" strokeWidth={1.5}>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M7 9V7a3 3 0 016 0v2m-6 0h6a2 2 0 012 2v5a2 2 0 01-2 2H7a2 2 0 01-2-2v-5a2 2 0 012-2z"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
         )}
       </div>

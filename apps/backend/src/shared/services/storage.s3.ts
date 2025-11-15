@@ -4,6 +4,7 @@ import {
   HeadObjectCommand,
   GetObjectCommand,
   type PutObjectCommandInput,
+  type ServerSideEncryption,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -94,7 +95,7 @@ export class RecordingStorageService {
     };
 
     if (config.recording.s3.serverSideEncryption) {
-      uploadInput.ServerSideEncryption = config.recording.s3.serverSideEncryption;
+      uploadInput.ServerSideEncryption = config.recording.s3.serverSideEncryption as ServerSideEncryption;
     }
 
     const tagging = buildTaggingString(params.tags);

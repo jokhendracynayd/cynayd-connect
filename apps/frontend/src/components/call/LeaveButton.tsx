@@ -8,7 +8,7 @@ export default function LeaveButton({ isLeaving, onLeave }: LeaveButtonProps) {
     <button
       onClick={onLeave}
       disabled={isLeaving}
-      className="flex items-center gap-2 rounded-full bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_18px_40px_-24px_rgba(244,63,94,0.65)] transition hover:from-rose-600 hover:via-rose-700 hover:to-rose-800 disabled:cursor-not-allowed disabled:opacity-60"
+      className="flex items-center gap-2 rounded-full bg-rose-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all duration-300 hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
       title={isLeaving ? 'Leaving room...' : 'Leave room'}
     >
       {isLeaving ? (

@@ -63,10 +63,10 @@ export default function CallParticipantTile({
       : '';
 
   const tileClasses = [
-    'relative overflow-hidden rounded-3xl border border-slate-200 bg-white/90 shadow-[0_24px_60px_-35px_rgba(14,165,233,0.35)] transition-all',
+    'relative overflow-hidden rounded-3xl border border-gray-700/50 bg-gray-900/80 backdrop-blur-sm shadow-[0_24px_60px_-35px_rgba(0,0,0,0.5)] transition-all',
     'w-full',
-    tile.isSpeaking ? 'ring-2 ring-cyan-400 shadow-[0_0_0_4px_rgba(14,165,233,0.15)]' : '',
-    tile.isLocal ? 'ring-1 ring-cyan-200/60' : '',
+    tile.isSpeaking ? 'ring-2 ring-cyan-400 shadow-[0_0_0_4px_rgba(56,189,248,0.2)]' : '',
+    tile.isLocal ? 'ring-1 ring-cyan-500/40' : '',
     showSplitLayout ? 'aspect-[4/3]' : isSoloLayout ? 'h-full' : '',
     layoutTileBaseClass,
     layoutTileIndexClass,
@@ -121,29 +121,29 @@ export default function CallParticipantTile({
       )}
 
       {tile.isAudioMuted && (
-        <div className="absolute left-4 top-4 rounded-full bg-rose-200/90 p-2 text-rose-700 shadow-sm backdrop-blur">
+        <div className="absolute left-4 top-4 rounded-full bg-rose-500/90 p-2 text-white shadow-lg backdrop-blur">
           <MicMutedIcon className="h-4 w-4" />
         </div>
       )}
 
       {tile.hasRaisedHand && (
-        <div className="absolute right-4 top-4 rounded-full bg-amber-300 p-2 text-amber-900 shadow">
+        <div className="absolute right-4 top-4 rounded-full bg-amber-500/90 p-2 text-white shadow-lg backdrop-blur animate-pulse">
           <HandRaisedIcon className="h-4 w-4" />
         </div>
       )}
 
-      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur">
+      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-2 rounded-full bg-black/80 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur-md border border-white/10">
         <span className="tracking-normal capitalize">
           {tile.name}
           {tile.isLocal ? ' (You)' : ''}
         </span>
         {tile.isHost && (
-          <span className="rounded-full bg-cyan-200/80 px-2 py-0.5 text-[10px] font-semibold uppercase text-cyan-900">
+          <span className="rounded-full bg-cyan-500/90 px-2 py-0.5 text-[10px] font-semibold uppercase text-white">
             Host
           </span>
         )}
         {!tile.isHost && tile.role === 'COHOST' && (
-          <span className="rounded-full bg-indigo-200/80 px-2 py-0.5 text-[10px] font-semibold uppercase text-indigo-900">
+          <span className="rounded-full bg-indigo-500/90 px-2 py-0.5 text-[10px] font-semibold uppercase text-white">
             Co-host
           </span>
         )}

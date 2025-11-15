@@ -7,10 +7,10 @@ export default function ScreenShareButton({ isScreenSharing, onToggle }: ScreenS
   return (
     <button
       onClick={onToggle}
-      className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition ${
+      className={`flex h-12 w-12 items-center justify-center rounded-full text-white transition-all duration-300 ${
         isScreenSharing
-          ? 'bg-gradient-to-r from-rose-500 via-rose-600 to-rose-700 shadow-[0_15px_35px_-20px_rgba(244,63,94,0.65)] hover:from-rose-600 hover:via-rose-700 hover:to-rose-800'
-          : 'bg-slate-800 hover:bg-slate-900'
+          ? 'bg-blue-600 text-white shadow-sm hover:bg-blue-700'
+          : 'bg-gray-800/60 text-gray-400 hover:bg-gray-700/70 hover:text-gray-300'
       }`}
       title={isScreenSharing ? 'Stop sharing screen' : 'Share your screen'}
     >

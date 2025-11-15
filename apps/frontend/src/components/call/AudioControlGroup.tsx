@@ -41,7 +41,7 @@ export default function AudioControlGroup({
     <div className="relative flex items-center gap-1">
       <button
         onClick={onToggleDropdown}
-        className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:border-cyan-200 hover:text-cyan-600"
+        className="flex h-8 w-8 items-center justify-center rounded-full border border-gray-800/50 bg-gray-900/60 text-gray-400 transition-all duration-200 hover:border-cyan-500/60 hover:bg-gray-800/80 hover:text-cyan-400"
         title="Select microphone"
         aria-expanded={showDropdown}
       >
@@ -68,12 +68,12 @@ export default function AudioControlGroup({
         <button
           onClick={onToggle}
           disabled={isForceActive}
-          className={`flex h-12 w-12 items-center justify-center rounded-full transition ${
+          className={`flex h-12 w-12 items-center justify-center rounded-full transition-all duration-300 ${
             isForceActive
-              ? 'bg-rose-600/80 cursor-not-allowed text-white opacity-70'
+              ? 'bg-rose-600/70 cursor-not-allowed text-white opacity-60'
               : isMuted
-              ? 'bg-rose-200 text-rose-700 shadow-[0_18px_38px_-28px_rgba(244,63,94,0.45)] hover:bg-rose-300'
-              : 'bg-slate-800 text-white hover:bg-slate-900'
+              ? 'bg-rose-500 text-white shadow-sm hover:bg-rose-600'
+              : 'bg-blue-600 text-white shadow-sm hover:bg-blue-700'
           }`}
           title={
             isForceActive
