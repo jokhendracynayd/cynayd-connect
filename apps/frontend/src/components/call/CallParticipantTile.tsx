@@ -61,10 +61,14 @@ export default function CallParticipantTile({
     !showSplitLayout && nonSplitLayoutConfig?.tileClassForIndex
       ? nonSplitLayoutConfig.tileClassForIndex(index)
       : '';
+  
+  // Check if this tile needs special width handling (e.g., centered third tile in 3-participant layout)
+  const needsSpecialWidth = layoutTileIndexClass.includes('w-[') || layoutTileIndexClass.includes('!w-[');
 
   const tileClasses = [
     'relative overflow-hidden rounded-3xl border border-gray-700/50 bg-gray-900/80 backdrop-blur-sm shadow-[0_24px_60px_-35px_rgba(0,0,0,0.5)] transition-all',
-    'w-full',
+    // Only apply w-full and min-w-full if not using special width
+    needsSpecialWidth ? 'h-full min-h-full' : 'w-full h-full min-h-full min-w-full',
     tile.isSpeaking ? 'ring-2 ring-cyan-400 shadow-[0_0_0_4px_rgba(56,189,248,0.2)]' : '',
     tile.isLocal ? 'ring-1 ring-cyan-500/40' : '',
     showSplitLayout ? 'aspect-[4/3]' : isSoloLayout ? 'h-full' : '',
@@ -97,7 +101,7 @@ export default function CallParticipantTile({
       />
 
       {!shouldShowVideo && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white/70">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white/70 min-h-full min-w-full h-full w-full">
           {tile.picture ? (
             <img
               src={tile.picture}
@@ -121,7 +125,7 @@ export default function CallParticipantTile({
       )}
 
       {tile.isAudioMuted && (
-        <div className="absolute left-4 top-4 rounded-full bg-rose-500/90 p-2 text-white shadow-lg backdrop-blur">
+        <div className="absolute left-4 top-4 rounded-full bg-rose-700/50 p-2 text-white/80 shadow-md backdrop-blur-sm">
           <MicMutedIcon className="h-4 w-4" />
         </div>
       )}
@@ -132,7 +136,7 @@ export default function CallParticipantTile({
         </div>
       )}
 
-      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-2 rounded-full bg-black/80 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur-md border border-white/10">
+      <div className="absolute bottom-2 left-3 flex flex-wrap items-center gap-2 rounded-full bg-black/80 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur-md border border-white/10">
         <span className="tracking-normal capitalize">
           {tile.name}
           {tile.isLocal ? ' (You)' : ''}

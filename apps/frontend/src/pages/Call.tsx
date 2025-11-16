@@ -169,6 +169,7 @@ export default function Call() {
   }>({ audioInput: [], videoInput: [] });
   const previousRecordingStatusRef = useRef<RecordingStatus | null>(recording.status ?? null);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+  const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
 
   useEffect(() => {
     const loadDevices = async () => {
@@ -2764,7 +2765,7 @@ export default function Call() {
   let allParticipantTiles: ParticipantTile[] = [localTile, ...remoteParticipantTiles];
 // this is for the demo mode
   if (import.meta.env.MODE !== 'production') {
-    const targetDemoCount =0
+    const targetDemoCount = 0
     if (allParticipantTiles.length < targetDemoCount) {
       const demoNeeded = targetDemoCount - allParticipantTiles.length;
       const existingCount = allParticipantTiles.length;
@@ -2794,10 +2795,51 @@ export default function Call() {
   const hasScreenShareStage = screenShares.size > 0;
   const hasPinnedScreenShare = hasScreenShareStage && Boolean(pinnedScreenShareUserId);
   const showSplitLayout = hasPinnedScreenShare;
-  const maxVisibleTiles = showSplitLayout ? 9 : 4;
-  const defaultVisibleTiles = allParticipantTiles.slice(0, maxVisibleTiles);
-  const participantTilesForDisplay = showSplitLayout ? allParticipantTiles : defaultVisibleTiles;
-  const overflowCount = showSplitLayout ? 0 : Math.max(allParticipantTiles.length - defaultVisibleTiles.length, 0);
+  
+  // Track window size for responsive tile limit calculation
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Calculate maximum tiles based on minimum tile dimensions (320x240) and available space
+  const maxVisibleTiles = useMemo(() => {
+    // Minimum tile dimensions for proper video visibility
+    const MIN_TILE_WIDTH = 320;
+    const MIN_TILE_HEIGHT = 240;
+    const GAP = 4; // gap-1 = 4px
+    
+    // Estimate available space (accounting for controls, padding, and safe margins)
+    const availableHeight = windowSize.height - 80 - (isScreenSharing ? 50 : 0) - 20; // minus controls, banner, and safety margin
+    const availableWidth = windowSize.width - 40; // minus safety margins
+    
+    // Calculate max columns and rows that fit with minimum dimensions
+    const maxCols = Math.floor((availableWidth + GAP) / (MIN_TILE_WIDTH + GAP));
+    const maxRows = Math.floor((availableHeight + GAP) / (MIN_TILE_HEIGHT + GAP));
+    
+    // Cap at 4 columns max (for 4x4 grid)
+    const cols = Math.min(4, Math.max(1, maxCols));
+    const rows = Math.max(1, maxRows);
+    
+    // Return the maximum tiles that fit, ensuring we don't exceed what can actually fit
+    const calculatedMax = cols * rows;
+    
+    // For your 1521x842 screen: 
+    // Width: (1521-40+4)/(320+4) = 1485/324 = 4.58 -> 4 cols
+    // Height: (842-80-20+4)/(240+4) = 746/244 = 3.05 -> 3 rows
+    // Max = 4 * 3 = 12 tiles
+    
+    return Math.min(16, calculatedMax);
+  }, [windowSize, isScreenSharing]);
+  
+  // Limit tiles to grid capacity - stop adding after container is filled
+  const participantTilesForDisplay = allParticipantTiles.slice(0, maxVisibleTiles);
+  const overflowCount = Math.max(0, totalParticipants - maxVisibleTiles);
+  
   const isSoloLayout = !showSplitLayout && participantTilesForDisplay.length === 1;
   const nonSplitLayoutConfig = useMemo(() => {
     if (showSplitLayout) {
@@ -2807,10 +2849,12 @@ export default function Call() {
   }, [showSplitLayout, participantTilesForDisplay.length]);
   const splitGridClasses = showSplitLayout ? getGridTemplateClasses(participantTilesForDisplay.length) : '';
   const splitGridAutoRowsClass =
-    showSplitLayout && participantTilesForDisplay.length >= 7
-      ? 'auto-rows-[minmax(200px,1fr)]'
+    showSplitLayout && participantTilesForDisplay.length >= 10
+      ? 'auto-rows-[minmax(240px,1fr)]'
+      : showSplitLayout && participantTilesForDisplay.length >= 7
+      ? 'auto-rows-[minmax(240px,1fr)]'
       : showSplitLayout
-      ? 'auto-rows-[minmax(180px,1fr)]'
+      ? 'auto-rows-[minmax(240px,1fr)]'
       : '';
   const bottomControlsOffset = 80; // Height of bottom controls bar (48px button + 12px top padding + 12px bottom padding + 8px buffer)
   const screenShareBannerHeight = 50; // Height of screen share banner (py-3 = 12px top + 12px bottom + ~20px content + 1px border + buffer)
@@ -3103,8 +3147,8 @@ export default function Call() {
                       <div
                         className={
                           showSplitLayout
-                            ? `grid h-full w-full gap-4 ${splitGridClasses} ${splitGridAutoRowsClass}`
-                            : `${nonSplitLayoutConfig?.gridClasses ?? 'grid h-full w-full gap-4 grid-cols-1 sm:grid-cols-2'} ${
+                            ? `grid h-full w-full gap-1 ${splitGridClasses} ${splitGridAutoRowsClass}`
+                            : `${nonSplitLayoutConfig?.gridClasses ?? 'grid h-full w-full gap-1 grid-cols-1 sm:grid-cols-2'} ${
                                 nonSplitLayoutConfig?.autoRowsClass ?? ''
                               }`
                         }
@@ -3116,6 +3160,7 @@ export default function Call() {
                     {!showSplitLayout && (
                       <OverflowParticipantsButton
                         overflowCount={overflowCount}
+                        totalParticipants={totalParticipants}
                         onClick={() => setShowParticipantList(true)}
                       />
                     )}
