@@ -13,6 +13,12 @@ export default function Login() {
     const state = location.state as { from?: { pathname: string; search?: string; hash?: string } } | null;
     if (state?.from) {
       const { pathname, search, hash } = state.from;
+      // If coming from /call/:roomCode, redirect to /pre-join/:roomCode instead
+      const callPageMatch = pathname.match(/^\/call\/(.+)$/);
+      if (callPageMatch) {
+        const roomCode = callPageMatch[1];
+        return `/pre-join/${roomCode}${search ?? ''}${hash ?? ''}`;
+      }
       return `${pathname}${search ?? ''}${hash ?? ''}`;
     }
     return '/';
@@ -69,7 +75,11 @@ export default function Login() {
               <h2 className="text-2xl font-semibold text-slate-900">Access your account</h2>
               <p className="text-sm text-slate-500">
                 New here?{' '}
-                <Link to="/register" className="font-semibold text-cyan-600 hover:text-cyan-500">
+                <Link 
+                  to="/register" 
+                  state={location.state}
+                  className="font-semibold text-cyan-600 hover:text-cyan-500"
+                >
                   Create a CYNAYD profile
                 </Link>
               </p>

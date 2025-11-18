@@ -36,13 +36,19 @@ export default function ParticipantsSidebar({
           </button>
         </div>
       </div>
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 pr-5 min-h-0">
+      <div className="flex-1 space-y-2 overflow-y-auto px-2 py-2 min-h-0">
         {participantTiles.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm font-medium text-slate-400">
             Waiting for participants…
           </div>
         ) : (
-          participantTiles.map((tile, index) => renderParticipantTile(tile, index))
+          participantTiles.map((tile, index) => (
+            <div key={`${tile.userId}-${tile.isLocal ? 'local' : 'remote'}`} className="max-h-[200px] min-h-[120px] h-[200px] flex-shrink-0">
+              <div className="h-full w-full">
+                {renderParticipantTile(tile, index)}
+              </div>
+            </div>
+          ))
         )}
       </div>
     </aside>

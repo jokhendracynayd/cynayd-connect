@@ -438,64 +438,76 @@ export default function PreJoin() {
 
               <div className="grid gap-2 border-t border-slate-100 bg-white/92 px-6 py-4 sm:grid-cols-2">
                 <div className="relative">
-                  <button
-                    onClick={handleToggleAudio}
-                    className={`flex w-full items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
-                      settings.joinWithAudio
-                        ? 'bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 text-white shadow-[0_22px_45px_-24px_rgba(14,165,233,0.65)] hover:shadow-[0_26px_55px_-26px_rgba(14,165,233,0.7)]'
-                        : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
-                    }`}
-                  >
-                    {settings.joinWithAudio ? (
-                      <>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                        </svg>
-                        Mic active
-                      </>
-                    ) : (
-                      <>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                        </svg>
-                        Mic muted
-                      </>
-                    )}
-                  </button>
+                  {(() => {
+                    // Check if mic is actually active - settings must be true AND no system issues
+                    const isMicActuallyActive = settings.joinWithAudio && deviceStatus.audio.issueType === 'none';
+                    return (
+                      <button
+                        onClick={handleToggleAudio}
+                        className={`flex w-full items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
+                          isMicActuallyActive
+                            ? 'bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 text-white shadow-[0_22px_45px_-24px_rgba(14,165,233,0.65)] hover:shadow-[0_26px_55px_-26px_rgba(14,165,233,0.7)]'
+                            : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
+                        }`}
+                      >
+                        {isMicActuallyActive ? (
+                          <>
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                            </svg>
+                            Mic active
+                          </>
+                        ) : (
+                          <>
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                            </svg>
+                            Mic muted
+                          </>
+                        )}
+                      </button>
+                    );
+                  })()}
                   {deviceStatus.audio.issueType !== 'none' && (
                     <WarningBadge onClick={handleShowAudioDialog} />
                   )}
                 </div>
                 <div className="relative">
-                  <button
-                    onClick={handleToggleVideo}
-                    className={`flex w-full items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
-                      settings.joinWithVideo
-                        ? 'border border-cyan-200 bg-white text-slate-700 shadow-[0_18px_40px_-28px_rgba(14,165,233,0.55)] hover:border-cyan-300 hover:bg-cyan-50'
-                      : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
-                  }`}
-                >
-                  {settings.joinWithVideo ? (
-                    <>
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                      Video live
-                    </>
-                  ) : (
-                    <>
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                      </svg>
-                      Video paused
-                    </>
+                  {(() => {
+                    // Check if video is actually active - settings must be true AND no system issues
+                    const isVideoActuallyActive = settings.joinWithVideo && deviceStatus.video.issueType === 'none';
+                    return (
+                      <button
+                        onClick={handleToggleVideo}
+                        className={`flex w-full items-center justify-center gap-3 rounded-[20px] px-5 py-3 text-sm font-semibold transition ${
+                          isVideoActuallyActive
+                            ? 'bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 text-white shadow-[0_22px_45px_-24px_rgba(14,165,233,0.65)] hover:shadow-[0_26px_55px_-26px_rgba(14,165,233,0.7)]'
+                            : 'border border-rose-200 bg-rose-50/90 text-rose-500 hover:border-rose-300'
+                        }`}
+                      >
+                        {isVideoActuallyActive ? (
+                          <>
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                            Video live
+                          </>
+                        ) : (
+                          <>
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                            </svg>
+                            Video paused
+                          </>
+                        )}
+                      </button>
+                    );
+                  })()}
+                  {deviceStatus.video.issueType !== 'none' && (
+                    <WarningBadge onClick={handleShowVideoDialog} />
                   )}
-                </button>
-                {deviceStatus.video.issueType !== 'none' && (
-                  <WarningBadge onClick={handleShowVideoDialog} />
-                )}
-              </div>
+                </div>
               </div>
             </div>
           </div>

@@ -114,6 +114,22 @@ const baseConfig = {
       },
     },
   },
+
+  avatar: {
+    storage: {
+      region: process.env.AWS_REGION || 'us-east-1',
+      bucket: process.env.AVATAR_S3_BUCKET || '',
+      prefix: (() => {
+        const raw = process.env.AVATAR_S3_PREFIX || 'avatars/';
+        return raw.endsWith('/') ? raw : `${raw}/`;
+      })(),
+      serverSideEncryption: process.env.AVATAR_S3_SSE || undefined,
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
+    },
+  },
 };
 
 // Environment-specific overrides

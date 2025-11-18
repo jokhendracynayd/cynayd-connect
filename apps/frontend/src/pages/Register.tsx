@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { toast } from 'react-hot-toast';
 
@@ -9,13 +9,30 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const { register, isLoading } = useAuthStore();
   const navigate = useNavigate();
+  const location = useLocation();
+  
+  // Determine redirect target - convert /call/:roomCode to /pre-join/:roomCode
+  const redirectTarget = (() => {
+    const state = location.state as { from?: { pathname: string; search?: string; hash?: string } } | null;
+    if (state?.from) {
+      const { pathname, search, hash } = state.from;
+      // If coming from /call/:roomCode, redirect to /pre-join/:roomCode instead
+      const callPageMatch = pathname.match(/^\/call\/(.+)$/);
+      if (callPageMatch) {
+        const roomCode = callPageMatch[1];
+        return `/pre-join/${roomCode}${search ?? ''}${hash ?? ''}`;
+      }
+      return `${pathname}${search ?? ''}${hash ?? ''}`;
+    }
+    return '/';
+  })();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       await register(name, email, password);
       toast.success('Account created successfully');
-      navigate('/');
+      navigate(redirectTarget, { replace: true });
     } catch (error: any) {
       toast.error(error.message);
     }
@@ -61,7 +78,11 @@ export default function Register() {
               <h2 className="text-2xl font-semibold text-slate-900">Begin your CYNAYD journey</h2>
               <p className="text-sm text-slate-500">
                 Already have credentials?{' '}
-                <Link to="/login" className="font-semibold text-cyan-600 hover:text-cyan-500">
+                <Link 
+                  to="/login" 
+                  state={location.state}
+                  className="font-semibold text-cyan-600 hover:text-cyan-500"
+                >
                   Sign in instead
                 </Link>
               </p>

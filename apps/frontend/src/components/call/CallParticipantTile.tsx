@@ -71,7 +71,8 @@ export default function CallParticipantTile({
     needsSpecialWidth ? 'h-full min-h-full' : 'w-full h-full min-h-full min-w-full',
     tile.isSpeaking ? 'ring-2 ring-cyan-400 shadow-[0_0_0_4px_rgba(56,189,248,0.2)]' : '',
     tile.isLocal ? 'ring-1 ring-cyan-500/40' : '',
-    showSplitLayout ? 'aspect-[4/3]' : isSoloLayout ? 'h-full' : '',
+    // Don't apply aspect ratio when in a constrained container (sidebar), use max-height instead
+    showSplitLayout && !nonSplitLayoutConfig ? 'aspect-[4/3]' : isSoloLayout ? 'h-full' : '',
     layoutTileBaseClass,
     layoutTileIndexClass,
   ]
@@ -89,6 +90,30 @@ export default function CallParticipantTile({
     }
   }, [tile.isLocal, tile.userId, setLocalVideoRef, getRemoteVideoRef]);
 
+  // Different overlay colors for different participants - professional palette
+  const overlayColors = [
+    'bg-slate-900/80',
+    'bg-slate-800/80',
+    'bg-zinc-900/80',
+    'bg-neutral-900/80',
+    'bg-slate-700/85',
+    'bg-zinc-800/80',
+    'bg-neutral-800/80',
+    'bg-gray-800/80',
+  ];
+  const badgeColors = [
+    'bg-black/80',
+    'bg-slate-950/85',
+    'bg-zinc-950/85',
+    'bg-neutral-950/85',
+    'bg-slate-900/90',
+    'bg-zinc-900/90',
+    'bg-neutral-900/90',
+    'bg-gray-900/90',
+  ];
+  const overlayColor = overlayColors[index % overlayColors.length];
+  const badgeColor = badgeColors[index % badgeColors.length];
+
   return (
     <div key={`${tile.userId}-${tile.isLocal ? 'local' : 'remote'}`} className={tileClasses}>
       <video
@@ -101,16 +126,16 @@ export default function CallParticipantTile({
       />
 
       {!shouldShowVideo && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white/70 min-h-full min-w-full h-full w-full">
+        <div className={`absolute inset-0 flex items-center justify-center ${overlayColor} text-white/70 min-h-full min-w-full h-full w-full`}>
           {tile.picture ? (
             <img
               src={tile.picture}
               alt={tile.name}
-              className="h-16 w-16 rounded-[18px] border border-white/40 object-cover"
+              className="h-20 w-20 rounded-full border border-white/40 object-cover"
             />
           ) : (
-            <div className="flex h-16 w-16 items-center justify-center rounded-[18px] border border-white/30 bg-gradient-to-br from-cyan-500/50 via-sky-500/40 to-indigo-500/40 shadow-[0_18px_35px_-24px_rgba(14,165,233,0.65)] backdrop-blur">
-              <svg className="h-10 w-10 text-white/80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full border border-white/30 bg-gradient-to-br from-cyan-500/50 via-sky-500/40 to-indigo-500/40 shadow-[0_18px_35px_-24px_rgba(14,165,233,0.65)] backdrop-blur">
+              <svg className="h-12 w-12 text-white/80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -120,7 +145,6 @@ export default function CallParticipantTile({
               </svg>
             </div>
           )}
-          <span className="mt-3 text-sm font-medium capitalize">{tile.name}</span>
         </div>
       )}
 
@@ -136,7 +160,7 @@ export default function CallParticipantTile({
         </div>
       )}
 
-      <div className="absolute bottom-2 left-3 flex flex-wrap items-center gap-2 rounded-full bg-black/80 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur-md border border-white/10">
+      <div className={`absolute bottom-2 left-3 flex flex-wrap items-center gap-2 rounded-full ${badgeColor} px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-white backdrop-blur-md border border-white/10`}>
         <span className="tracking-normal capitalize">
           {tile.name}
           {tile.isLocal ? ' (You)' : ''}
