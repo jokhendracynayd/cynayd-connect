@@ -19,6 +19,7 @@ import { config } from '../config';
 import ParticipantList from '../components/call/ParticipantList';
 import PendingRequestsPanel from '../components/call/PendingRequestsPanel';
 import RoomSettings from '../components/call/RoomSettings';
+import KeyboardShortcuts from '../components/call/KeyboardShortcuts';
 import WaitingRoom from '../components/call/WaitingRoom';
 import ScreenShareSection from '../components/call/ScreenShareSection';
 import PermissionBanner from '../components/call/PermissionBanner';
@@ -51,6 +52,10 @@ import CallParticipantTile from '../components/call/CallParticipantTile';
 import { useCallMedia } from '../hooks/call/useCallMedia';
 import { useCallScreenShare } from '../hooks/call/useCallScreenShare';
 import { useCallHostControls } from '../hooks/call/useCallHostControls';
+
+const END_MEETING_TOAST_ID = 'ending-meeting';
+const END_MEETING_REQUEST_TIMEOUT_MS = 5000;
+const END_MEETING_FALLBACK_TIMEOUT_MS = 5000;
 
 export default function Call() {
   const { roomCode } = useParams<{ roomCode: string }>();
@@ -137,14 +142,19 @@ export default function Call() {
   const networkMonitorRef = useRef<NetworkMonitor | null>(null);
   const activeSpeakerDetectorRef = useRef<ActiveSpeakerDetector | null>(null);
   const pendingParticipantEventsRef = useRef<Map<string, Array<() => void>>>(new Map());
+  const hasHandledRoomEndedRef = useRef(false);
   const [showPendingRequests, setShowPendingRequests] = useState(false);
   const [showRoomSettings, setShowRoomSettings] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [showWaitingRoom, setShowWaitingRoom] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [isEndingMeeting, setIsEndingMeeting] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const previousHostControlsRef = useRef(hostControls);
   const isLeavingRef = useRef(false); // Prevent double cleanup
+  const isEndingMeetingRef = useRef(false);
   const isLoadingPendingRequestsRef = useRef(false); // Track API call in progress
+  const endMeetingFallbackTimerRef = useRef<number | null>(null);
   const [showParticipantList, setShowParticipantList] = useState(false);
   const [showChatPanel, setShowChatPanel] = useState(false);
   const [permissionBannerDismissed, setPermissionBannerDismissed] = useState(false);
@@ -201,6 +211,15 @@ export default function Call() {
     return () => {
       if (navigator.mediaDevices?.removeEventListener) {
         navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (endMeetingFallbackTimerRef.current) {
+        clearTimeout(endMeetingFallbackTimerRef.current);
+        endMeetingFallbackTimerRef.current = null;
       }
     };
   }, []);
@@ -494,6 +513,51 @@ export default function Call() {
     setDeviceDialogType,
     setRaiseHand,
   });
+
+  // Keyboard shortcuts for mute/unmute
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Check if user is typing in an input field
+      const target = event.target as HTMLElement;
+      const isInputField = 
+        target.tagName === 'INPUT' || 
+        target.tagName === 'TEXTAREA' || 
+        target.isContentEditable;
+      
+      // Only handle shortcuts if not typing in an input field
+      if (isInputField) {
+        return;
+      }
+
+      // Check if Ctrl (Windows/Linux) or Cmd (Mac) is pressed
+      const isModifierPressed = event.ctrlKey || event.metaKey;
+      
+      if (isModifierPressed) {
+        switch (event.key.toLowerCase()) {
+          case 'd':
+            // Ctrl+D or Cmd+D: Toggle audio mute/unmute
+            event.preventDefault();
+            event.stopPropagation();
+            handleToggleAudio();
+            break;
+          case 'f':
+            // Ctrl+F or Cmd+F: Toggle video mute/unmute
+            event.preventDefault();
+            event.stopPropagation();
+            handleToggleVideo();
+            break;
+          default:
+            break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [handleToggleAudio, handleToggleVideo]);
+
   const recordingStatusValue = recording.status ?? null;
   const recordingIsRecording =
     recording.active && recordingStatusValue === 'RECORDING';
@@ -964,6 +1028,10 @@ export default function Call() {
   const connectToRoom = async () => {
     if (!roomCode || !user || !preJoinCompleted) return;
     
+    hasHandledRoomEndedRef.current = false;
+    isEndingMeetingRef.current = false;
+    setIsEndingMeeting(false);
+
     resetRecordingState();
     
     let effectiveAudioMuted = isAudioMuted;
@@ -2015,6 +2083,46 @@ export default function Call() {
     socketManager.on('host-control:participant-removed', handleHostParticipantRemoved);
     eventListenersRef.current['host-control:participant-removed'] = handleHostParticipantRemoved;
 
+    const handleRoomEndedEvent = (payload: {
+      actorUserId?: string | null;
+      reason?: string | null;
+      endedAt?: string;
+    }) => {
+      if (hasHandledRoomEndedRef.current) {
+        return;
+      }
+
+      hasHandledRoomEndedRef.current = true;
+      if (endMeetingFallbackTimerRef.current) {
+        clearTimeout(endMeetingFallbackTimerRef.current);
+        endMeetingFallbackTimerRef.current = null;
+      }
+      const endedBySelf = Boolean(payload?.actorUserId && payload.actorUserId === user?.id);
+      const triggeredLocally = isEndingMeetingRef.current || endedBySelf;
+
+      if (triggeredLocally) {
+        toast.success('Meeting ended for everyone.', { id: END_MEETING_TOAST_ID });
+      } else {
+        const message =
+          payload?.reason && payload.reason.length > 0
+            ? payload.reason
+            : 'The host ended the meeting for everyone.';
+        toast.error(message, { duration: 5000 });
+      }
+
+      isEndingMeetingRef.current = false;
+      setIsEndingMeeting(false);
+
+      void leaveRoom({
+        skipSuccessToast: true,
+        skipLoadingToast: triggeredLocally,
+      }).catch(error => {
+        console.error('Error during room:end cleanup:', error);
+      });
+    };
+    socketManager.on('room:ended', handleRoomEndedEvent);
+    eventListenersRef.current['room:ended'] = handleRoomEndedEvent;
+
     const handleHostRoleUpdated = (payload: {
       userId?: string;
       role?: string;
@@ -2557,13 +2665,14 @@ export default function Call() {
     }
   };
 
-  const leaveRoom = async (options?: { skipSuccessToast?: boolean }) => {
+  const leaveRoom = async (options?: { skipSuccessToast?: boolean; skipLoadingToast?: boolean }) => {
     // Prevent double execution
     if (isLeavingRef.current) {
       console.log('Leave already in progress, ignoring duplicate call');
       return;
     }
     
+    hasHandledRoomEndedRef.current = true;
     isLeavingRef.current = true;
     setIsLeaving(true);
     
@@ -2591,7 +2700,9 @@ export default function Call() {
     
     try {
       console.log('Leaving room, starting cleanup...');
-      toast.loading('Leaving room...', { id: 'leaving' });
+      if (!options?.skipLoadingToast) {
+        toast.loading('Leaving room...', { id: 'leaving' });
+      }
       
       // Step 1: Stop all local media tracks immediately (user experience)
       mediaManager.stopLocalMedia();
@@ -2718,7 +2829,7 @@ export default function Call() {
       if (options?.skipSuccessToast) {
         toast.dismiss('leaving');
       } else {
-      toast.success('Left room successfully', { id: 'leaving' });
+        toast.success('Left room successfully', { id: 'leaving' });
       }
       
       // Small delay to ensure toast is visible before navigation
@@ -2751,6 +2862,62 @@ export default function Call() {
       // Do not reset isLeaving here to avoid re-triggering pre-join redirects before unmount
     }
   };
+
+  const {
+    handleHostMuteAllAudio,
+    handleHostUnmuteAllAudio,
+    handleHostMuteAllVideo,
+    handleHostUnmuteAllVideo,
+    handleHostToggleChat,
+    handleHostToggleLock,
+    handleHostStartRecording: _handleHostStartRecording,
+    handleHostStopRecording: _handleHostStopRecording,
+    handleHostControlParticipant,
+    handleHostRemoveParticipant,
+    handlePromoteToCoHost,
+    handleDemoteFromCoHost,
+    handleHostEndMeeting,
+  } = useCallHostControls({ hostControls });
+
+  const handleEndMeetingForAll = useCallback(async () => {
+    if (isEndingMeetingRef.current) {
+      return;
+    }
+
+    isEndingMeetingRef.current = true;
+    setIsEndingMeeting(true);
+    toast.loading('Ending meeting for everyone...', { id: END_MEETING_TOAST_ID });
+
+    try {
+      await Promise.race([
+        handleHostEndMeeting(),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('Timed out while ending the meeting. Please check your connection and try again.'));
+          }, END_MEETING_REQUEST_TIMEOUT_MS);
+        }),
+      ]);
+
+      if (endMeetingFallbackTimerRef.current) {
+        clearTimeout(endMeetingFallbackTimerRef.current);
+      }
+      endMeetingFallbackTimerRef.current = window.setTimeout(() => {
+        endMeetingFallbackTimerRef.current = null;
+        if (hasHandledRoomEndedRef.current) {
+          return;
+        }
+        toast.error('Did not receive confirmation that the meeting ended. Cleaning up locally.');
+        isEndingMeetingRef.current = false;
+        setIsEndingMeeting(false);
+        void leaveRoom({ skipSuccessToast: true, skipLoadingToast: true });
+      }, END_MEETING_FALLBACK_TIMEOUT_MS);
+    } catch (error: any) {
+      const message = error?.message ?? 'Failed to end the meeting for everyone.';
+      toast.error(message, { id: END_MEETING_TOAST_ID });
+      isEndingMeetingRef.current = false;
+      setIsEndingMeeting(false);
+    }
+  }, [handleHostEndMeeting, leaveRoom]);
 
   const loadPendingRequests = async () => {
     if (!roomCode) {
@@ -2810,22 +2977,6 @@ export default function Call() {
   };
 
 
-  const {
-    handleHostMuteAllAudio,
-    handleHostUnmuteAllAudio,
-    handleHostMuteAllVideo,
-    handleHostUnmuteAllVideo,
-    handleHostToggleChat,
-    handleHostToggleLock,
-    handleHostStartRecording: _handleHostStartRecording,
-    handleHostStopRecording: _handleHostStopRecording,
-    handleHostControlParticipant,
-    handleHostRemoveParticipant,
-    handlePromoteToCoHost,
-    handleDemoteFromCoHost,
-  } = useCallHostControls({ hostControls });
-
-
   const remoteParticipantTiles: ParticipantTile[] = participants
     .filter(participant => participant.userId !== user?.id)
     .map(participant => ({
@@ -2861,6 +3012,8 @@ export default function Call() {
     isSpeaking: localIsSpeaking,
     hasRaisedHand: user?.id ? raisedHands.has(user.id) : false,
   };
+
+  const canEndMeeting = isHost || participantRole === 'COHOST';
 
   let allParticipantTiles: ParticipantTile[] = [localTile, ...remoteParticipantTiles];
 // this is for the demo mode
@@ -3310,12 +3463,19 @@ export default function Call() {
           onUnmuteAllVideo={handleHostUnmuteAllVideo}
           onToggleChat={handleHostToggleChat}
           onToggleLock={handleHostToggleLock}
-          onShowRoomSettings={() => setShowRoomSettings(true)}
           onShowPendingRequests={() => setShowPendingRequests(!showPendingRequests)}
           pendingRequestsCount={pendingRequests.length}
+          roomCode={roomCode}
+          currentIsPublic={roomIsPublic}
+          participantCount={participants.length + 1}
           isLeaving={isLeaving}
+          isEndingMeeting={isEndingMeeting}
+          canEndMeeting={canEndMeeting}
           onLeave={() => {
             void leaveRoom();
+          }}
+          onEndMeeting={() => {
+            void handleEndMeetingForAll();
           }}
         />
       </div>
@@ -3344,6 +3504,10 @@ export default function Call() {
             roomCode={roomCode}
             currentIsPublic={roomIsPublic}
             participantCount={participants.length + 1}
+          />
+          <KeyboardShortcuts
+            isOpen={showShortcuts}
+            onClose={() => setShowShortcuts(false)}
           />
         </>
       )}

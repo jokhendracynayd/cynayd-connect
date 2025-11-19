@@ -131,6 +131,15 @@ export interface RecordingAssetUpdateOptions {
   type?: RecordingAssetType;
 }
 
+export interface RoomEndResult {
+  roomId: string;
+  endedBy: string;
+  endedAt: Date;
+  reason?: string | null;
+  participantsUpdated: number;
+  wasAlreadyEnded: boolean;
+}
+
 async function areMuteColumnsAvailable(): Promise<boolean> {
   const now = Date.now();
 
@@ -314,6 +323,10 @@ export class RoomService {
     // Normalize room code for consistency
     const normalizedRoomCode = roomCode.trim().toLowerCase();
     const room = await this.getRoomByCode(normalizedRoomCode);
+
+    if (!room.isActive || room.endedAt) {
+      throw new ForbiddenError('This meeting has ended. Please ask the host to start a new session.');
+    }
 
     // Check if already joined (active participant)
     const existingParticipant = await prisma.participant.findFirst({
@@ -1694,6 +1707,104 @@ export class RoomService {
     });
 
     return { success: true };
+  }
+
+  static async endRoom(
+    actorUserId: string,
+    roomId: string,
+    options?: { reason?: string | null }
+  ): Promise<RoomEndResult> {
+    const room = await prisma.room.findUnique({
+      where: { id: roomId },
+      select: {
+        id: true,
+        adminId: true,
+        isActive: true,
+        endedAt: true,
+      },
+    });
+
+    if (!room) {
+      throw new NotFoundError('Room not found.');
+    }
+
+    const isHost = room.adminId === actorUserId;
+
+    if (!isHost) {
+      const participant = await prisma.participant.findFirst({
+        where: {
+          roomId: room.id,
+          userId: actorUserId,
+          leftAt: null,
+        },
+        select: {
+          role: true,
+        },
+      });
+
+      if (!participant || !this.isModeratorRole(participant.role)) {
+        throw new ForbiddenError('Only the host or a co-host can end the meeting.');
+      }
+    }
+
+    if (!room.isActive || room.endedAt) {
+      return {
+        roomId: room.id,
+        endedBy: actorUserId,
+        endedAt: room.endedAt ?? new Date(),
+        reason: options?.reason ?? null,
+        participantsUpdated: 0,
+        wasAlreadyEnded: true,
+      };
+    }
+
+    const endedAt = new Date();
+
+    const transactionResult = await prisma.$transaction(async tx => {
+      const [updatedRoom, participantsUpdate] = await Promise.all([
+        tx.room.update({
+          where: { id: room.id },
+          data: {
+            isActive: false,
+            endedAt,
+          },
+          select: {
+            id: true,
+            endedAt: true,
+          },
+        }),
+        tx.participant.updateMany({
+          where: {
+            roomId: room.id,
+            leftAt: null,
+          },
+          data: {
+            leftAt: endedAt,
+          },
+        }),
+      ]);
+
+      return {
+        updatedRoom,
+        participantsUpdated: participantsUpdate.count ?? 0,
+      };
+    });
+
+    logger.info('Room ended', {
+      roomId: room.id,
+      actorUserId,
+      reason: options?.reason,
+      participantsUpdated: transactionResult.participantsUpdated,
+    });
+
+    return {
+      roomId: room.id,
+      endedBy: actorUserId,
+      endedAt: transactionResult.updatedRoom.endedAt ?? endedAt,
+      reason: options?.reason ?? null,
+      participantsUpdated: transactionResult.participantsUpdated,
+      wasAlreadyEnded: false,
+    };
   }
 
   private static generateRoomCode(): string {

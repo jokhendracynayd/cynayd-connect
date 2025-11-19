@@ -70,8 +70,6 @@ export default function CallParticipantTile({
     'relative overflow-hidden rounded-3xl border border-gray-700/50 bg-gray-900/80 backdrop-blur-sm shadow-[0_24px_60px_-35px_rgba(0,0,0,0.5)] transition-all',
     // Only apply w-full and min-w-full if not using special width
     needsSpecialWidth ? 'h-full min-h-full' : 'w-full h-full min-h-full min-w-full',
-    tile.isSpeaking ? 'ring-2 ring-cyan-400 shadow-[0_0_0_4px_rgba(56,189,248,0.2)]' : '',
-    tile.isLocal ? 'ring-1 ring-cyan-500/40' : '',
     // Don't apply aspect ratio when in a constrained container (sidebar), use max-height instead
     showSplitLayout && !nonSplitLayoutConfig ? 'aspect-[4/3]' : isSoloLayout ? 'h-full' : '',
     layoutTileBaseClass,

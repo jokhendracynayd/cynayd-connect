@@ -63,13 +63,18 @@ interface BottomControlsBarProps {
   onUnmuteAllVideo: () => void;
   onToggleChat: () => void;
   onToggleLock: () => void;
-  onShowRoomSettings: () => void;
   onShowPendingRequests: () => void;
   pendingRequestsCount: number;
+  roomCode?: string | undefined;
+  currentIsPublic?: boolean | undefined;
+  participantCount?: number | undefined;
 
   // Leave button props
   isLeaving: boolean;
   onLeave: () => void;
+  isEndingMeeting?: boolean;
+  canEndMeeting?: boolean;
+  onEndMeeting?: () => void;
 }
 
 export default function BottomControlsBar({
@@ -108,11 +113,16 @@ export default function BottomControlsBar({
   onUnmuteAllVideo,
   onToggleChat,
   onToggleLock,
-  onShowRoomSettings,
   onShowPendingRequests,
   pendingRequestsCount,
+  roomCode,
+  currentIsPublic,
+  participantCount,
   isLeaving,
   onLeave,
+  isEndingMeeting,
+  canEndMeeting,
+  onEndMeeting,
 }: BottomControlsBarProps) {
   return (
     <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 px-3 sm:px-4 lg:px-6" style={{ minHeight: 'calc(68px + env(safe-area-inset-bottom))' }}>
@@ -221,16 +231,21 @@ export default function BottomControlsBar({
                 </div>
               </div>
               <AdminBottomButtons
-                onShowRoomSettings={onShowRoomSettings}
                 onShowPendingRequests={onShowPendingRequests}
                 pendingRequestsCount={pendingRequestsCount}
+                roomCode={roomCode}
+                currentIsPublic={currentIsPublic}
+                participantCount={participantCount}
               />
             </>
           )}
 
           <LeaveButton
             isLeaving={isLeaving}
+            {...(isEndingMeeting !== undefined && { isEnding: isEndingMeeting })}
+            {...(canEndMeeting !== undefined && { canEndMeeting })}
             onLeave={onLeave}
+            {...(onEndMeeting && { onEndMeeting })}
           />
         </div>
 

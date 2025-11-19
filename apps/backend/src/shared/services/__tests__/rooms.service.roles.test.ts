@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParticipantRole } from '@prisma/client';
 import { RoomService } from '../rooms.service';
 import prisma from '../../database/prisma';
-import { ForbiddenError, ConflictError } from '../../utils/errors';
 
 vi.mock('../../database/prisma', () => ({
   default: {
@@ -99,7 +98,10 @@ describe('RoomService co-host role management', () => {
 
     await expect(
       RoomService.promoteToCoHost('user-2', 'room-1', 'user-3')
-    ).rejects.toBeInstanceOf(ForbiddenError);
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'Only the room host can manage co-hosts.',
+    });
 
     expect(prismaMock.participant.update).not.toHaveBeenCalled();
   });
@@ -109,7 +111,10 @@ describe('RoomService co-host role management', () => {
 
     await expect(
       RoomService.setParticipantRole('host-1', 'room-1', 'user-2', ParticipantRole.HOST)
-    ).rejects.toBeInstanceOf(ConflictError);
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Host role is reserved for the room owner.',
+    });
   });
 });
 

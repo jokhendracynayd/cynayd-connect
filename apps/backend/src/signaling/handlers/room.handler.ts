@@ -2133,6 +2133,114 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
   );
 
   socket.on(
+    'host-control:end-room',
+    async (
+      data: { reason?: string },
+      callback?: (result: { success: boolean; alreadyEnded?: boolean; error?: string }) => void
+    ) => {
+      try {
+        const { roomCode, roomId, actorUserId } = resolveHostContext();
+        const reason =
+          typeof data?.reason === 'string' ? data.reason.trim().slice(0, 256) : null;
+        const endResult = await RoomService.endRoom(actorUserId, roomId, { reason });
+        const endedAtIso = endResult.endedAt.toISOString();
+        const payload = {
+          roomId,
+          roomCode,
+          actorUserId,
+          reason,
+          endedAt: endedAtIso,
+          participantsUpdated: endResult.participantsUpdated,
+        };
+
+        callback?.({ success: true, alreadyEnded: endResult.wasAlreadyEnded });
+
+        io.to(roomCode).emit('room:ended', payload);
+
+        try {
+          await redis.publish('room:ended', JSON.stringify(payload));
+        } catch (publishError) {
+          logger.warn('host-control:end-room: failed to publish redis event', {
+            roomId,
+            roomCode,
+            publishError,
+          });
+        }
+
+        if (!endResult.wasAlreadyEnded && RecordingManager.isRecording(roomId)) {
+          try {
+            await RecordingManager.stopRecording({
+              roomId,
+              roomCode,
+              reason: reason ?? 'Meeting ended by host.',
+            });
+          } catch (recordingError) {
+            logger.error('host-control:end-room: failed to stop recording', {
+              roomId,
+              recordingError,
+            });
+          }
+        }
+
+        const roomSockets = await io.in(roomCode).fetchSockets();
+        const disconnectReason = reason ?? 'host-ended';
+
+        await Promise.allSettled(
+          roomSockets.map(async remoteSocket => {
+            const concreteSocket = io.sockets.sockets.get(remoteSocket.id);
+
+            if (concreteSocket) {
+              try {
+                await handleSocketLeave(io, concreteSocket, {
+                  reason: disconnectReason,
+                });
+              } catch (leaveError) {
+                logger.warn('host-control:end-room: failed to cleanup participant', {
+                  roomCode,
+                  participantSocketId: concreteSocket.id,
+                  leaveError,
+                });
+              }
+
+              try {
+                await new Promise(resolve => setImmediate(resolve));
+                if (concreteSocket.connected) {
+                  concreteSocket.disconnect(true);
+                }
+              } catch (disconnectError) {
+                logger.warn('host-control:end-room: failed to disconnect socket', {
+                  roomCode,
+                  participantSocketId: concreteSocket.id,
+                  disconnectError,
+                });
+              }
+
+              return;
+            }
+
+            logger.warn('host-control:end-room: remote participant cleanup delegated to owning instance', {
+              roomCode,
+              participantSocketId: remoteSocket.id,
+            });
+          })
+        );
+      } catch (error: any) {
+        logger.error('host-control:end-room failed', {
+          error: error?.message ?? error,
+          socketId: socket.id,
+        });
+        callback?.({
+          success: false,
+          error:
+            error instanceof ForbiddenError || error instanceof ConflictError
+              ? error.message
+              : 'Failed to end the meeting. Please try again.',
+        });
+      }
+    }
+  );
+
+  socket.on(
     'host-control:mute-chat',
     async (
       data: { mute?: boolean; reason?: string },

@@ -35,6 +35,7 @@ export type SocketEventKey =
   | 'host-control:room-state'
   | 'host-control:chat-state'
   | 'host-control:participant-removed'
+  | 'room:ended'
   | 'host-control:role-updated'
   | 'recording:state'
   | 'recording:error';

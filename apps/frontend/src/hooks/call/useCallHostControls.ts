@@ -11,110 +11,140 @@ interface UseCallHostControlsProps {
 
 export function useCallHostControls({ hostControls }: UseCallHostControlsProps) {
   const emitHostControl = useCallback(
-    (
+    <
+      TResponse extends {
+        success?: boolean;
+        error?: string;
+        [key: string]: unknown;
+      } = {
+        success?: boolean;
+        error?: string;
+        [key: string]: unknown;
+      }
+    >(
       event: string,
       payload: Record<string, unknown>,
       successMessage?: string,
       fallbackErrorMessage: string = 'Host action failed'
-    ) => {
+    ): Promise<TResponse> => {
       const socket = socketManager.getSocket
         ? socketManager.getSocket()
         : (socketManager as any).socket;
       if (!socket) {
-        toast.error('Not connected to signaling server.');
-        return;
+        const error = new Error('Not connected to signaling server.');
+        toast.error(error.message);
+        return Promise.reject(error);
       }
 
-      socket.emit(event, payload, (response?: { success?: boolean; error?: string }) => {
-        if (response && response.success === false) {
-          toast.error(response.error ?? fallbackErrorMessage);
-          return;
-        }
-        if (successMessage) {
-          toast.success(successMessage);
-        }
+      return new Promise<TResponse>((resolve, reject) => {
+        socket.emit(event, payload, (response?: TResponse) => {
+          if (response && response.success === false) {
+            const message =
+              (typeof response.error === 'string' && response.error) || fallbackErrorMessage;
+            toast.error(message);
+            return reject(new Error(message));
+          }
+          if (successMessage) {
+            toast.success(successMessage);
+          }
+          resolve(response ?? ({} as TResponse));
+        });
       });
     },
     []
   );
 
+  const fireAndForgetHostControl = useCallback(
+    (
+      event: string,
+      payload: Record<string, unknown>,
+      successMessage?: string,
+      fallbackErrorMessage?: string
+    ) => {
+      void emitHostControl(event, payload, successMessage, fallbackErrorMessage).catch(error => {
+        console.error(`Host control "${event}" failed:`, error);
+      });
+    },
+    [emitHostControl]
+  );
+
   const handleHostMuteAllAudio = useCallback(() => {
-    emitHostControl(
+    fireAndForgetHostControl(
       'host-control:mute-all',
       { targets: ['audio'], mute: true },
       'Muted all microphones',
       'Failed to mute microphones'
     );
-  }, [emitHostControl]);
+  }, [fireAndForgetHostControl]);
 
   const handleHostUnmuteAllAudio = useCallback(() => {
-    emitHostControl(
+    fireAndForgetHostControl(
       'host-control:mute-all',
       { targets: ['audio'], mute: false },
       'Released microphones',
       'Failed to unmute microphones'
     );
-  }, [emitHostControl]);
+  }, [fireAndForgetHostControl]);
 
   const handleHostMuteAllVideo = useCallback(() => {
-    emitHostControl(
+    fireAndForgetHostControl(
       'host-control:mute-all',
       { targets: ['video'], mute: true },
       'Disabled all cameras',
       'Failed to disable cameras'
     );
-  }, [emitHostControl]);
+  }, [fireAndForgetHostControl]);
 
   const handleHostUnmuteAllVideo = useCallback(() => {
-    emitHostControl(
+    fireAndForgetHostControl(
       'host-control:mute-all',
       { targets: ['video'], mute: false },
       'Enabled cameras',
       'Failed to enable cameras'
     );
-  }, [emitHostControl]);
+  }, [fireAndForgetHostControl]);
 
   const handleHostToggleChat = useCallback(() => {
     const shouldMute = !hostControls.chatForceAll;
-    emitHostControl(
+    fireAndForgetHostControl(
       'host-control:mute-chat',
       { mute: shouldMute },
       shouldMute ? 'Muted chat for everyone' : 'Chat reopened for participants',
       shouldMute ? 'Failed to mute chat' : 'Failed to reopen chat'
     );
-  }, [emitHostControl, hostControls.chatForceAll]);
+  }, [fireAndForgetHostControl, hostControls.chatForceAll]);
 
   const handleHostToggleLock = useCallback(() => {
     const nextLocked = !hostControls.locked;
-    emitHostControl(
+    fireAndForgetHostControl(
       'host-control:lock-room',
       { locked: nextLocked },
       nextLocked ? 'Room locked' : 'Room unlocked',
       'Failed to update room lock'
     );
-  }, [emitHostControl, hostControls.locked]);
+  }, [fireAndForgetHostControl, hostControls.locked]);
 
   const handleHostStartRecording = useCallback(() => {
-    emitHostControl(
+    fireAndForgetHostControl(
       'host-control:start-recording',
       {},
       'Starting recording…',
       'Failed to start recording'
     );
-  }, [emitHostControl]);
+  }, [fireAndForgetHostControl]);
 
   const handleHostStopRecording = useCallback(() => {
-    emitHostControl(
+    fireAndForgetHostControl(
       'host-control:stop-recording',
       {},
       'Stopping recording…',
       'Failed to stop recording'
     );
-  }, [emitHostControl]);
+  }, [fireAndForgetHostControl]);
 
   const handleHostControlParticipant = useCallback(
     (userId: string, targets: { audio?: boolean; video?: boolean }, mute: boolean) => {
-      emitHostControl(
+      fireAndForgetHostControl(
         'host-control:mute-participant',
         {
           targetUserId: userId,
@@ -126,44 +156,53 @@ export function useCallHostControls({ hostControls }: UseCallHostControlsProps) 
         'Failed to update participant state'
       );
     },
-    [emitHostControl]
+    [fireAndForgetHostControl]
   );
 
   const handleHostRemoveParticipant = useCallback(
     (userId: string) => {
-      emitHostControl(
+      fireAndForgetHostControl(
         'host-control:remove-participant',
         { targetUserId: userId },
         'Participant removed',
         'Failed to remove participant'
       );
     },
-    [emitHostControl]
+    [fireAndForgetHostControl]
   );
 
   const handlePromoteToCoHost = useCallback(
     (userId: string) => {
-      emitHostControl(
+      fireAndForgetHostControl(
         'host-control:update-role',
         { targetUserId: userId, role: 'cohost' },
         'Participant promoted to co-host',
         'Failed to promote participant to co-host'
       );
     },
-    [emitHostControl]
+    [fireAndForgetHostControl]
   );
 
   const handleDemoteFromCoHost = useCallback(
     (userId: string) => {
-      emitHostControl(
+      fireAndForgetHostControl(
         'host-control:update-role',
         { targetUserId: userId, role: 'participant' },
         'Co-host privileges revoked',
         'Failed to update participant role'
       );
     },
-    [emitHostControl]
+    [fireAndForgetHostControl]
   );
+
+  const handleHostEndMeeting = useCallback(() => {
+    return emitHostControl(
+      'host-control:end-room',
+      {},
+      undefined,
+      'Failed to end the meeting for everyone'
+    );
+  }, [emitHostControl]);
 
   return {
     emitHostControl,
@@ -179,6 +218,7 @@ export function useCallHostControls({ hostControls }: UseCallHostControlsProps) 
     handleHostRemoveParticipant,
     handlePromoteToCoHost,
     handleDemoteFromCoHost,
+    handleHostEndMeeting,
   };
 }
 
