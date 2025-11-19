@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { ParticipantTile } from '../../types/call';
 import type { NonSplitLayoutConfig } from '../../utils/callLayout';
 import { MicMutedIcon, HandRaisedIcon } from './icons';
+import { DotLottieReact } from '@lottiefiles/dotlottie-react';
 
 interface CallParticipantTileProps {
   tile: ParticipantTile;
@@ -148,10 +149,48 @@ export default function CallParticipantTile({
         </div>
       )}
 
-      {tile.isAudioMuted && (
-        <div className="absolute left-4 top-4 rounded-full bg-rose-700/50 p-2 text-white/80 shadow-md backdrop-blur-sm">
-          <MicMutedIcon className="h-4 w-4" />
-        </div>
+      {/* Audio mute/speaking indicator - only show for remote participants */}
+      {!tile.isLocal && (
+        <>
+          {tile.isAudioMuted ? (
+            <div className="absolute left-4 top-4 rounded-full bg-rose-700/50 p-2 text-white/80 shadow-md backdrop-blur-sm">
+              <MicMutedIcon className="h-4 w-4" />
+            </div>
+          ) : (
+            /* Show mic icon with Lottie animation when speaking */
+            <div className="absolute left-4 top-4 rounded-full bg-gray-800/70 p-1.5 text-white/80 shadow-md backdrop-blur-sm">
+              <div className="relative h-5 w-5 flex items-center justify-center">
+                {/* Lottie mic animation - show when speaking, otherwise show static mic icon */}
+                {tile.isSpeaking ? (
+                  <DotLottieReact
+                    src="/micanimation.json"
+                    loop
+                    autoplay
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                    }}
+                  />
+                ) : (
+                  <svg 
+                    className="h-4 w-4 relative z-10" 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round" 
+                      strokeWidth={2} 
+                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" 
+                    />
+                  </svg>
+                )}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {tile.hasRaisedHand && (

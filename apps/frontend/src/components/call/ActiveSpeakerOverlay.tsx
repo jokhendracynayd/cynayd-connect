@@ -46,7 +46,24 @@ export default function ActiveSpeakerOverlay({
     (!facingMode && !isProbableScreenShare);
 
   return (
-    <div className="pointer-events-auto absolute bottom-6 right-6 flex w-[min(240px,35%)] flex-col gap-2 rounded-3xl border border-white/40 bg-white/90 p-3 shadow-[0_22px_45px_-28px_rgba(15,23,42,0.45)] backdrop-blur">
+    <div 
+      className="pointer-events-auto absolute bottom-6 right-6 flex w-[min(240px,35%)] flex-col gap-2 rounded-3xl border border-white/40 bg-white/90 p-3 shadow-[0_22px_45px_-28px_rgba(15,23,42,0.45)] backdrop-blur transition-all duration-300"
+      style={{
+        animation: tile.isSpeaking ? 'speaker-overlay-pulse 2s ease-in-out infinite' : 'none',
+      }}
+    >
+      <style>{`
+        @keyframes speaker-overlay-pulse {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0_22px_45px_-28px_rgba(15,23,42,0.45);
+          }
+          50% {
+            transform: scale(1.02);
+            box-shadow: 0_26px_50px_-28px_rgba(14,165,233,0.5);
+          }
+        }
+      `}</style>
       <div className="relative aspect-video overflow-hidden rounded-2xl bg-slate-900/85">
         {hasLiveVideo ? (
           <video
@@ -71,9 +88,18 @@ export default function ActiveSpeakerOverlay({
             )}
           </div>
         )}
-        <div className="absolute left-3 top-3 rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.3em] text-white">
+        <div className={`absolute left-3 top-3 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.3em] text-white transition-all duration-200 ${
+          tile.isSpeaking ? 'bg-cyan-500/90 animate-pulse' : 'bg-black/65'
+        }`}>
           Speaker
         </div>
+        
+        {/* Speaking indicator */}
+        {tile.isSpeaking && (
+          <div className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-cyan-500/90 px-2 py-1 backdrop-blur">
+            <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+          </div>
+        )}
       </div>
       <div className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-600">
         <div className="flex items-center gap-2">

@@ -14,6 +14,8 @@ import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
 import { webrtcManager } from '../lib/webrtc';
 import { NetworkMonitor } from '../lib/networkMonitor';
+import { ActiveSpeakerDetector } from '../lib/activeSpeaker';
+import { config } from '../config';
 import ParticipantList from '../components/call/ParticipantList';
 import PendingRequestsPanel from '../components/call/PendingRequestsPanel';
 import RoomSettings from '../components/call/RoomSettings';
@@ -133,6 +135,7 @@ export default function Call() {
   const activeScreenShareProducersRef = useRef<Set<string>>(new Set());
   const isStoppingScreenShareRef = useRef(false);
   const networkMonitorRef = useRef<NetworkMonitor | null>(null);
+  const activeSpeakerDetectorRef = useRef<ActiveSpeakerDetector | null>(null);
   const pendingParticipantEventsRef = useRef<Map<string, Array<() => void>>>(new Map());
   const [showPendingRequests, setShowPendingRequests] = useState(false);
   const [showRoomSettings, setShowRoomSettings] = useState(false);
@@ -149,6 +152,7 @@ export default function Call() {
   const [deviceDialogType, setDeviceDialogType] = useState<'audio' | 'video'>('audio');
   const audioAutoMutedRef = useRef(false); // Track if we auto-muted due to device issue
   const videoAutoMutedRef = useRef(false); // Track if we auto-muted due to device issue
+  const [localIsSpeaking, setLocalIsSpeaking] = useState(false); // Track local user speaking state independently
   const showChatPanelRef = useRef(showChatPanel);
   const [localForceState, setLocalForceState] = useState<{
     audio: boolean;
@@ -730,6 +734,15 @@ export default function Call() {
         return;
       }
       
+      // Cleanup active speaker detector
+      if (activeSpeakerDetectorRef.current) {
+        activeSpeakerDetectorRef.current.cleanup();
+        activeSpeakerDetectorRef.current = null;
+      }
+      
+      // Reset local speaking state on unmount
+      setLocalIsSpeaking(false);
+      
       hasConnectedRef.current = false;
       consumingProducersRef.current.clear();
       screenShareProducersRef.current.clear();
@@ -920,6 +933,7 @@ export default function Call() {
         
         // Reset state
         resetCallState();
+        setLocalIsSpeaking(false);
         
         // Clear consuming producers
         consumingProducersRef.current.clear();
@@ -1217,7 +1231,38 @@ export default function Call() {
         // Only produce if track exists and is not ended
         if (audioTrack && audioTrack.readyState !== 'ended') {
           try {
-            await webrtcManager.produceAudio(audioTrack);
+            // Initialize detector if not already initialized
+            if (!activeSpeakerDetectorRef.current) {
+              activeSpeakerDetectorRef.current = new ActiveSpeakerDetector(config.features.voiceIndicator);
+            }
+            
+            const audioProducer = await webrtcManager.produceAudio(audioTrack);
+            
+            // Start monitoring local audio for active speaker detection
+            if (audioProducer && user?.id && activeSpeakerDetectorRef.current) {
+              activeSpeakerDetectorRef.current.startMonitoringLocal(
+                audioTrack,
+                user.id,
+                (isActive) => {
+                  // Update LOCAL speaking state immediately and independently
+                  setLocalIsSpeaking(isActive);
+                  
+                  // Emit to other participants
+                  socketManager.emitActiveSpeaker(isActive);
+                  
+                  // Update global activeSpeaker for others to see (but don't rely on it for local UI)
+                  if (isActive) {
+                    setActiveSpeaker(user.id);
+                  } else {
+                    const { activeSpeakerId } = useCallStore.getState();
+                    if (activeSpeakerId === user.id) {
+                      setActiveSpeaker(null);
+                    }
+                  }
+                },
+                audioProducer
+              );
+            }
           } catch (error: any) {
             console.error('Error producing audio:', error);
             if (error.message?.includes('track ended')) {
@@ -1524,6 +1569,12 @@ export default function Call() {
       if (data?.userId) {
         pendingParticipantEventsRef.current.delete(data.userId);
       }
+      
+      // Stop active speaker detection for this user
+      if (activeSpeakerDetectorRef.current && data?.userId) {
+        activeSpeakerDetectorRef.current.stopMonitoring(data.userId);
+      }
+      
       removeParticipant(data.userId);
       
       // Close remote stream
@@ -2310,7 +2361,7 @@ export default function Call() {
       
       consumingProducersRef.current.add(producerId);
 
-      console.log('Starting to consume producer:', { producerId, userId: resolvedUserId, kind });
+        console.log('Starting to consume producer:', { producerId, userId: resolvedUserId, kind });
       
       const track = await webrtcManager.consumeProducer(producerId);
       
@@ -2320,6 +2371,43 @@ export default function Call() {
       if (!track) {
         console.warn('No track received from consumer for producer:', producerId);
         return;
+      }
+
+      // Start active speaker detection for remote audio tracks
+      if (track.kind === 'audio' && resolvedUserId && activeSpeakerDetectorRef.current) {
+        // Get consumer from webrtcManager - use getConsumerEntries and find by producerId
+        const consumerEntries = webrtcManager.getConsumerEntries();
+        const consumerEntry = consumerEntries.find(entry => entry.producerId === producerId);
+        
+        if (consumerEntry?.consumer) {
+          activeSpeakerDetectorRef.current.startMonitoringRemote(
+            resolvedUserId,
+            consumerEntry.consumer,
+            producerId,
+            (userId, isActive) => {
+              // Update local state immediately for UI responsiveness
+              if (isActive) {
+                setActiveSpeaker(userId);
+                runOrQueueParticipantUpdate(userId, () => {
+                  updateParticipant(userId, { 
+                    isSpeaking: true
+                  });
+                });
+              } else {
+                const { activeSpeakerId: currentActiveSpeaker } = useCallStore.getState();
+                if (currentActiveSpeaker === userId) {
+                  setActiveSpeaker(null);
+                }
+                runOrQueueParticipantUpdate(userId, () => {
+                  updateParticipant(userId, { 
+                    isSpeaking: false
+                  });
+                });
+              }
+              // Emit to other participants only for local user (not needed for remote, backend handles it)
+            }
+          );
+        }
       }
 
       // Verify track is still live before adding to stream
@@ -2478,6 +2566,16 @@ export default function Call() {
     
     isLeavingRef.current = true;
     setIsLeaving(true);
+    
+    // Cleanup active speaker detector
+    if (activeSpeakerDetectorRef.current) {
+      activeSpeakerDetectorRef.current.cleanup();
+      activeSpeakerDetectorRef.current = null;
+    }
+    
+    // Reset local speaking state
+    setLocalIsSpeaking(false);
+    
     if (networkMonitorRef.current) {
       networkMonitorRef.current.stop();
       networkMonitorRef.current = null;
@@ -2758,7 +2856,9 @@ export default function Call() {
     stream: localStream ?? null,
     isAudioMuted,
     isVideoMuted,
-    isSpeaking: activeSpeakerId === user?.id,
+    // Use independent localIsSpeaking state instead of activeSpeakerId check
+    // This prevents remote users from overwriting local speaking state
+    isSpeaking: localIsSpeaking,
     hasRaisedHand: user?.id ? raisedHands.has(user.id) : false,
   };
 
@@ -3174,6 +3274,7 @@ export default function Call() {
         <BottomControlsBar
           isAudioMuted={isAudioMuted}
           audioForceActive={audioForceActive}
+          isSpeaking={localTile.isSpeaking}
           hostControls={hostControls}
           deviceStatus={deviceStatus}
           showAudioDropdown={showAudioDropdown}

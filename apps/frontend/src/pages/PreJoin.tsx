@@ -5,7 +5,11 @@ import { mediaManager } from '../lib/media';
 import { toast } from 'react-hot-toast';
 import WarningBadge from '../components/shared/WarningBadge';
 import DevicePermissionDialog from '../components/call/DevicePermissionDialog';
+import SpeakingIndicator from '../components/call/SpeakingIndicator';
 import { getAudioDeviceStatus, getVideoDeviceStatus, setupPermissionListener, setupDeviceChangeListener } from '../lib/deviceStatus';
+import { ActiveSpeakerDetector } from '../lib/activeSpeaker';
+import { config } from '../config';
+import { DotLottieReact } from '@lottiefiles/dotlottie-react';
 
 interface MediaDeviceInfo {
   deviceId: string;
@@ -42,6 +46,8 @@ export default function PreJoin() {
   const [deviceDialogType, setDeviceDialogType] = useState<'audio' | 'video'>('audio');
   const audioAutoMutedRef = useRef(false);
   const videoAutoMutedRef = useRef(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const detectorRef = useRef<ActiveSpeakerDetector | null>(null);
 
   useEffect(() => {
     clearPermissionErrors();
@@ -112,6 +118,11 @@ export default function PreJoin() {
   }, [localStream, setDeviceStatus, settings.joinWithAudio, settings.joinWithVideo]);
 
   useEffect(() => {
+    // Initialize detector
+    if (!detectorRef.current) {
+      detectorRef.current = new ActiveSpeakerDetector(config.features.voiceIndicator);
+    }
+
     // Start preview if either audio or video is enabled
     if ((settings.joinWithAudio || settings.joinWithVideo) && hasDevices) {
       startPreview();
@@ -123,6 +134,10 @@ export default function PreJoin() {
       // Cleanup on unmount
       if (settings.joinWithAudio || settings.joinWithVideo) {
         stopPreview();
+      }
+      // Cleanup detector
+      if (detectorRef.current) {
+        detectorRef.current.cleanup();
       }
     };
   }, [settings.joinWithVideo, settings.joinWithAudio, selectedDevices, hasDevices]);
@@ -180,6 +195,51 @@ export default function PreJoin() {
           videoRef.current.srcObject = null;
         }
         setLocalStream(stream);
+
+        // Start active speaker detection for local audio track
+        if (settings.joinWithAudio && detectorRef.current) {
+          const audioTrack = stream.getAudioTracks()[0];
+          if (audioTrack && audioTrack.readyState === 'live' && audioTrack.enabled) {
+            // Use a placeholder userId for PreJoin (will use actual userId in Call)
+            const placeholderUserId = 'local-preview';
+            
+            // Stop any existing monitoring first (in case audio track was replaced)
+            detectorRef.current.stopMonitoring(placeholderUserId);
+            
+            // Small delay to ensure track is fully ready
+            setTimeout(() => {
+              if (detectorRef.current && audioTrack.readyState === 'live' && audioTrack.enabled) {
+                console.log('[PreJoin] Starting active speaker detection for local audio track', {
+                  trackId: audioTrack.id,
+                  trackEnabled: audioTrack.enabled,
+                  trackReadyState: audioTrack.readyState,
+                  trackSettings: audioTrack.getSettings?.()
+                });
+                detectorRef.current.startMonitoringLocal(
+                  audioTrack,
+                  placeholderUserId,
+                  (isActive) => {
+                    console.log('[PreJoin] Active speaker state changed:', isActive);
+                    setIsSpeaking(isActive);
+                  },
+                  undefined, // No producer in PreJoin
+                  stream // Pass original stream so track stays active
+                );
+              } else {
+                console.warn('[PreJoin] Audio track not ready after delay:', {
+                  readyState: audioTrack?.readyState,
+                  enabled: audioTrack?.enabled
+                });
+              }
+            }, 100);
+          } else {
+            console.warn('[PreJoin] Audio track not available, not live, or disabled:', {
+              exists: !!audioTrack,
+              readyState: audioTrack?.readyState,
+              enabled: audioTrack?.enabled
+            });
+          }
+        }
       }
     } catch (error: any) {
       console.error('Failed to start preview:', error);
@@ -218,6 +278,12 @@ export default function PreJoin() {
   };
 
   const stopPreview = () => {
+    // Stop active speaker detection
+    if (detectorRef.current) {
+      detectorRef.current.stopMonitoring('local-preview');
+      setIsSpeaking(false);
+    }
+
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
@@ -418,6 +484,17 @@ export default function PreJoin() {
                 {settings.joinWithVideo && (
                   <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_25%_25%,rgba(34,197,94,0.18),transparent_60%)]" />
                 )}
+                {/* Speaking indicator overlay */}
+                {settings.joinWithAudio && (
+                  <div className="absolute bottom-4 right-4 pointer-events-none z-50">
+                    {isSpeaking ? (
+                      <SpeakingIndicator isSpeaking={isSpeaking} size="md" />
+                    ) : (
+                      // Debug: Show a subtle indicator when audio is enabled but not speaking
+                      <div className="w-3 h-3 rounded-full bg-gray-500/50 opacity-50" title="Audio monitoring active (not speaking)" />
+                    )}
+                  </div>
+                )}
                 <div className="absolute top-4 left-4 flex flex-wrap items-center gap-3 text-xs font-medium text-white">
                   <div className="inline-flex items-center gap-2 rounded-full bg-emerald-500/80 px-3 py-1 backdrop-blur">
                     <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-white" />
@@ -452,9 +529,35 @@ export default function PreJoin() {
                       >
                         {isMicActuallyActive ? (
                           <>
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                            </svg>
+                            <div className="relative h-6 w-6 flex items-center justify-center">
+                              {/* Lottie mic animation - show when speaking, otherwise show static mic icon */}
+                              {isSpeaking ? (
+                                <DotLottieReact
+                                  src="/micanimation.json"
+                                  loop
+                                  autoplay
+                                  style={{
+                                    width: '24px',
+                                    height: '24px',
+                                  }}
+                                />
+                              ) : (
+                                <svg 
+                                  className="h-4 w-4 relative z-10" 
+                                  viewBox="0 0 24 24" 
+                                  fill="none" 
+                                  stroke="currentColor"
+                                  xmlns="http://www.w3.org/2000/svg"
+                                >
+                                  <path 
+                                    strokeLinecap="round" 
+                                    strokeLinejoin="round" 
+                                    strokeWidth={1.8} 
+                                    d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" 
+                                  />
+                                </svg>
+                              )}
+                            </div>
                             Mic active
                           </>
                         ) : (

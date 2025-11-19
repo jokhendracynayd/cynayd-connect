@@ -104,6 +104,17 @@ export const config = {
     return buildSocketUrl();
   },
   signalingPath: '/socket',
+  
+  features: {
+    voiceIndicator: {
+      enabled: import.meta.env.VITE_ENABLE_VOICE_INDICATOR !== 'false',
+      method: (import.meta.env.VITE_VOICE_INDICATOR_METHOD || 'stats') as 'stats' | 'audiocontext' | 'hybrid',
+      updateInterval: parseInt(import.meta.env.VITE_VOICE_UPDATE_INTERVAL || '500', 10),
+      debounceDelay: parseInt(import.meta.env.VITE_VOICE_DEBOUNCE_DELAY || '200', 10),
+      audioThreshold: parseFloat(import.meta.env.VITE_VOICE_THRESHOLD || '-50'),
+      silenceThreshold: parseFloat(import.meta.env.VITE_VOICE_SILENCE_THRESHOLD || '-60'),
+    },
+  },
 };
 
 // Debug logging (only in development)

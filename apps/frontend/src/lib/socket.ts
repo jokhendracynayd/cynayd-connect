@@ -396,6 +396,12 @@ class SocketManager {
     this.socket.emit('raised-hand', { uid, isRaised });
   }
 
+  emitActiveSpeaker(isActiveSpeaker: boolean): void {
+    if (!this.socket) return;
+    const uid = (this.socket as any).data?.userId || '';
+    this.socket.emit('active-speaker', { uid, isActiveSpeaker });
+  }
+
   startScreenShare(producerId: string): Promise<any> {
     return new Promise((resolve, reject) => {
       if (!this.socket) return reject(new Error('Not connected'));

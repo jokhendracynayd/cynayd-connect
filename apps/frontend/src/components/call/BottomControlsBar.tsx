@@ -24,6 +24,7 @@ interface BottomControlsBarProps {
   // Audio control props
   isAudioMuted: boolean;
   audioForceActive: boolean;
+  isSpeaking?: boolean;
   hostControls: HostControls;
   deviceStatus: DeviceStatus;
   showAudioDropdown: boolean;
@@ -74,6 +75,7 @@ interface BottomControlsBarProps {
 export default function BottomControlsBar({
   isAudioMuted,
   audioForceActive,
+  isSpeaking = false,
   hostControls,
   deviceStatus,
   showAudioDropdown,
@@ -123,6 +125,7 @@ export default function BottomControlsBar({
           <AudioControlGroup
             isMuted={isAudioMuted}
             isForceActive={audioForceActive}
+            isSpeaking={isSpeaking}
             hostControls={hostControls}
             deviceStatus={deviceStatus.audio}
             showDropdown={showAudioDropdown}
