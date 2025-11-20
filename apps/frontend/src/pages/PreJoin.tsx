@@ -117,6 +117,65 @@ export default function PreJoin() {
     };
   }, [localStream, setDeviceStatus, settings.joinWithAudio, settings.joinWithVideo]);
 
+  // Monitor track mute state changes (for system mute detection)
+  useEffect(() => {
+    const audioTrack = localStream?.getAudioTracks()[0];
+    const videoTrack = localStream?.getVideoTracks()[0];
+
+    const handleTrackMuteChange = async () => {
+      const [audioStatus, videoStatus] = await Promise.all([
+        getAudioDeviceStatus(audioTrack),
+        getVideoDeviceStatus(videoTrack),
+      ]);
+
+      setDeviceStatus('audio', audioStatus);
+      setDeviceStatus('video', videoStatus);
+
+      // Handle audio: Track if we should force disable, but DON'T change settings here to avoid loop
+      if (audioStatus.issueType !== 'none') {
+        if (settings.joinWithAudio && !audioAutoMutedRef.current) {
+          audioAutoMutedRef.current = true;
+        }
+      } else {
+        if (audioAutoMutedRef.current) {
+          audioAutoMutedRef.current = false;
+        }
+      }
+
+      // Handle video: Track if we should force disable, but DON'T change settings here to avoid loop
+      if (videoStatus.issueType !== 'none') {
+        if (settings.joinWithVideo && !videoAutoMutedRef.current) {
+          videoAutoMutedRef.current = true;
+        }
+      } else {
+        if (videoAutoMutedRef.current) {
+          videoAutoMutedRef.current = false;
+        }
+      }
+    };
+
+    if (audioTrack) {
+      audioTrack.addEventListener('mute', handleTrackMuteChange);
+      audioTrack.addEventListener('unmute', handleTrackMuteChange);
+    }
+
+    if (videoTrack) {
+      videoTrack.addEventListener('mute', handleTrackMuteChange);
+      videoTrack.addEventListener('unmute', handleTrackMuteChange);
+    }
+
+    return () => {
+      if (audioTrack) {
+        audioTrack.removeEventListener('mute', handleTrackMuteChange);
+        audioTrack.removeEventListener('unmute', handleTrackMuteChange);
+      }
+      if (videoTrack) {
+        videoTrack.removeEventListener('mute', handleTrackMuteChange);
+        videoTrack.removeEventListener('unmute', handleTrackMuteChange);
+      }
+    };
+  }, [localStream, setDeviceStatus, settings.joinWithAudio, settings.joinWithVideo]);
+
   useEffect(() => {
     // Initialize detector
     if (!detectorRef.current) {
@@ -400,6 +459,50 @@ export default function PreJoin() {
       setTimeout(() => startPreview(), 300);
     }
   };
+
+  // Keyboard shortcuts for mute/unmute
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Check if user is typing in an input field
+      const target = event.target as HTMLElement;
+      const isInputField = 
+        target.tagName === 'INPUT' || 
+        target.tagName === 'TEXTAREA' || 
+        target.isContentEditable;
+      
+      // Only handle shortcuts if not typing in an input field
+      if (isInputField) {
+        return;
+      }
+
+      // Check if Ctrl+Shift (Windows/Linux) or Cmd+Shift (Mac) is pressed
+      const isModifierPressed = (event.ctrlKey || event.metaKey) && event.shiftKey;
+      
+      if (isModifierPressed) {
+        switch (event.key.toLowerCase()) {
+          case 'd':
+            // Ctrl+Shift+D or Cmd+Shift+D: Toggle audio mute/unmute
+            event.preventDefault();
+            event.stopPropagation();
+            handleToggleAudio();
+            break;
+          case 'f':
+            // Ctrl+Shift+F or Cmd+Shift+F: Toggle video mute/unmute
+            event.preventDefault();
+            event.stopPropagation();
+            handleToggleVideo();
+            break;
+          default:
+            break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [handleToggleAudio, handleToggleVideo]);
 
   const handleJoin = async () => {
     if (!roomCode) return;

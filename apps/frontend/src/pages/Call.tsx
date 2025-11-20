@@ -514,50 +514,6 @@ export default function Call() {
     setRaiseHand,
   });
 
-  // Keyboard shortcuts for mute/unmute
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Check if user is typing in an input field
-      const target = event.target as HTMLElement;
-      const isInputField = 
-        target.tagName === 'INPUT' || 
-        target.tagName === 'TEXTAREA' || 
-        target.isContentEditable;
-      
-      // Only handle shortcuts if not typing in an input field
-      if (isInputField) {
-        return;
-      }
-
-      // Check if Ctrl (Windows/Linux) or Cmd (Mac) is pressed
-      const isModifierPressed = event.ctrlKey || event.metaKey;
-      
-      if (isModifierPressed) {
-        switch (event.key.toLowerCase()) {
-          case 'd':
-            // Ctrl+D or Cmd+D: Toggle audio mute/unmute
-            event.preventDefault();
-            event.stopPropagation();
-            handleToggleAudio();
-            break;
-          case 'f':
-            // Ctrl+F or Cmd+F: Toggle video mute/unmute
-            event.preventDefault();
-            event.stopPropagation();
-            handleToggleVideo();
-            break;
-          default:
-            break;
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown, true);
-    };
-  }, [handleToggleAudio, handleToggleVideo]);
-
   const recordingStatusValue = recording.status ?? null;
   const recordingIsRecording =
     recording.active && recordingStatusValue === 'RECORDING';
@@ -2878,6 +2834,111 @@ export default function Call() {
     handleDemoteFromCoHost,
     handleHostEndMeeting,
   } = useCallHostControls({ hostControls });
+
+  // Keyboard shortcuts for individual controls (only on Call page, not PreJoin)
+  // Ctrl+D: Toggle self microphone mute/unmute
+  // Ctrl+F: Toggle self camera mute/unmute
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Check if user is typing in an input field
+      const target = event.target as HTMLElement;
+      const isInputField = 
+        target.tagName === 'INPUT' || 
+        target.tagName === 'TEXTAREA' || 
+        target.isContentEditable;
+      
+      // Only handle shortcuts if not typing in an input field
+      if (isInputField) {
+        return;
+      }
+
+      // Check if Ctrl (Windows/Linux) or Cmd (Mac) is pressed WITHOUT Shift
+      const isModifierPressed = (event.ctrlKey || event.metaKey) && !event.shiftKey;
+      
+      if (isModifierPressed) {
+        switch (event.key.toLowerCase()) {
+          case 'd':
+            // Ctrl+D: Toggle self microphone mute/unmute
+            event.preventDefault();
+            event.stopPropagation();
+            handleToggleAudio();
+            break;
+          case 'f':
+            // Ctrl+F: Toggle self camera mute/unmute
+            event.preventDefault();
+            event.stopPropagation();
+            handleToggleVideo();
+            break;
+          default:
+            break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [handleToggleAudio, handleToggleVideo]);
+
+  // Keyboard shortcuts for host controls (only on Call page, not PreJoin)
+  // Ctrl+Shift+D: Mute/unmute all microphones (host only)
+  // Ctrl+Shift+F: Disable/enable all cameras (host only)
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Only allow shortcuts if user is host or admin
+      if (!isHost && !isAdmin) {
+        return;
+      }
+
+      // Check if user is typing in an input field
+      const target = event.target as HTMLElement;
+      const isInputField = 
+        target.tagName === 'INPUT' || 
+        target.tagName === 'TEXTAREA' || 
+        target.isContentEditable;
+      
+      // Only handle shortcuts if not typing in an input field
+      if (isInputField) {
+        return;
+      }
+
+      // Check if Ctrl+Shift (Windows/Linux) or Cmd+Shift (Mac) is pressed
+      const isModifierPressed = (event.ctrlKey || event.metaKey) && event.shiftKey;
+      
+      if (isModifierPressed) {
+        switch (event.key.toLowerCase()) {
+          case 'd':
+            // Ctrl+Shift+D: Toggle mute all microphones
+            event.preventDefault();
+            event.stopPropagation();
+            if (hostControls.audioForceAll) {
+              handleHostUnmuteAllAudio();
+            } else {
+              handleHostMuteAllAudio();
+            }
+            break;
+          case 'f':
+            // Ctrl+Shift+F: Toggle disable all cameras
+            event.preventDefault();
+            event.stopPropagation();
+            if (hostControls.videoForceAll) {
+              handleHostUnmuteAllVideo();
+            } else {
+              handleHostMuteAllVideo();
+            }
+            break;
+          default:
+            break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [isHost, isAdmin, hostControls.audioForceAll, hostControls.videoForceAll, handleHostMuteAllAudio, handleHostUnmuteAllAudio, handleHostMuteAllVideo, handleHostUnmuteAllVideo]);
 
   const handleEndMeetingForAll = useCallback(async () => {
     if (isEndingMeetingRef.current) {
