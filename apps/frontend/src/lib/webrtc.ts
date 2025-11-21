@@ -42,17 +42,17 @@ class WebRTCManager {
     if (participantCount >= 50) {
       // Large room: Reduce bitrates significantly
       return [
-        { 
+        {
           rid: 'r0',
           maxBitrate: 50000, // 50k (was 100k)
           scalabilityMode: 'S1T3',
         },
-        { 
+        {
           rid: 'r1',
           maxBitrate: 150000, // 150k (was 300k)
           scalabilityMode: 'S1T3',
         },
-        { 
+        {
           rid: 'r2',
           maxBitrate: 400000, // 400k (was 900k)
           scalabilityMode: 'S1T3',
@@ -61,17 +61,17 @@ class WebRTCManager {
     } else if (participantCount >= 25) {
       // Medium room: Moderate reduction
       return [
-        { 
+        {
           rid: 'r0',
           maxBitrate: 75000, // 75k (was 100k)
           scalabilityMode: 'S1T3',
         },
-        { 
+        {
           rid: 'r1',
           maxBitrate: 200000, // 200k (was 300k)
           scalabilityMode: 'S1T3',
         },
-        { 
+        {
           rid: 'r2',
           maxBitrate: 600000, // 600k (was 900k)
           scalabilityMode: 'S1T3',
@@ -80,17 +80,17 @@ class WebRTCManager {
     } else {
       // Small room: Use default bitrates
       return [
-        { 
+        {
           rid: 'r0',
           maxBitrate: 100000,
           scalabilityMode: 'S1T3',
         },
-        { 
+        {
           rid: 'r1',
           maxBitrate: 300000,
           scalabilityMode: 'S1T3',
         },
-        { 
+        {
           rid: 'r2',
           maxBitrate: 900000,
           scalabilityMode: 'S1T3',
@@ -131,7 +131,7 @@ class WebRTCManager {
     }
 
     const params = await socketManager.createTransport(true);
-    
+
     const transport = this.device.createSendTransport(params);
 
     // Debug: Log transport events
@@ -198,7 +198,7 @@ class WebRTCManager {
     }
 
     const params = await socketManager.createTransport(false);
-    
+
     const transport = this.device.createRecvTransport(params);
 
     transport.on('connect', async ({ dtlsParameters }, callback, errback) => {
@@ -270,7 +270,7 @@ class WebRTCManager {
     // Get participant count and determine optimal encoding bitrates
     const participantCount = this.getParticipantCount();
     const encodings = this.getVideoEncodings(participantCount);
-    
+
     console.log(`Creating video producer with ${participantCount} participants, using ${participantCount >= 50 ? 'large' : participantCount >= 25 ? 'medium' : 'small'} room bitrates`);
 
     const producer = await this.sendTransport.produce({
@@ -287,7 +287,7 @@ class WebRTCManager {
   }
 
   private async runConsumeTask<T>(task: () => Promise<T>): Promise<T> {
-    let releaseLock: () => void = () => {};
+    let releaseLock: () => void = () => { };
     const nextLock = new Promise<void>(resolve => {
       releaseLock = resolve;
     });
@@ -325,24 +325,24 @@ class WebRTCManager {
         if (transportState === 'failed' || transportState === 'closed') {
           throw new Error(`Cannot consume: transport is ${transportState}`);
         }
-        
+
         // Log state for debugging but proceed - transport will connect if needed
         if (transportState !== 'connected') {
           console.log(`Recv transport state: ${transportState} - will connect automatically during consume`);
         }
 
         console.log('Consuming producer:', producerId, 'transport:', this.recvTransport?.id);
-        
+
         const params = await socketManager.consume(
           this.recvTransport!.id,
           producerId,
           this.device!.rtpCapabilities
         );
 
-        console.log('Consume params received:', { 
-          id: params.id, 
-          producerId: params.producerId, 
-          kind: params.kind 
+        console.log('Consume params received:', {
+          id: params.id,
+          producerId: params.producerId,
+          kind: params.kind
         });
 
         // PERFORMANT: Minimal delay only when we have existing consumers
@@ -357,7 +357,7 @@ class WebRTCManager {
         // Retry logic only for duplicate a=mid errors (most common failure case)
         let retries = 1; // Only 1 retry to keep it fast
         let lastError: Error | null = null;
-        
+
         while (retries >= 0) {
           try {
             const consumer = await this.recvTransport!.consume({
@@ -368,7 +368,7 @@ class WebRTCManager {
             });
 
             this.consumers.set(producerId, consumer);
-            
+
             const trackInfo = {
               id: consumer.track.id,
               kind: consumer.track.kind,
@@ -376,16 +376,16 @@ class WebRTCManager {
               readyState: consumer.track.readyState,
               muted: consumer.track.muted,
             };
-            
+
             console.log('Consumer created:', consumer.id, 'track:', trackInfo);
-            
+
             // Verify track is actually live
             if (consumer.track.readyState !== 'live') {
               console.error('❌ WARNING: Track is not live! State:', consumer.track.readyState);
             } else {
               console.log('✅ Track is LIVE');
             }
-            
+
             if (consumer.track.muted) {
               console.warn('⚠️ Track is muted:', producerId);
             }
@@ -408,7 +408,7 @@ class WebRTCManager {
             consumer.track.onunmute = () => {
               console.log('✅ Consumer track unmuted:', producerId);
             };
-            
+
             // Monitor readyState changes
             const checkReadyState = () => {
               if (consumer.track.readyState === 'ended') {
@@ -417,7 +417,7 @@ class WebRTCManager {
                 console.log('✅ Track readyState is live:', producerId);
               }
             };
-            
+
             // Monitor readyState (note: readyState is not directly observable, so we check periodically)
             setTimeout(checkReadyState, 1000);
             setTimeout(checkReadyState, 3000);
@@ -430,13 +430,13 @@ class WebRTCManager {
             return consumer.track;
           } catch (error: any) {
             lastError = error;
-            
+
             // Only retry on duplicate a=mid errors (the specific issue we're fixing)
-            const isDuplicateMidError = error?.message?.includes('Duplicate a=mid') || 
-                                        error?.message?.includes('duplicate a=mid') ||
-                                        (error?.name === 'InvalidAccessError' && 
-                                         error?.message?.includes('setRemoteDescription'));
-            
+            const isDuplicateMidError = error?.message?.includes('Duplicate a=mid') ||
+              error?.message?.includes('duplicate a=mid') ||
+              (error?.name === 'InvalidAccessError' &&
+                error?.message?.includes('setRemoteDescription'));
+
             if (isDuplicateMidError && retries > 0) {
               console.warn(`⚠️ Duplicate a=mid error consuming ${producerId}, retrying... (${retries} retry left)`);
               // Slightly longer delay on retry to ensure SDP state stabilizes
@@ -444,12 +444,12 @@ class WebRTCManager {
               retries--;
               continue;
             }
-            
+
             // If not retryable or out of retries, throw immediately
             throw error;
           }
         }
-        
+
         // Should never reach here, but TypeScript needs it
         throw lastError || new Error('Failed to consume producer after retries');
       } catch (error) {
@@ -539,9 +539,22 @@ class WebRTCManager {
     try {
       producer.pause();
       await socketManager.pauseProducer(producer.id);
-      console.log(`${kind} producer paused:`, producer.id);
+
+      // Verify producer is actually paused
+      if (!producer.paused) {
+        console.warn(`⚠️ Producer ${kind} may not be paused correctly - paused state: ${producer.paused}`);
+      } else {
+        console.log(`✅ ${kind} producer paused successfully:`, producer.id);
+      }
     } catch (error) {
-      console.error(`Error pausing ${kind} producer:`, error);
+      console.error(`❌ Error pausing ${kind} producer:`, error);
+      // Try to rollback if pause failed
+      try {
+        producer.resume();
+        console.log(`Rolled back ${kind} producer pause after error`);
+      } catch (rollbackError) {
+        console.error(`Failed to rollback ${kind} producer:`, rollbackError);
+      }
       throw error;
     }
   }
@@ -553,14 +566,41 @@ class WebRTCManager {
       return;
     }
 
-    try {
-      producer.resume();
-      await socketManager.resumeProducer(producer.id);
-      console.log(`${kind} producer resumed:`, producer.id);
-    } catch (error) {
-      console.error(`Error resuming ${kind} producer:`, error);
-      throw error;
+    // Retry logic for resume (critical for audio)
+    let retries = 2;
+    let lastError: Error | null = null;
+
+    while (retries >= 0) {
+      try {
+        producer.resume();
+        await socketManager.resumeProducer(producer.id);
+
+        // Verify producer is actually resumed
+        if (producer.paused) {
+          console.warn(`⚠️ Producer ${kind} may not be resumed correctly - paused state: ${producer.paused}`);
+        } else {
+          console.log(`✅ ${kind} producer resumed successfully:`, producer.id);
+        }
+
+        return; // Success
+      } catch (error) {
+        lastError = error as Error;
+        console.error(`❌ Error resuming ${kind} producer (${retries} retries left):`, error);
+
+        if (retries > 0) {
+          // Wait before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, 100 * (3 - retries)));
+          retries--;
+        } else {
+          // All retries exhausted
+          break;
+        }
+      }
     }
+
+    // If we reach here, all retries failed
+    console.error(`❌ Failed to resume ${kind} producer after all retries`);
+    throw lastError || new Error(`Failed to resume ${kind} producer`);
   }
 
   async replaceVideoTrack(track: MediaStreamTrack): Promise<void> {
@@ -617,17 +657,17 @@ class WebRTCManager {
     const producer = await this.sendTransport.produce({
       track,
       encodings: [
-        { 
+        {
           rid: 'r0',
           maxBitrate: 2500000, // Higher bitrate for screen
           scalabilityMode: 'S1T3',
         },
-        { 
+        {
           rid: 'r1',
           maxBitrate: 1000000,
           scalabilityMode: 'S1T3',
         },
-        { 
+        {
           rid: 'r2',
           maxBitrate: 500000,
           scalabilityMode: 'S1T3',

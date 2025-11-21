@@ -60,10 +60,10 @@ const END_MEETING_FALLBACK_TIMEOUT_MS = 5000;
 export default function Call() {
   const { roomCode } = useParams<{ roomCode: string }>();
   const { user, token, hasCheckedAuth } = useAuthStore();
-  const { 
-    settings, 
-    localStream, 
-    setLocalStream, 
+  const {
+    settings,
+    localStream,
+    setLocalStream,
     isAudioMuted,
     isVideoMuted,
     setLocalAudioMuted,
@@ -118,17 +118,20 @@ export default function Call() {
     setRecordingState,
     resetRecordingState,
   } = useCallStore();
-  
+
   const navigate = useNavigate();
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const [localVideoElement, setLocalVideoElement] = useState<HTMLVideoElement | null>(null);
-  
+
   const setLocalVideoRef = useCallback((element: HTMLVideoElement | null) => {
     localVideoRef.current = element;
     setLocalVideoElement(element);
   }, []);
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const remoteVideoRefCallbacks = useRef<Map<string, (element: HTMLVideoElement | null) => void>>(new Map());
+  // Audio element refs for remote participants (for audio playback)
+  const remoteAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const hasEnabledAudioPlayback = useRef(false); // Track if user has interacted to enable audio
   const [isConnecting, setIsConnecting] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
@@ -229,7 +232,7 @@ export default function Call() {
     const updateDeviceStatus = async () => {
       const audioTrack = localStream?.getAudioTracks()[0];
       const videoTrack = localStream?.getVideoTracks()[0];
-      
+
       const [audioStatus, videoStatus] = await Promise.all([
         getAudioDeviceStatus(audioTrack),
         getVideoDeviceStatus(videoTrack),
@@ -270,7 +273,7 @@ export default function Call() {
       const audioTrack = localStream?.getAudioTracks()[0];
       const status = await getAudioDeviceStatus(audioTrack);
       setDeviceStatus('audio', status);
-      
+
       // Handle audio: Force mute when issues exist, auto-unmute when resolved
       if (status.issueType !== 'none') {
         if (!isAudioMuted) {
@@ -287,7 +290,7 @@ export default function Call() {
       const videoTrack = localStream?.getVideoTracks()[0];
       const status = await getVideoDeviceStatus(videoTrack);
       setDeviceStatus('video', status);
-      
+
       // Handle video: Force mute when issues exist, auto-unmute when resolved
       if (status.issueType !== 'none') {
         if (!isVideoMuted) {
@@ -524,18 +527,18 @@ export default function Call() {
   const recordingStatusText = recordingIsRecording
     ? 'Recording'
     : recordingIsUploading
-    ? 'Finalising recording'
-    : recordingIsStarting
-    ? 'Preparing recording'
-    : '';
+      ? 'Finalising recording'
+      : recordingIsStarting
+        ? 'Preparing recording'
+        : '';
 
   // Enforce force mute by actually disabling tracks and pausing producers
   useEffect(() => {
     const audioTrack = localStream?.getAudioTracks()[0];
     const audioProducer = webrtcManager.getProducer('audio');
-    
+
     if (!audioTrack) return;
-    
+
     if (audioForceActive) {
       // Host has force-muted - actually disable the track and pause producer
       if (audioTrack.enabled) {
@@ -562,9 +565,9 @@ export default function Call() {
   useEffect(() => {
     const videoTrack = localStream?.getVideoTracks()[0];
     const videoProducer = webrtcManager.getProducer('video');
-    
+
     if (!videoTrack) return;
-    
+
     if (videoForceActive) {
       // Host has force-muted video - actually disable the track and pause producer
       if (videoTrack.enabled) {
@@ -753,16 +756,16 @@ export default function Call() {
         console.log('Already leaving, skipping useEffect cleanup');
         return;
       }
-      
+
       // Cleanup active speaker detector
       if (activeSpeakerDetectorRef.current) {
         activeSpeakerDetectorRef.current.cleanup();
         activeSpeakerDetectorRef.current = null;
       }
-      
+
       // Reset local speaking state on unmount
       setLocalIsSpeaking(false);
-      
+
       hasConnectedRef.current = false;
       consumingProducersRef.current.clear();
       screenShareProducersRef.current.clear();
@@ -774,7 +777,7 @@ export default function Call() {
         }
       });
       eventListenersRef.current = {};
-      
+
       // Only call leaveRoom if user is actually leaving (not on initial mount issues)
       // Check if we're actually connected before calling leaveRoom
       const socket = (socketManager as any).socket;
@@ -788,7 +791,7 @@ export default function Call() {
 
   useEffect(() => {
     const videoEl = localVideoElement;
-    
+
     if (!videoEl) {
       return;
     }
@@ -824,18 +827,19 @@ export default function Call() {
   }, [localStream, localVideoElement]);
 
   useEffect(() => {
-    // Update remote video elements when streams are added or changed
+    // Update remote video AND audio elements when streams are added or changed
     remoteStreams.forEach((stream, userId) => {
+      // Handle VIDEO element
       const videoEl = remoteVideoRefs.current.get(userId);
       if (videoEl) {
         // Only update if stream changed OR if current srcObject has ended tracks
         const currentSrcObject = videoEl.srcObject as MediaStream | null;
-        const shouldUpdate = 
-          !currentSrcObject || 
+        const shouldUpdate =
+          !currentSrcObject ||
           currentSrcObject !== stream ||
-          (currentSrcObject.getVideoTracks().length > 0 && 
-           currentSrcObject.getVideoTracks()[0]?.readyState === 'ended');
-        
+          (currentSrcObject.getVideoTracks().length > 0 &&
+            currentSrcObject.getVideoTracks()[0]?.readyState === 'ended');
+
         if (shouldUpdate) {
           console.log('Updating video element srcObject for user:', userId, {
             hasVideo: stream.getVideoTracks().length > 0,
@@ -843,7 +847,7 @@ export default function Call() {
             hasAudio: stream.getAudioTracks().length > 0,
           });
           videoEl.srcObject = stream;
-          
+
           // Force play if paused
           if (videoEl.paused) {
             videoEl.play().catch(err => {
@@ -852,8 +856,80 @@ export default function Call() {
           }
         }
       }
+
+      // Handle AUDIO element (CRITICAL for audio playback)
+      const audioEl = remoteAudioRefs.current.get(userId);
+      if (audioEl) {
+        const currentAudioSrc = audioEl.srcObject as MediaStream | null;
+        const shouldUpdateAudio =
+          !currentAudioSrc ||
+          currentAudioSrc !== stream ||
+          (currentAudioSrc.getAudioTracks().length > 0 &&
+            currentAudioSrc.getAudioTracks()[0]?.readyState === 'ended');
+
+        if (shouldUpdateAudio) {
+          console.log('🔊 Updating audio element for user:', userId, {
+            hasAudio: stream.getAudioTracks().length > 0,
+            audioState: stream.getAudioTracks()[0]?.readyState,
+            audioEnabled: stream.getAudioTracks()[0]?.enabled,
+            audioMuted: stream.getAudioTracks()[0]?.muted,
+          });
+
+          audioEl.srcObject = stream;
+          audioEl.volume = 1.0; // Ensure volume is at maximum
+
+          // Try to play audio
+          if (audioEl.paused) {
+            audioEl.play().catch(err => {
+              // Autoplay might be blocked by browser policy
+              if (err.name === 'NotAllowedError') {
+                console.warn('⚠️ Audio autoplay blocked for user:', userId, '- waiting for user interaction');
+                // Will be retried after user interaction (see separate handler)
+              } else {
+                console.error('Error playing audio for user:', userId, err);
+              }
+            });
+          }
+        }
+      }
     });
   }, [remoteStreams]);
+
+  // Handle browser autoplay policy - retry audio playback after user interaction
+  useEffect(() => {
+    const handleUserInteraction = () => {
+      if (hasEnabledAudioPlayback.current) {
+        return; // Already handled
+      }
+
+      console.log('🎵 User interaction detected - enabling audio playback');
+      hasEnabledAudioPlayback.current = true;
+
+      // Try to play all paused audio elements
+      remoteAudioRefs.current.forEach((audioEl, userId) => {
+        if (audioEl.paused && audioEl.srcObject) {
+          audioEl.play()
+            .then(() => {
+              console.log('✅ Audio playback enabled for user:', userId);
+            })
+            .catch(err => {
+              console.error('Failed to enable audio for user:', userId, err);
+            });
+        }
+      });
+    };
+
+    // Listen for user interactions (click, keypress, touchstart)
+    window.addEventListener('click', handleUserInteraction, { once: true });
+    window.addEventListener('keypress', handleUserInteraction, { once: true });
+    window.addEventListener('touchstart', handleUserInteraction, { once: true });
+
+    return () => {
+      window.removeEventListener('click', handleUserInteraction);
+      window.removeEventListener('keypress', handleUserInteraction);
+      window.removeEventListener('touchstart', handleUserInteraction);
+    };
+  }, []);
 
   // Handle browser tab/window close - cleanup on beforeunload
   useEffect(() => {
@@ -861,7 +937,7 @@ export default function Call() {
       // Attempt cleanup before page unloads
       // Note: Modern browsers limit what can be done in beforeunload
       console.log('Page unloading, attempting cleanup...');
-      
+
       // Force synchronous cleanup operations
       try {
         webrtcManager.cleanup();
@@ -870,31 +946,37 @@ export default function Call() {
         consumingProducersRef.current.clear();
         screenShareProducersRef.current.clear();
         pendingParticipantEventsRef.current.clear();
-        
+
         // Clear all remote streams
         remoteStreams.forEach((stream) => {
           stream.getTracks().forEach(track => track.stop());
         });
-        
+
         // Clear all screen share streams
         screenShareStreams.forEach((stream) => {
           stream.getTracks().forEach(track => track.stop());
         });
-        
+
         // Clear video refs
         remoteVideoRefs.current.forEach((videoEl) => {
           if (videoEl) videoEl.srcObject = null;
         });
         if (localVideoRef.current) localVideoRef.current.srcObject = null;
-        
+
+        // Clear audio refs
+        remoteAudioRefs.current.forEach((audioEl) => {
+          if (audioEl) audioEl.srcObject = null;
+        });
+        remoteAudioRefs.current.clear();
+
         // Try to leave room via socket (may not complete due to browser limits)
-        socketManager.leaveRoom().catch(() => {});
+        socketManager.leaveRoom().catch(() => { });
         socketManager.disconnect();
       } catch (err) {
         console.warn('Error during beforeunload cleanup:', err);
       }
     };
-    
+
     // Use pagehide as well for better browser support
     const handlePageHide = () => {
       console.log('Page hiding, cleaning up...');
@@ -913,7 +995,7 @@ export default function Call() {
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     window.addEventListener('pagehide', handlePageHide);
-    
+
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handlePageHide);
@@ -927,42 +1009,48 @@ export default function Call() {
       try {
         // Clean up WebRTC resources
         webrtcManager.cleanup();
-        
+
         // Stop local media
         mediaManager.stopLocalMedia();
         mediaManager.stopScreenShare();
-        
+
         // Clear all remote streams
         remoteStreams.forEach((stream) => {
           stream.getTracks().forEach(track => track.stop());
         });
         setRemoteStreams(new Map());
-        
+
         // Clear all screen share streams
         screenShareStreams.forEach((stream) => {
           stream.getTracks().forEach(track => track.stop());
         });
         setScreenShareStreams(new Map());
-        
+
         // Clear video refs
         remoteVideoRefs.current.forEach((videoEl) => {
           if (videoEl) videoEl.srcObject = null;
         });
         remoteVideoRefs.current.clear();
         if (localVideoRef.current) localVideoRef.current.srcObject = null;
-        
+
+        // Clear audio refs
+        remoteAudioRefs.current.forEach((audioEl) => {
+          if (audioEl) audioEl.srcObject = null;
+        });
+        remoteAudioRefs.current.clear();
+
         // Reset state
         resetCallState();
         setLocalIsSpeaking(false);
-        
+
         // Clear consuming producers
         consumingProducersRef.current.clear();
         screenShareProducersRef.current.clear();
         pendingParticipantEventsRef.current.clear();
-        
+
         // Show notification
         toast.error('Connection lost. Returning to home.');
-        
+
         // Navigate to home after a short delay
         setTimeout(() => {
           navigate('/');
@@ -973,9 +1061,9 @@ export default function Call() {
         navigate('/');
       }
     };
-    
+
     socketManager.on('disconnect', handleDisconnect);
-    
+
     return () => {
       socketManager.off('disconnect', handleDisconnect);
     };
@@ -983,13 +1071,13 @@ export default function Call() {
 
   const connectToRoom = async () => {
     if (!roomCode || !user || !preJoinCompleted) return;
-    
+
     hasHandledRoomEndedRef.current = false;
     isEndingMeetingRef.current = false;
     setIsEndingMeeting(false);
 
     resetRecordingState();
-    
+
     let effectiveAudioMuted = isAudioMuted;
     let effectiveVideoMuted = isVideoMuted;
     let selfAudioForceMuted = false;
@@ -1003,10 +1091,10 @@ export default function Call() {
       navigate('/login');
       return;
     }
-    
+
     setIsConnecting(true);
     setError(null);
-    
+
     // Clear existing participants and streams when connecting to new room
     participants.forEach(p => removeParticipant(p.userId));
     pendingParticipantEventsRef.current.clear();
@@ -1036,7 +1124,7 @@ export default function Call() {
           toast.success('Waiting for admin approval...');
           return; // Exit early, don't proceed with connection
         }
-        
+
         if (response?.requiresRequest) {
           // This should rarely happen now since backend auto-creates requests
           // But handle it just in case
@@ -1056,7 +1144,7 @@ export default function Call() {
               toast.success('Join request already pending. Waiting for admin approval...');
               return;
             }
-            
+
             // If socket fails, try API
             try {
               const result = await requestRoomJoin(roomCode);
@@ -1068,9 +1156,9 @@ export default function Call() {
               }
             } catch (apiError: any) {
               // Check if API also says "already pending"
-              if (apiError.response?.data?.message?.includes('already pending') || 
-                  apiError.response?.data?.message?.includes('already exists') ||
-                  apiError.message?.includes('already pending')) {
+              if (apiError.response?.data?.message?.includes('already pending') ||
+                apiError.response?.data?.message?.includes('already exists') ||
+                apiError.message?.includes('already pending')) {
                 setShowWaitingRoom(true);
                 setIsConnecting(false);
                 toast.success('Join request already pending. Waiting for admin approval...');
@@ -1081,44 +1169,44 @@ export default function Call() {
             }
           }
         }
-        
+
         // If we get here, it's a real error
         throw new Error(response?.error || 'Failed to join room');
       }
 
-    rosterEntries = Array.isArray(response.participants) ? response.participants : [];
-    setRecordingState(normalizeRecordingState(response.recording as RecordingStateEventPayload | null));
-    const selfRosterEntry = rosterEntries.find((participant) => participant?.userId === user.id);
+      rosterEntries = Array.isArray(response.participants) ? response.participants : [];
+      setRecordingState(normalizeRecordingState(response.recording as RecordingStateEventPayload | null));
+      const selfRosterEntry = rosterEntries.find((participant) => participant?.userId === user.id);
 
-    if (selfRosterEntry) {
-      selfAudioForceMuted = selfRosterEntry.isAudioForceMuted ?? false;
-      selfVideoForceMuted = selfRosterEntry.isVideoForceMuted ?? false;
-      if (typeof selfRosterEntry.isAudioMuted === 'boolean') {
-        effectiveAudioMuted = selfRosterEntry.isAudioMuted;
-        setLocalAudioMuted(selfRosterEntry.isAudioMuted);
+      if (selfRosterEntry) {
+        selfAudioForceMuted = selfRosterEntry.isAudioForceMuted ?? false;
+        selfVideoForceMuted = selfRosterEntry.isVideoForceMuted ?? false;
+        if (typeof selfRosterEntry.isAudioMuted === 'boolean') {
+          effectiveAudioMuted = selfRosterEntry.isAudioMuted;
+          setLocalAudioMuted(selfRosterEntry.isAudioMuted);
+        }
+        if (typeof selfRosterEntry.isVideoMuted === 'boolean') {
+          effectiveVideoMuted = selfRosterEntry.isVideoMuted;
+          setLocalVideoMuted(selfRosterEntry.isVideoMuted);
+        }
+        setLocalForceState(prev => ({
+          audio: selfRosterEntry.isAudioForceMuted ?? prev.audio,
+          video: selfRosterEntry.isVideoForceMuted ?? prev.video,
+          audioReason: selfRosterEntry.isAudioForceMuted
+            ? selfRosterEntry.forceMuteReason ?? null
+            : null,
+          videoReason: selfRosterEntry.isVideoForceMuted
+            ? selfRosterEntry.forceMuteReason ?? null
+            : null,
+        }));
       }
-      if (typeof selfRosterEntry.isVideoMuted === 'boolean') {
-        effectiveVideoMuted = selfRosterEntry.isVideoMuted;
-        setLocalVideoMuted(selfRosterEntry.isVideoMuted);
-      }
-      setLocalForceState(prev => ({
-        audio: selfRosterEntry.isAudioForceMuted ?? prev.audio,
-        video: selfRosterEntry.isVideoForceMuted ?? prev.video,
-        audioReason: selfRosterEntry.isAudioForceMuted
-          ? selfRosterEntry.forceMuteReason ?? null
-          : null,
-        videoReason: selfRosterEntry.isVideoForceMuted
-          ? selfRosterEntry.forceMuteReason ?? null
-          : null,
-      }));
-    }
 
       // Initialize Mediasoup device
       await webrtcManager.initialize(response.rtpCapabilities);
 
       // Stop any existing media from PreJoin page (may have stopped tracks)
       mediaManager.stopLocalMedia();
-      
+
       // Get fresh local media - always get new tracks (don't reuse stopped tracks from PreJoin)
       clearPermissionErrors();
       const audioPreferenceEnabled = settings.joinWithAudio && !selfAudioForceMuted;
@@ -1235,23 +1323,23 @@ export default function Call() {
           }
         }
       }
-      
+
       // Always create send transport (even without media, in case user enables later)
       // Only create if not already created
       if (!webrtcManager.getSendTransport()) {
         await webrtcManager.createSendTransport();
       }
-      
+
       // Create recv transport for consuming others' streams
       if (!webrtcManager.getRecvTransport()) {
         await webrtcManager.createRecvTransport();
       }
-      
+
       // Produce audio/video if available - check track state before producing
       if (stream) {
         const audioTrack = stream.getAudioTracks()[0];
         const videoTrack = stream.getVideoTracks()[0];
-        
+
         // Only produce if track exists and is not ended
         if (audioTrack && audioTrack.readyState !== 'ended') {
           try {
@@ -1259,9 +1347,9 @@ export default function Call() {
             if (!activeSpeakerDetectorRef.current) {
               activeSpeakerDetectorRef.current = new ActiveSpeakerDetector(config.features.voiceIndicator);
             }
-            
+
             const audioProducer = await webrtcManager.produceAudio(audioTrack);
-            
+
             // Start monitoring local audio for active speaker detection
             if (audioProducer && user?.id && activeSpeakerDetectorRef.current) {
               activeSpeakerDetectorRef.current.startMonitoringLocal(
@@ -1270,10 +1358,10 @@ export default function Call() {
                 (isActive) => {
                   // Update LOCAL speaking state immediately and independently
                   setLocalIsSpeaking(isActive);
-                  
+
                   // Emit to other participants
                   socketManager.emitActiveSpeaker(isActive);
-                  
+
                   // Update global activeSpeaker for others to see (but don't rely on it for local UI)
                   if (isActive) {
                     setActiveSpeaker(user.id);
@@ -1296,7 +1384,7 @@ export default function Call() {
             }
           }
         }
-        
+
         if (videoTrack && videoTrack.readyState !== 'ended') {
           try {
             await webrtcManager.produceVideo(videoTrack);
@@ -1326,7 +1414,7 @@ export default function Call() {
           }
         }
       }
-      
+
       if (pendingMuteUpdates.audio !== undefined || pendingMuteUpdates.video !== undefined) {
         const socket = (socketManager as any).socket;
         const localUserId = user?.id || '';
@@ -1345,7 +1433,7 @@ export default function Call() {
           }
         }
       }
-      
+
       const seenRosterUserIds = new Set<string>();
 
       rosterEntries.forEach((participantInfo) => {
@@ -1392,7 +1480,7 @@ export default function Call() {
             name: participantInfo.name,
             email: participantInfo.email,
             picture: participantInfo.picture,
-          role: (participantInfo.role as ParticipantRole) ?? 'PARTICIPANT',
+            role: (participantInfo.role as ParticipantRole) ?? 'PARTICIPANT',
             isAdmin: participantInfo.isAdmin ?? false,
             isAudioMuted: true,
             isVideoMuted: true,
@@ -1409,7 +1497,7 @@ export default function Call() {
           flushPendingParticipantEvents(participantInfo.userId);
         }
       }
-      
+
       // Consume existing producers from other participants
       // Note: Screen share producers are NOT included in otherProducers (backend emits screen-share-started separately)
       if (response.otherProducers && response.otherProducers.length > 0) {
@@ -1458,7 +1546,7 @@ export default function Call() {
       // For now, check if user is in the admin field of existing participants
       // or make an API call to get room info
       // TODO: Backend should return admin status in joinRoom response
-      
+
       // Try to determine admin status - check response first, then API
       // Backend now includes isAdmin and isPublic in the response
       let userIsAdmin = false;
@@ -1517,11 +1605,11 @@ export default function Call() {
           // Continue anyway, just won't have admin status
         }
       }
-      
+
       // Set up event listeners BEFORE loading pending requests
       // This ensures we can receive socket events immediately
       setupEventListeners();
-      
+
       // HYBRID APPROACH: If admin, load pending requests via API (reliable)
       // AND listen for socket events (real-time updates)
       if (userIsAdmin) {
@@ -1572,13 +1660,13 @@ export default function Call() {
         isAdmin: participant.isAdmin ?? undefined,
         isAudioMuted: participant.isAudioMuted ?? undefined,
         isVideoMuted: participant.isVideoMuted ?? undefined,
-         isAudioForceMuted: participant.isAudioForceMuted ?? undefined,
-         isVideoForceMuted: participant.isVideoForceMuted ?? undefined,
-         audioForceMutedAt: participant.audioForceMutedAt ?? undefined,
-         videoForceMutedAt: participant.videoForceMutedAt ?? undefined,
-         audioForceMutedBy: participant.audioForceMutedBy ?? undefined,
-         videoForceMutedBy: participant.videoForceMutedBy ?? undefined,
-         forceMuteReason: participant.forceMuteReason ?? undefined,
+        isAudioForceMuted: participant.isAudioForceMuted ?? undefined,
+        isVideoForceMuted: participant.isVideoForceMuted ?? undefined,
+        audioForceMutedAt: participant.audioForceMutedAt ?? undefined,
+        videoForceMutedAt: participant.videoForceMutedAt ?? undefined,
+        audioForceMutedBy: participant.audioForceMutedBy ?? undefined,
+        videoForceMutedBy: participant.videoForceMutedBy ?? undefined,
+        forceMuteReason: participant.forceMuteReason ?? undefined,
         isSpeaking: participant.isSpeaking ?? undefined,
         hasRaisedHand: participant.hasRaisedHand ?? undefined,
       });
@@ -1593,14 +1681,14 @@ export default function Call() {
       if (data?.userId) {
         pendingParticipantEventsRef.current.delete(data.userId);
       }
-      
+
       // Stop active speaker detection for this user
       if (activeSpeakerDetectorRef.current && data?.userId) {
         activeSpeakerDetectorRef.current.stopMonitoring(data.userId);
       }
-      
+
       removeParticipant(data.userId);
-      
+
       // Close remote stream
       setRemoteStreams(prev => {
         const newStreams = new Map(prev);
@@ -1648,7 +1736,7 @@ export default function Call() {
     const handleProducerClosed = (data: any) => {
       console.log('Producer closed:', data);
       const metadata = producerMetadataRef.current.get(data.producerId);
-      
+
       if (metadata?.source === 'screen') {
         cleanupScreenShare(metadata.userId, data.producerId);
         return; // Screen share cleanup handles its own stream removal
@@ -1728,11 +1816,11 @@ export default function Call() {
       updatedAt: data.updatedAt ?? data.createdAt ?? new Date().toISOString(),
       sender: data.sender ?? (data.userId
         ? {
-            id: data.userId,
-            name: data.name ?? data.senderName ?? 'Guest',
-            email: data.email ?? '',
-            picture: data.picture ?? null,
-          }
+          id: data.userId,
+          name: data.name ?? data.senderName ?? 'Guest',
+          email: data.email ?? '',
+          picture: data.picture ?? null,
+        }
         : null),
       recipient: data.recipient ?? null,
       clientMessageId: data.clientMessageId,
@@ -1840,45 +1928,45 @@ export default function Call() {
         typeof payload.timestamp === 'number'
           ? new Date(payload.timestamp).toISOString()
           : typeof payload.timestamp === 'string'
-          ? payload.timestamp
-          : new Date().toISOString();
+            ? payload.timestamp
+            : new Date().toISOString();
 
       applyParticipantForceState(payload.userId, {
         audio: payload.audio
           ? {
-              muted: payload.audio.muted ?? undefined,
-              forced: payload.audio.forced,
-              reason: payload.audio.forced
-                ? payload.audio.reason ?? payload.reason ?? undefined
-                : undefined,
-              forcedBy: payload.audio.forced
-                ? payload.audio.forcedBy ?? payload.actorUserId ?? undefined
-                : undefined,
-              timestamp:
-                payload.audio.timestamp !== undefined && payload.audio.timestamp !== null
-                  ? typeof payload.audio.timestamp === 'number'
-                    ? new Date(payload.audio.timestamp).toISOString()
-                    : payload.audio.timestamp
-                  : isoTimestamp,
-            }
+            muted: payload.audio.muted ?? undefined,
+            forced: payload.audio.forced,
+            reason: payload.audio.forced
+              ? payload.audio.reason ?? payload.reason ?? undefined
+              : undefined,
+            forcedBy: payload.audio.forced
+              ? payload.audio.forcedBy ?? payload.actorUserId ?? undefined
+              : undefined,
+            timestamp:
+              payload.audio.timestamp !== undefined && payload.audio.timestamp !== null
+                ? typeof payload.audio.timestamp === 'number'
+                  ? new Date(payload.audio.timestamp).toISOString()
+                  : payload.audio.timestamp
+                : isoTimestamp,
+          }
           : undefined,
         video: payload.video
           ? {
-              muted: payload.video.muted ?? undefined,
-              forced: payload.video.forced,
-              reason: payload.video.forced
-                ? payload.video.reason ?? payload.reason ?? undefined
-                : undefined,
-              forcedBy: payload.video.forced
-                ? payload.video.forcedBy ?? payload.actorUserId ?? undefined
-                : undefined,
-              timestamp:
-                payload.video.timestamp !== undefined && payload.video.timestamp !== null
-                  ? typeof payload.video.timestamp === 'number'
-                    ? new Date(payload.video.timestamp).toISOString()
-                    : payload.video.timestamp
-                  : isoTimestamp,
-            }
+            muted: payload.video.muted ?? undefined,
+            forced: payload.video.forced,
+            reason: payload.video.forced
+              ? payload.video.reason ?? payload.reason ?? undefined
+              : undefined,
+            forcedBy: payload.video.forced
+              ? payload.video.forcedBy ?? payload.actorUserId ?? undefined
+              : undefined,
+            timestamp:
+              payload.video.timestamp !== undefined && payload.video.timestamp !== null
+                ? typeof payload.video.timestamp === 'number'
+                  ? new Date(payload.video.timestamp).toISOString()
+                  : payload.video.timestamp
+                : isoTimestamp,
+          }
           : undefined,
       });
 
@@ -2182,7 +2270,7 @@ export default function Call() {
       requestedAt: string;
     }) => {
       console.log('Received join-request event:', data);
-      
+
       // Check if request already exists (avoid duplicates)
       const { pendingRequests: currentPendingRequests } = useCallStore.getState();
       const existingRequest = currentPendingRequests.find(r => r.id === data.requestId);
@@ -2200,7 +2288,7 @@ export default function Call() {
       } else {
         console.log('Join request already exists, skipping:', data.requestId);
       }
-      
+
       // Show notification badge
       if (!showPendingRequests) {
         // Could trigger a notification here
@@ -2222,7 +2310,7 @@ export default function Call() {
       }>;
     }) => {
       console.log('Received pending-requests-loaded socket event (verification):', data);
-      
+
       // If API call is in progress, don't process socket event yet (avoid race condition)
       // The API call will set the correct state, and if socket has new requests, they'll be caught later
       if (isLoadingPendingRequestsRef.current) {
@@ -2231,16 +2319,16 @@ export default function Call() {
         // For now, just log - the API will handle the initial load
         return;
       }
-      
+
       // Verify: Compare with current state and update if needed
       // This ensures we have the latest data even if API call missed something
       const socketRequestIds = new Set(data.requests.map(r => r.id));
       const { pendingRequests: currentPendingRequests } = useCallStore.getState();
-      
+
       // Check if socket has requests we don't have (shouldn't happen, but verify)
       let addedCount = 0;
       let updatedCount = 0;
-      
+
       data.requests.forEach(req => {
         const existingRequest = currentPendingRequests.find(r => r.id === req.id);
         if (!existingRequest) {
@@ -2260,7 +2348,7 @@ export default function Call() {
           updatedCount++;
         }
       });
-      
+
       // Check if we have requests that socket doesn't (stale data) - refresh from API
       const staleRequests = currentPendingRequests.filter(r => !socketRequestIds.has(r.id));
       if (staleRequests.length > 0) {
@@ -2272,7 +2360,7 @@ export default function Call() {
           });
         }
       }
-      
+
       // Only show notification for newly added requests (not verification updates)
       // Don't show if we just loaded via API (to avoid duplicate toasts)
       if (addedCount > 0 && !isLoadingPendingRequestsRef.current) {
@@ -2349,15 +2437,15 @@ export default function Call() {
         console.log('Already processing screen share producer:', producerId);
         return;
       }
-      
+
       consumingProducersRef.current.add(producerId);
-      
+
       console.log('Starting to consume screen share producer:', { producerId, userId });
-      
+
       const track = await webrtcManager.consumeProducer(producerId);
-      
+
       consumingProducersRef.current.delete(producerId);
-      
+
       if (!track) {
         console.warn('No track received from screen share consumer:', producerId);
         return;
@@ -2373,14 +2461,14 @@ export default function Call() {
 
       setScreenShareStreams(prev => {
         const newStreams = new Map(prev);
-        
+
         if (track.readyState === 'live') {
           const stream = new MediaStream([track]);
           newStreams.set(ownerId, stream);
           activeScreenShareProducersRef.current.add(producerId);
           console.log('Created screen share stream for user:', ownerId);
         }
-        
+
         return newStreams;
       });
     } catch (error) {
@@ -2396,11 +2484,11 @@ export default function Call() {
         console.log('Already processing producer:', producerId, '- skipping duplicate consumption');
         return;
       }
-      
+
       // Skip if this is a screen share producer (screen shares are handled separately)
       const metadata = producerMetadataRef.current.get(producerId);
       const resolvedUserId = userId ?? metadata?.userId;
-      
+
       if (metadata?.source === 'screen') {
         // IMPORTANT: Double-check if this is really a screen share
         // If user has no active screen share, this might be mislabeled camera video
@@ -2422,16 +2510,16 @@ export default function Call() {
           return;
         }
       }
-      
+
       consumingProducersRef.current.add(producerId);
 
-        console.log('Starting to consume producer:', { producerId, userId: resolvedUserId, kind });
-      
+      console.log('Starting to consume producer:', { producerId, userId: resolvedUserId, kind });
+
       const track = await webrtcManager.consumeProducer(producerId);
-      
+
       // Remove from processing set after getting track (even if null)
       consumingProducersRef.current.delete(producerId);
-      
+
       if (!track) {
         console.warn('No track received from consumer for producer:', producerId);
         return;
@@ -2442,7 +2530,7 @@ export default function Call() {
         // Get consumer from webrtcManager - use getConsumerEntries and find by producerId
         const consumerEntries = webrtcManager.getConsumerEntries();
         const consumerEntry = consumerEntries.find(entry => entry.producerId === producerId);
-        
+
         if (consumerEntry?.consumer) {
           activeSpeakerDetectorRef.current.startMonitoringRemote(
             resolvedUserId,
@@ -2453,7 +2541,7 @@ export default function Call() {
               if (isActive) {
                 setActiveSpeaker(userId);
                 runOrQueueParticipantUpdate(userId, () => {
-                  updateParticipant(userId, { 
+                  updateParticipant(userId, {
                     isSpeaking: true
                   });
                 });
@@ -2463,7 +2551,7 @@ export default function Call() {
                   setActiveSpeaker(null);
                 }
                 runOrQueueParticipantUpdate(userId, () => {
-                  updateParticipant(userId, { 
+                  updateParticipant(userId, {
                     isSpeaking: false
                   });
                 });
@@ -2474,9 +2562,104 @@ export default function Call() {
         }
       }
 
+      // Add track event listeners for robustness (CRITICAL for audio reliability)
+      const handleTrackEnded = () => {
+        console.error('❌ Track ended unexpectedly for producer:', producerId, 'kind:', track.kind);
+
+        // Update participant UI if it's audio/video
+        if (resolvedUserId) {
+          runOrQueueParticipantUpdate(resolvedUserId, () => {
+            if (track.kind === 'audio') {
+              updateParticipant(resolvedUserId, { isAudioMuted: true });
+            } else if (track.kind === 'video') {
+              updateParticipant(resolvedUserId, { isVideoMuted: true });
+            }
+          });
+        }
+
+        // Remove track from stream
+        setRemoteStreams(prev => {
+          if (!resolvedUserId) return prev;
+          const newStreams = new Map(prev);
+          const stream = newStreams.get(resolvedUserId);
+          if (stream) {
+            stream.removeTrack(track);
+            if (stream.getTracks().length === 0) {
+              newStreams.delete(resolvedUserId);
+            } else {
+              newStreams.set(resolvedUserId, new MediaStream(stream.getTracks()));
+            }
+          }
+          return newStreams;
+        });
+      };
+
+      const handleTrackMuted = () => {
+        console.warn('⚠️ Track muted for producer:', producerId, 'kind:', track.kind);
+        if (!resolvedUserId) return;
+
+        runOrQueueParticipantUpdate(resolvedUserId, () => {
+          if (track.kind === 'audio') {
+            updateParticipant(resolvedUserId, { isAudioMuted: true });
+          }
+          if (track.kind === 'video') {
+            updateParticipant(resolvedUserId, { isVideoMuted: true });
+          }
+        });
+      };
+
+      const handleTrackUnmuted = () => {
+        console.log('✅ Track unmuted for producer:', producerId, 'kind:', track.kind);
+        if (!resolvedUserId) return;
+
+        runOrQueueParticipantUpdate(resolvedUserId, () => {
+          if (track.kind === 'audio') {
+            updateParticipant(resolvedUserId, { isAudioMuted: false });
+
+            // Re-attach to audio element and try to play (in case autoplay failed initially)
+            const audioEl = remoteAudioRefs.current.get(resolvedUserId);
+            if (audioEl && audioEl.paused) {
+              audioEl.play().catch(err => {
+                if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
+                  console.error('Error playing audio after unmute:', err);
+                }
+              });
+            }
+          }
+          if (track.kind === 'video') {
+            updateParticipant(resolvedUserId, { isVideoMuted: false });
+          }
+        });
+      };
+
+      // Attach event listeners
+      track.addEventListener('ended', handleTrackEnded);
+      track.addEventListener('mute', handleTrackMuted);
+      track.addEventListener('unmute', handleTrackUnmuted);
+
       // Verify track is still live before adding to stream
       if (track.readyState === 'ended') {
         console.error('❌ Track already ended before adding to stream:', producerId);
+
+        // Retry consumption after a delay (race condition recovery)
+        // This handles cases where track ends briefly but producer is still active
+        const retryKey = `retry_${producerId}`;
+        const retryCount = (consumingProducersRef.current as any)[retryKey] || 0;
+
+        if (retryCount < 3) {
+          (consumingProducersRef.current as any)[retryKey] = retryCount + 1;
+          const retryDelay = 500 * Math.pow(2, retryCount); // Exponential backoff: 500ms, 1s, 2s
+
+          console.log(`Scheduling retry ${retryCount + 1}/3 for producer ${producerId} in ${retryDelay}ms`);
+          setTimeout(() => {
+            console.log(`Retrying consumption for producer ${producerId} (attempt ${retryCount + 1})`);
+            consumeProducer(producerId, userId, kind);
+          }, retryDelay);
+        } else {
+          console.error(`❌ Max retries (3) exceeded for producer ${producerId} - track permanently ended`);
+          delete (consumingProducersRef.current as any)[retryKey];
+        }
+
         return;
       }
 
@@ -2495,20 +2678,20 @@ export default function Call() {
         setRemoteStreams(prev => {
           const newStreams = new Map(prev);
           const existingStream = newStreams.get(resolvedUserId);
-          
+
           if (existingStream) {
             // Check if track of same kind already exists
             const existingTrackOfKind = existingStream.getTracks().find(
               t => t.kind === track.kind && t.id !== track.id
             );
-            
+
             if (existingTrackOfKind) {
               // If it's the SAME track, don't do anything
               if (existingTrackOfKind.id === track.id) {
                 console.log('Same track already in stream, skipping:', track.id);
                 return prev; // Return unchanged
               }
-              
+
               // Only replace if it's a DIFFERENT track (not the same one)
               console.log('Replacing existing track of kind:', track.kind, 'for user:', userId, {
                 oldTrackId: existingTrackOfKind.id,
@@ -2516,7 +2699,7 @@ export default function Call() {
                 newTrackId: track.id,
                 newTrackState: track.readyState,
               });
-              
+
               // Only remove old track if it's ended or if new track is live
               if (existingTrackOfKind.readyState === 'ended') {
                 console.log('Old track already ended, removing it');
@@ -2553,7 +2736,7 @@ export default function Call() {
                 return prev; // Return unchanged
               }
             }
-            
+
             // Only add track if it's still live
             if (track.readyState === 'live') {
               existingStream.addTrack(track);
@@ -2576,7 +2759,7 @@ export default function Call() {
               return prev; // Don't create stream with ended track
             }
           }
-          
+
           return newStreams;
         });
         console.log('Remote stream added to state:', { producerId, userId: resolvedUserId, kind });
@@ -2627,20 +2810,20 @@ export default function Call() {
       console.log('Leave already in progress, ignoring duplicate call');
       return;
     }
-    
+
     hasHandledRoomEndedRef.current = true;
     isLeavingRef.current = true;
     setIsLeaving(true);
-    
+
     // Cleanup active speaker detector
     if (activeSpeakerDetectorRef.current) {
       activeSpeakerDetectorRef.current.cleanup();
       activeSpeakerDetectorRef.current = null;
     }
-    
+
     // Reset local speaking state
     setLocalIsSpeaking(false);
-    
+
     if (networkMonitorRef.current) {
       networkMonitorRef.current.stop();
       networkMonitorRef.current = null;
@@ -2653,16 +2836,16 @@ export default function Call() {
       audioReason: null,
       videoReason: null,
     });
-    
+
     try {
       console.log('Leaving room, starting cleanup...');
       if (!options?.skipLoadingToast) {
         toast.loading('Leaving room...', { id: 'leaving' });
       }
-      
+
       // Step 1: Stop all local media tracks immediately (user experience)
       mediaManager.stopLocalMedia();
-      
+
       // Step 2: Clear local video ref
       if (localVideoRef.current) {
         try {
@@ -2672,14 +2855,14 @@ export default function Call() {
           console.warn('Error clearing local video ref:', err);
         }
       }
-      
+
       // Step 3: Close all WebRTC resources (producers, consumers, transports)
       try {
         webrtcManager.cleanup();
       } catch (err) {
         console.warn('Error cleaning up WebRTC:', err);
       }
-      
+
       // Step 4: Clear all remote streams and stop their tracks
       try {
         remoteStreams.forEach((stream, userId) => {
@@ -2710,14 +2893,14 @@ export default function Call() {
           }
         });
         setScreenShareStreams(new Map());
-        
+
         // Clear screen share producers ref
         screenShareProducersRef.current.clear();
         producerMetadataRef.current.clear();
         activeScreenShareProducersRef.current.clear();
         producerMetadataRef.current.clear();
         activeScreenShareProducersRef.current.clear();
-        
+
         // Stop local screen share if active
         if (isScreenSharing) {
           mediaManager.stopScreenShare();
@@ -2733,7 +2916,7 @@ export default function Call() {
       } catch (err) {
         console.warn('Error clearing screen share streams:', err);
       }
-      
+
       // Step 5: Clear all remote video refs
       try {
         remoteVideoRefs.current.forEach((videoEl, userId) => {
@@ -2750,7 +2933,7 @@ export default function Call() {
       } catch (err) {
         console.warn('Error clearing remote video refs:', err);
       }
-      
+
       // Step 6: Notify backend via socket (with timeout handling)
       try {
         const leaveResult = await socketManager.leaveRoom();
@@ -2766,45 +2949,45 @@ export default function Call() {
         console.warn('Error calling leaveRoom on socket:', err);
         // Continue with cleanup even if socket call fails
       }
-      
+
       // Step 7: Disconnect socket (this triggers backend cleanup)
       try {
         socketManager.disconnect();
       } catch (err) {
         console.warn('Error disconnecting socket:', err);
       }
-      
+
       // Step 8: Clear consuming producers ref
       consumingProducersRef.current.clear();
       pendingParticipantEventsRef.current.clear();
-      
+
       // Step 9: Reset all state in store
       resetCallState();
-      
+
       // Step 10: Show success and navigate
       if (options?.skipSuccessToast) {
         toast.dismiss('leaving');
       } else {
         toast.success('Left room successfully', { id: 'leaving' });
       }
-      
+
       // Small delay to ensure toast is visible before navigation
       await new Promise(resolve => setTimeout(resolve, 300));
-      
+
       // Navigate to home with replace to prevent back navigation
       navigate('/', { replace: true });
-      
+
     } catch (error) {
       console.error('Error leaving room:', error);
       toast.error('Error leaving room', { id: 'leaving' });
-      
+
       // Even on error, try to reset state and navigate
       try {
         // Force cleanup
         webrtcManager.cleanup();
         mediaManager.stopLocalMedia();
         resetCallState();
-        
+
         // Navigate anyway after a short delay
         setTimeout(() => {
           navigate('/', { replace: true });
@@ -2842,11 +3025,11 @@ export default function Call() {
     const handleKeyDown = (event: KeyboardEvent) => {
       // Check if user is typing in an input field
       const target = event.target as HTMLElement;
-      const isInputField = 
-        target.tagName === 'INPUT' || 
-        target.tagName === 'TEXTAREA' || 
+      const isInputField =
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
         target.isContentEditable;
-      
+
       // Only handle shortcuts if not typing in an input field
       if (isInputField) {
         return;
@@ -2854,7 +3037,7 @@ export default function Call() {
 
       // Check if Ctrl (Windows/Linux) or Cmd (Mac) is pressed WITHOUT Shift
       const isModifierPressed = (event.ctrlKey || event.metaKey) && !event.shiftKey;
-      
+
       if (isModifierPressed) {
         switch (event.key.toLowerCase()) {
           case 'd':
@@ -2893,11 +3076,11 @@ export default function Call() {
 
       // Check if user is typing in an input field
       const target = event.target as HTMLElement;
-      const isInputField = 
-        target.tagName === 'INPUT' || 
-        target.tagName === 'TEXTAREA' || 
+      const isInputField =
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
         target.isContentEditable;
-      
+
       // Only handle shortcuts if not typing in an input field
       if (isInputField) {
         return;
@@ -2905,7 +3088,7 @@ export default function Call() {
 
       // Check if Ctrl+Shift (Windows/Linux) or Cmd+Shift (Mac) is pressed
       const isModifierPressed = (event.ctrlKey || event.metaKey) && event.shiftKey;
-      
+
       if (isModifierPressed) {
         switch (event.key.toLowerCase()) {
           case 'd':
@@ -2985,16 +3168,16 @@ export default function Call() {
       console.warn('loadPendingRequests: roomCode not available');
       return;
     }
-    
+
     // Prevent concurrent API calls
     if (isLoadingPendingRequestsRef.current) {
       console.log('Pending requests API call already in progress, skipping duplicate call');
       return;
     }
-    
+
     // Don't check isAdmin here - allow loading even if admin status not yet set
     // The API will verify admin status server-side
-    
+
     isLoadingPendingRequestsRef.current = true;
     try {
       console.log('Loading pending requests via API for room:', roomCode);
@@ -3011,7 +3194,7 @@ export default function Call() {
         }));
         setPendingRequests(requests);
         console.log(`Loaded ${requests.length} pending requests via API`);
-        
+
         // Show notification if there are pending requests
         if (requests.length > 0) {
           toast.success(`${requests.length} pending join request${requests.length > 1 ? 's' : ''}`, {
@@ -3077,7 +3260,7 @@ export default function Call() {
   const canEndMeeting = isHost || participantRole === 'COHOST';
 
   let allParticipantTiles: ParticipantTile[] = [localTile, ...remoteParticipantTiles];
-// this is for the demo mode
+  // this is for the demo mode
   if (import.meta.env.MODE !== 'production') {
     const targetDemoCount = 0
     if (allParticipantTiles.length < targetDemoCount) {
@@ -3109,13 +3292,13 @@ export default function Call() {
   const hasScreenShareStage = screenShares.size > 0;
   const hasPinnedScreenShare = hasScreenShareStage && Boolean(pinnedScreenShareUserId);
   const showSplitLayout = hasPinnedScreenShare;
-  
+
   // Track window size for responsive tile limit calculation
   useEffect(() => {
     const handleResize = () => {
       setWindowSize({ width: window.innerWidth, height: window.innerHeight });
     };
-    
+
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -3126,34 +3309,34 @@ export default function Call() {
     const MIN_TILE_WIDTH = 320;
     const MIN_TILE_HEIGHT = 240;
     const GAP = 4; // gap-1 = 4px
-    
+
     // Estimate available space (accounting for controls, padding, and safe margins)
     const availableHeight = windowSize.height - 80 - (isScreenSharing ? 50 : 0) - 20; // minus controls, banner, and safety margin
     const availableWidth = windowSize.width - 40; // minus safety margins
-    
+
     // Calculate max columns and rows that fit with minimum dimensions
     const maxCols = Math.floor((availableWidth + GAP) / (MIN_TILE_WIDTH + GAP));
     const maxRows = Math.floor((availableHeight + GAP) / (MIN_TILE_HEIGHT + GAP));
-    
+
     // Cap at 4 columns max (for 4x4 grid)
     const cols = Math.min(4, Math.max(1, maxCols));
     const rows = Math.max(1, maxRows);
-    
+
     // Return the maximum tiles that fit, ensuring we don't exceed what can actually fit
     const calculatedMax = cols * rows;
-    
+
     // For your 1521x842 screen: 
     // Width: (1521-40+4)/(320+4) = 1485/324 = 4.58 -> 4 cols
     // Height: (842-80-20+4)/(240+4) = 746/244 = 3.05 -> 3 rows
     // Max = 4 * 3 = 12 tiles
-    
+
     return Math.min(16, calculatedMax);
   }, [windowSize, isScreenSharing]);
-  
+
   // Limit tiles to grid capacity - stop adding after container is filled
   const participantTilesForDisplay = allParticipantTiles.slice(0, maxVisibleTiles);
   const overflowCount = Math.max(0, totalParticipants - maxVisibleTiles);
-  
+
   const isSoloLayout = !showSplitLayout && participantTilesForDisplay.length === 1;
   const nonSplitLayoutConfig = useMemo(() => {
     if (showSplitLayout) {
@@ -3166,10 +3349,10 @@ export default function Call() {
     showSplitLayout && participantTilesForDisplay.length >= 10
       ? 'auto-rows-[minmax(240px,1fr)]'
       : showSplitLayout && participantTilesForDisplay.length >= 7
-      ? 'auto-rows-[minmax(240px,1fr)]'
-      : showSplitLayout
-      ? 'auto-rows-[minmax(240px,1fr)]'
-      : '';
+        ? 'auto-rows-[minmax(240px,1fr)]'
+        : showSplitLayout
+          ? 'auto-rows-[minmax(240px,1fr)]'
+          : '';
   const bottomControlsOffset = 80; // Height of bottom controls bar (48px button + 12px top padding + 12px bottom padding + 8px buffer)
   const screenShareBannerHeight = 50; // Height of screen share banner (py-3 = 12px top + 12px bottom + ~20px content + 1px border + buffer)
   const topOffset = isScreenSharing ? screenShareBannerHeight : 0;
@@ -3247,7 +3430,7 @@ export default function Call() {
       }
 
       remoteVideoRefs.current.set(userId, element);
-      
+
       // Immediately attach existing stream if available (fixes timing issue where stream arrives before video element)
       const existingStream = remoteStreams.get(userId);
       if (existingStream) {
@@ -3271,6 +3454,52 @@ export default function Call() {
     return remoteVideoRefCallbacks.current.get(userId)!;
   }, [remoteStreams]);
 
+  // Audio ref callback - similar to video but for audio elements
+  const getRemoteAudioRef = useCallback((userId: string) => {
+    return (element: HTMLAudioElement | null) => {
+      if (!element) {
+        remoteAudioRefs.current.delete(userId);
+        return;
+      }
+
+      const existingRef = remoteAudioRefs.current.get(userId);
+      if (existingRef === element) {
+        // Element hasn't changed, check if stream needs updating
+        const existingStream = remoteStreams.get(userId);
+        if (existingStream && element.srcObject !== existingStream) {
+          element.srcObject = existingStream;
+          element.volume = 1.0;
+          if (element.paused) {
+            element.play().catch(err => {
+              if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
+                console.error('Error playing audio for user:', userId, err);
+              }
+            });
+          }
+        }
+        return;
+      }
+
+      remoteAudioRefs.current.set(userId, element);
+
+      // Immediately attach existing stream if available
+      const existingStream = remoteStreams.get(userId);
+      if (existingStream) {
+        if (element.srcObject !== existingStream) {
+          element.srcObject = existingStream;
+          element.volume = 1.0;
+          if (element.paused) {
+            element.play().catch(err => {
+              if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
+                console.error('Error playing audio on mount for user:', userId, err);
+              }
+            });
+          }
+        }
+      }
+    };
+  }, [remoteStreams]);
+
   const renderParticipantTile = (tile: ParticipantTile, index: number) => {
     return (
       <CallParticipantTile
@@ -3286,26 +3515,26 @@ export default function Call() {
     );
   };
 
-   // Show waiting room if user is waiting for approval
-   if (showWaitingRoom && roomCode) {
-     return (
-       <WaitingRoom
-         roomCode={roomCode}
-         onCancel={() => {
-           setShowWaitingRoom(false);
-           navigate('/', { replace: true });
-         }}
-         onApproved={() => {
-           // Hide waiting room and retry connection
-           setShowWaitingRoom(false);
-           setIsConnecting(true);
-           // Reset connection flag to allow retry
-           hasConnectedRef.current = false;
-           connectToRoom();
-         }}
-       />
-     );
-   }
+  // Show waiting room if user is waiting for approval
+  if (showWaitingRoom && roomCode) {
+    return (
+      <WaitingRoom
+        roomCode={roomCode}
+        onCancel={() => {
+          setShowWaitingRoom(false);
+          navigate('/', { replace: true });
+        }}
+        onApproved={() => {
+          // Hide waiting room and retry connection
+          setShowWaitingRoom(false);
+          setIsConnecting(true);
+          // Reset connection flag to allow retry
+          hasConnectedRef.current = false;
+          connectToRoom();
+        }}
+      />
+    );
+  }
 
   if (!preJoinCompleted) {
     return <LoadingState message="Preparing room…" />;
@@ -3326,6 +3555,18 @@ export default function Call() {
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-black text-white">
+      {/* Hidden audio elements for remote participants - CRITICAL for audio playback */}
+      {participants.map(participant => (
+        <audio
+          key={`audio-${participant.userId}`}
+          ref={getRemoteAudioRef(participant.userId)}
+          autoPlay
+          playsInline
+          data-participant={participant.userId}
+          style={{ display: 'none' }}
+        />
+      ))}
+
       <PermissionBanner
         hasPermissionIssue={hasPermissionIssue}
         permissionBannerDismissed={permissionBannerDismissed}
@@ -3385,10 +3626,10 @@ export default function Call() {
 
         <main
           className={`relative flex min-h-0 flex-1 flex-col ${mainLayoutSpacingClass}`}
-          style={{ 
+          style={{
             paddingTop: topOffset > 0 ? `${topOffset}px` : 0,
-            paddingBottom: `calc(${bottomControlsOffset}px + env(safe-area-inset-bottom))`, 
-            marginBottom: 0 
+            paddingBottom: `calc(${bottomControlsOffset}px + env(safe-area-inset-bottom))`,
+            marginBottom: 0
           }}
         >
           {showSplitLayout ? (
@@ -3449,9 +3690,8 @@ export default function Call() {
               <div className="relative flex flex-1 overflow-hidden" style={{ marginBottom: 0, paddingBottom: 0 }}>
                 <div className="relative flex h-full w-full flex-col overflow-hidden rounded-[32px] bg-gray-900/40 backdrop-blur" style={{ height: `calc(100vh - ${topOffset}px - ${bottomControlsOffset}px - env(safe-area-inset-bottom))`, marginBottom: 0, paddingBottom: 0 }}>
                   <div
-                    className={`relative h-full w-full ${
-                      showSplitLayout ? 'overflow-y-auto pr-3 sm:pr-4' : 'overflow-hidden'
-                    }`}
+                    className={`relative h-full w-full ${showSplitLayout ? 'overflow-y-auto pr-3 sm:pr-4' : 'overflow-hidden'
+                      }`}
                   >
                     {participantTilesForDisplay.length === 0 ? (
                       <div className="flex h-full items-center justify-center text-sm font-medium text-gray-400">
@@ -3462,9 +3702,8 @@ export default function Call() {
                         className={
                           showSplitLayout
                             ? `grid h-full w-full gap-1 ${splitGridClasses} ${splitGridAutoRowsClass}`
-                            : `${nonSplitLayoutConfig?.gridClasses ?? 'grid h-full w-full gap-1 grid-cols-1 sm:grid-cols-2'} ${
-                                nonSplitLayoutConfig?.autoRowsClass ?? ''
-                              }`
+                            : `${nonSplitLayoutConfig?.gridClasses ?? 'grid h-full w-full gap-1 grid-cols-1 sm:grid-cols-2'} ${nonSplitLayoutConfig?.autoRowsClass ?? ''
+                            }`
                         }
                       >
                         {participantTilesForDisplay.map((tile, index) => renderParticipantTile(tile, index))}
@@ -3582,7 +3821,7 @@ export default function Call() {
         }}
         onClose={() => setShowChatPanel(false)}
       />
-      
+
       <DevicePermissionDialog
         isOpen={showDeviceDialog}
         onClose={() => setShowDeviceDialog(false)}
