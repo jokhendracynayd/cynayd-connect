@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { ScreenShare } from '../types/screenShare';
 import type { NetworkQualityLevel, NetworkSample } from '../lib/networkMonitor';
 import type { DeviceStatus } from '../lib/deviceStatus';
+import type { ReconnectionState } from '../lib/reconnectionManager';
 
 export type ChatMessageType = 'BROADCAST' | 'DIRECT' | 'SYSTEM';
 
@@ -318,6 +319,12 @@ interface CallState {
     updatedAt: string | null;
   };
   recording: RecordingState;
+  reconnectionState: ReconnectionState;
+  preservedState: Partial<CallState> | null; // State preserved during reconnection
+  setReconnectionState: (state: ReconnectionState) => void;
+  preserveState: () => void;
+  restoreState: () => void;
+  clearPreservedState: () => void;
   setRoomCode: (code: string) => void;
   setIsConnected: (connected: boolean) => void;
   setLocalStream: (stream: MediaStream | null) => void;
@@ -536,6 +543,8 @@ export const useCallStore = create<CallState>((set) => ({
     updatedAt: null,
   },
   recording: { ...initialRecordingState },
+  reconnectionState: 'connected' as ReconnectionState,
+  preservedState: null,
   
   setRoomCode: (code) => set({ roomCode: code }),
   setIsConnected: (connected) => set({ isConnected: connected }),
@@ -1057,6 +1066,42 @@ export const useCallStore = create<CallState>((set) => ({
     set({
       recording: { ...initialRecordingState },
   }),
+  setReconnectionState: (state) => set({ reconnectionState: state }),
+  preserveState: () => set((currentState) => {
+    // Preserve critical state that should be restored after reconnection
+    const preserved: Partial<CallState> = {
+      roomCode: currentState.roomCode,
+      participants: currentState.participants,
+      isAdmin: currentState.isAdmin,
+      participantRole: currentState.participantRole,
+      isHost: currentState.isHost,
+      roomIsPublic: currentState.roomIsPublic,
+      pendingRequests: currentState.pendingRequests,
+      activeSpeakerId: currentState.activeSpeakerId,
+      raisedHands: currentState.raisedHands,
+      screenShares: currentState.screenShares,
+      pinnedScreenShareUserId: currentState.pinnedScreenShareUserId,
+      isScreenSharing: currentState.isScreenSharing,
+      selectedDevices: currentState.selectedDevices,
+      settings: currentState.settings,
+      chat: currentState.chat,
+      hostControls: currentState.hostControls,
+      recording: currentState.recording,
+    };
+    return { preservedState: preserved };
+  }),
+  restoreState: () => set((currentState) => {
+    if (!currentState.preservedState) {
+      return {};
+    }
+    // Restore preserved state
+    const restored = { ...currentState.preservedState };
+    return {
+      ...restored,
+      preservedState: null, // Clear preserved state after restoration
+    };
+  }),
+  clearPreservedState: () => set({ preservedState: null }),
   resetCallState: () => set({
     isConnected: false,
     roomCode: null,
@@ -1132,6 +1177,8 @@ export const useCallStore = create<CallState>((set) => ({
       updatedAt: null,
     },
     recording: { ...initialRecordingState },
+    reconnectionState: 'connected' as ReconnectionState,
+    preservedState: null,
   }),
 }));
 

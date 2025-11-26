@@ -1,8 +1,12 @@
 import io, { Socket } from 'socket.io-client';
 import { config } from '../config';
+import { reconnectionManager } from './reconnectionManager';
 
 class SocketManager {
   private socket: Socket | null = null;
+  private reconnectingCallbacks: Set<() => void> = new Set();
+  private reconnectedCallbacks: Set<() => void> = new Set();
+  private reconnectFailedCallbacks: Set<() => void> = new Set();
 
   connect(token: string): Socket {
     // If already connected with same token, return existing socket
@@ -35,24 +39,56 @@ class SocketManager {
 
     this.socket.on('connect', () => {
       console.log('Socket connected');
+      // Notify reconnection manager of successful connection
+      reconnectionManager.handleReconnect();
+      // Emit reconnected event
+      this.reconnectedCallbacks.forEach(callback => {
+        try {
+          callback();
+        } catch (error) {
+          console.error('Error in reconnected callback:', error);
+        }
+      });
+    });
+
+    // Listen to Socket.io's built-in reconnection events
+    this.socket.io.on('reconnect_attempt', (attempt) => {
+      console.log('Socket reconnect attempt:', attempt);
+      // ReconnectionManager already tracks reconnecting state via handleDisconnect
+      // Just log the attempt number
+    });
+
+    this.socket.io.on('reconnect', (attempt) => {
+      console.log('Socket reconnected after', attempt, 'attempt(s)');
+      // The 'connect' event will also fire, which calls handleReconnect()
+      // This is just for logging
+    });
+
+    this.socket.io.on('reconnect_error', (error) => {
+      console.error('Socket reconnect error:', error);
+      // Don't mark as failed yet - Socket.io will keep trying
+      // Only mark as failed if max attempts reached (handled by reconnect_failed)
+    });
+
+    this.socket.io.on('reconnect_failed', () => {
+      console.error('Socket reconnect failed - max attempts reached');
+      reconnectionManager.handleReconnectFailed();
+      this.emitReconnectFailed();
     });
 
     this.socket.on('disconnect', (reason) => {
       console.log('Socket disconnected:', reason);
       
-      // If disconnected due to auth error, try to refresh token and reconnect
-      if (reason === 'io server disconnect' || reason === 'transport close') {
-        // Server closed connection, try to reconnect after a delay
-        setTimeout(() => {
-          if (!this.socket?.connected) {
-            const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-            if (token) {
-              console.log('Attempting to reconnect socket...');
-              this.connect(token);
-            }
-          }
-        }, 2000);
-      }
+      // Notify reconnection manager
+      reconnectionManager.handleDisconnect(reason);
+      
+      // Emit reconnecting event
+      this.emitReconnecting();
+      
+      // Socket.io handles automatic reconnection by default (reconnection: true)
+      // Only manually reconnect for specific cases where auto-reconnect might not work
+      // For auth errors, we handle token refresh in the error handler
+      // For server disconnects, Socket.io will auto-reconnect unless explicitly disabled
     });
 
     this.socket.on('error', (error) => {
@@ -73,10 +109,16 @@ class SocketManager {
                 this.connect(accessToken);
               })
               .catch(() => {
-                // Refresh failed, disconnect
+                // Refresh failed, mark as permanent failure
+                reconnectionManager.handleReconnectFailed();
+                this.emitReconnectFailed();
                 this.disconnect();
               });
           });
+        } else {
+          // No refresh token, permanent failure
+          reconnectionManager.handleReconnectFailed();
+          this.emitReconnectFailed();
         }
       }
     });
@@ -98,8 +140,13 @@ class SocketManager {
               })
               .catch(() => {
                 console.error('Token refresh failed, socket will not reconnect');
+                reconnectionManager.handleReconnectFailed();
+                this.emitReconnectFailed();
               });
           });
+        } else {
+          reconnectionManager.handleReconnectFailed();
+          this.emitReconnectFailed();
         }
       }
     });
@@ -453,6 +500,74 @@ class SocketManager {
         this.socket.off(event);
       }
     }
+  }
+
+  /**
+   * Subscribe to reconnecting event
+   */
+  onReconnecting(callback: () => void): () => void {
+    this.reconnectingCallbacks.add(callback);
+    return () => {
+      this.reconnectingCallbacks.delete(callback);
+    };
+  }
+
+  /**
+   * Subscribe to reconnected event
+   */
+  onReconnected(callback: () => void): () => void {
+    this.reconnectedCallbacks.add(callback);
+    return () => {
+      this.reconnectedCallbacks.delete(callback);
+    };
+  }
+
+  /**
+   * Subscribe to reconnect_failed event
+   */
+  onReconnectFailed(callback: () => void): () => void {
+    this.reconnectFailedCallbacks.add(callback);
+    return () => {
+      this.reconnectFailedCallbacks.delete(callback);
+    };
+  }
+
+  /**
+   * Emit reconnecting event
+   */
+  private emitReconnecting(): void {
+    this.reconnectingCallbacks.forEach(callback => {
+      try {
+        callback();
+      } catch (error) {
+        console.error('Error in reconnecting callback:', error);
+      }
+    });
+  }
+
+  /**
+   * Emit reconnect failed event
+   */
+  private emitReconnectFailed(): void {
+    this.reconnectFailedCallbacks.forEach(callback => {
+      try {
+        callback();
+      } catch (error) {
+        console.error('Error in reconnect failed callback:', error);
+      }
+    });
+  }
+
+  /**
+   * Check if disconnect is likely temporary based on reason
+   */
+  isTemporaryDisconnect(reason: string): boolean {
+    const lowerReason = reason.toLowerCase();
+    // Network and transport issues are usually temporary
+    return lowerReason.includes('transport') || 
+           lowerReason.includes('network') || 
+           lowerReason === 'transport close' ||
+           lowerReason === 'ping timeout';
   }
 }
 

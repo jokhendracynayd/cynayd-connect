@@ -52,6 +52,8 @@ import CallParticipantTile from '../components/call/CallParticipantTile';
 import { useCallMedia } from '../hooks/call/useCallMedia';
 import { useCallScreenShare } from '../hooks/call/useCallScreenShare';
 import { useCallHostControls } from '../hooks/call/useCallHostControls';
+import { reconnectionManager } from '../lib/reconnectionManager';
+import ReconnectionOverlay from '../components/call/ReconnectionOverlay';
 
 const END_MEETING_TOAST_ID = 'ending-meeting';
 const END_MEETING_REQUEST_TIMEOUT_MS = 5000;
@@ -94,6 +96,10 @@ export default function Call() {
     setActiveSpeaker,
     setRaiseHand,
     resetCallState,
+    setReconnectionState,
+    preserveState,
+    restoreState,
+    clearPreservedState,
     screenShares,
     pinnedScreenShareUserId,
     isScreenSharing,
@@ -1002,72 +1008,260 @@ export default function Call() {
     };
   }, [remoteStreams, screenShareStreams]); // Include streams in deps to capture current state
 
-  // Handle socket disconnect event
-  useEffect(() => {
-    const handleDisconnect = () => {
-      console.log('Socket disconnected, cleaning up frontend resources...');
-      try {
-        // Clean up WebRTC resources
-        webrtcManager.cleanup();
+  // Handle permanent disconnect - cleanup and navigate home
+  const handlePermanentDisconnect = useCallback((reason: string) => {
+    console.log('Permanent disconnect, cleaning up frontend resources...', reason);
+    try {
+      // Clean up WebRTC resources
+      webrtcManager.cleanup();
 
-        // Stop local media
-        mediaManager.stopLocalMedia();
-        mediaManager.stopScreenShare();
+      // Stop local media
+      mediaManager.stopLocalMedia();
+      mediaManager.stopScreenShare();
 
-        // Clear all remote streams
-        remoteStreams.forEach((stream) => {
-          stream.getTracks().forEach(track => track.stop());
-        });
-        setRemoteStreams(new Map());
+      // Clear all remote streams
+      remoteStreams.forEach((stream) => {
+        stream.getTracks().forEach(track => track.stop());
+      });
+      setRemoteStreams(new Map());
 
-        // Clear all screen share streams
-        screenShareStreams.forEach((stream) => {
-          stream.getTracks().forEach(track => track.stop());
-        });
-        setScreenShareStreams(new Map());
+      // Clear all screen share streams
+      screenShareStreams.forEach((stream) => {
+        stream.getTracks().forEach(track => track.stop());
+      });
+      setScreenShareStreams(new Map());
 
-        // Clear video refs
-        remoteVideoRefs.current.forEach((videoEl) => {
-          if (videoEl) videoEl.srcObject = null;
-        });
-        remoteVideoRefs.current.clear();
-        if (localVideoRef.current) localVideoRef.current.srcObject = null;
+      // Clear video refs
+      remoteVideoRefs.current.forEach((videoEl) => {
+        if (videoEl) videoEl.srcObject = null;
+      });
+      remoteVideoRefs.current.clear();
+      if (localVideoRef.current) localVideoRef.current.srcObject = null;
 
-        // Clear audio refs
-        remoteAudioRefs.current.forEach((audioEl) => {
-          if (audioEl) audioEl.srcObject = null;
-        });
-        remoteAudioRefs.current.clear();
+      // Clear audio refs
+      remoteAudioRefs.current.forEach((audioEl) => {
+        if (audioEl) audioEl.srcObject = null;
+      });
+      remoteAudioRefs.current.clear();
 
-        // Reset state
-        resetCallState();
-        setLocalIsSpeaking(false);
+      // Reset state
+      resetCallState();
+      clearPreservedState();
+      setLocalIsSpeaking(false);
 
-        // Clear consuming producers
-        consumingProducersRef.current.clear();
-        screenShareProducersRef.current.clear();
-        pendingParticipantEventsRef.current.clear();
+      // Clear consuming producers
+      consumingProducersRef.current.clear();
+      screenShareProducersRef.current.clear();
+      pendingParticipantEventsRef.current.clear();
 
-        // Show notification
-        toast.error('Connection lost. Returning to home.');
+      // Show notification
+      toast.error('Connection lost. Returning to home.');
 
-        // Navigate to home after a short delay
-        setTimeout(() => {
-          navigate('/');
-        }, 1000);
-      } catch (error) {
-        console.error('Error during disconnect cleanup:', error);
-        // Still navigate on error
+      // Navigate to home after a short delay
+      setTimeout(() => {
         navigate('/');
+      }, 1000);
+    } catch (error) {
+      console.error('Error during disconnect cleanup:', error);
+      // Still navigate on error
+      navigate('/');
+    }
+  }, [remoteStreams, screenShareStreams, resetCallState, clearPreservedState, navigate]);
+
+  // Handle reconnection state changes
+  useEffect(() => {
+    const unsubscribe = reconnectionManager.onStateChange((state) => {
+      setReconnectionState(state);
+    });
+
+    return unsubscribe;
+  }, [setReconnectionState]);
+
+  // Handle socket disconnect event - attempt reconnection instead of immediate cleanup
+  useEffect(() => {
+    const handleDisconnect = (reason?: string) => {
+      console.log('Socket disconnected, attempting reconnection...', reason);
+      
+      // Preserve state before attempting reconnection
+      preserveState();
+      
+      // ReconnectionManager will handle the reconnection logic
+      // We just need to wait for it to either succeed or fail
+    };
+
+    const handleReconnected = async () => {
+      console.log('Socket reconnected, restoring call state...');
+      
+      try {
+        // Restore preserved state
+        restoreState();
+        
+        // Rejoin the room if we have a roomCode
+        if (roomCode && user) {
+          const currentToken = token || storage.getToken();
+          if (currentToken) {
+            // Rejoin room
+            const response = await socketManager.joinRoom({
+              roomCode,
+              name: user.name,
+              email: user.email,
+              picture: user.picture ?? undefined,
+            });
+
+            if (response && response.success) {
+              // Check if room was ended during reconnection
+              if (response.roomEnded) {
+                handlePermanentDisconnect('Room ended during reconnection');
+                return;
+              }
+              // Restore WebRTC transports if needed
+              try {
+                const needsRecovery = webrtcManager.needsRecovery();
+                if (needsRecovery) {
+                  console.log('Recovering WebRTC transports...');
+                  await webrtcManager.recoverTransports();
+                  console.log('WebRTC transports recovered');
+                }
+
+                // Re-establish producers if we have local tracks
+                if (localStream) {
+                  const audioTrack = localStream.getAudioTracks()[0];
+                  const videoTrack = localStream.getVideoTracks()[0];
+
+                  if (audioTrack && audioTrack.readyState === 'live') {
+                    try {
+                      await webrtcManager.produceAudio(audioTrack);
+                      console.log('Restored audio producer after reconnection');
+                    } catch (error) {
+                      console.error('Error restoring audio producer:', error);
+                    }
+                  }
+
+                  if (videoTrack && videoTrack.readyState === 'live') {
+                    try {
+                      await webrtcManager.produceVideo(videoTrack);
+                      console.log('Restored video producer after reconnection');
+                    } catch (error) {
+                      console.error('Error restoring video producer:', error);
+                    }
+                  }
+                }
+
+                // Restore screen share producer if user was screen sharing
+                if (isScreenSharing) {
+                  try {
+                    const screenShareStream = mediaManager.getScreenShareStream();
+                    if (screenShareStream) {
+                      const screenTrack = screenShareStream.getVideoTracks()[0];
+                      if (screenTrack && screenTrack.readyState === 'live') {
+                        const producer = await webrtcManager.produceScreenShare(screenTrack);
+                        if (producer && user?.id) {
+                          // Notify backend of screen share restoration
+                          await socketManager.startScreenShare(producer.id);
+                          console.log('Restored screen share producer after reconnection');
+                        }
+                      } else {
+                        console.warn('Screen share track not available or ended, clearing screen share state');
+                        setIsScreenSharing(false);
+                      }
+                    } else {
+                      console.warn('Screen share stream not available after reconnection, clearing screen share state');
+                      setIsScreenSharing(false);
+                    }
+                  } catch (error) {
+                    console.error('Error restoring screen share producer:', error);
+                    // Clear screen share state on error
+                    setIsScreenSharing(false);
+                  }
+                }
+
+                // Re-consume remote producers from the response
+                if (response.otherProducers && Array.isArray(response.otherProducers)) {
+                  for (const producerInfo of response.otherProducers) {
+                    try {
+                      const producerId = typeof producerInfo === 'string' ? producerInfo : producerInfo.producerId;
+                      const userIdFromInfo = typeof producerInfo === 'object' ? producerInfo.userId : undefined;
+                      const kindFromInfo = typeof producerInfo === 'object' ? producerInfo.kind : undefined;
+                      const sourceFromInfo = typeof producerInfo === 'object' 
+                        ? producerInfo.source || (producerInfo.kind === 'audio' ? 'microphone' : 'camera')
+                        : undefined;
+
+                      // Store metadata
+                      producerMetadataRef.current.set(producerId, {
+                        userId: userIdFromInfo,
+                        kind: kindFromInfo,
+                        source: sourceFromInfo,
+                      });
+
+                      // Handle screen share producers separately
+                      if (sourceFromInfo === 'screen' && userIdFromInfo) {
+                        screenShareProducersRef.current.set(userIdFromInfo, producerId);
+                        await consumeScreenShareProducer(producerId, userIdFromInfo);
+                        
+                        // Ensure screen share metadata is reflected in state
+                        const shareName = typeof producerInfo === 'object' 
+                          ? producerInfo.name 
+                          : participants.find(p => p.userId === userIdFromInfo)?.name;
+                        if (!screenShares.has(userIdFromInfo)) {
+                          addScreenShare({
+                            userId: userIdFromInfo,
+                            producerId,
+                            name: shareName || 'Screen Share',
+                          });
+                          if (!pinnedScreenShareUserId) {
+                            setPinnedScreenShare(userIdFromInfo);
+                          }
+                        }
+                        continue;
+                      }
+
+                      // Handle regular audio/video producers
+                      const track = await webrtcManager.consumeProducer(producerId);
+                      if (track) {
+                        // Add to remote streams (this will be handled by existing consumer logic)
+                        console.log(`Restored consumer for producer ${producerId}`);
+                      }
+                    } catch (error) {
+                      console.error(`Error consuming producer ${producerInfo}:`, error);
+                    }
+                  }
+                }
+              } catch (error) {
+                console.error('Error during WebRTC recovery:', error);
+                // Continue anyway - transports might still work
+              }
+
+              console.log('Successfully rejoined room after reconnection');
+              setIsConnected(true);
+            } else {
+              // Room join failed, treat as permanent disconnect
+              handlePermanentDisconnect('Failed to rejoin room after reconnection');
+            }
+          } else {
+            handlePermanentDisconnect('Authentication token not available');
+          }
+        }
+      } catch (error) {
+        console.error('Error during reconnection recovery:', error);
+        handlePermanentDisconnect('Failed to restore connection');
       }
     };
 
+    const handleReconnectFailed = () => {
+      console.log('Reconnection failed, cleaning up...');
+      handlePermanentDisconnect('Connection lost');
+    };
+
     socketManager.on('disconnect', handleDisconnect);
+    const unsubscribeReconnected = socketManager.onReconnected(handleReconnected);
+    const unsubscribeReconnectFailed = socketManager.onReconnectFailed(handleReconnectFailed);
 
     return () => {
       socketManager.off('disconnect', handleDisconnect);
+      unsubscribeReconnected();
+      unsubscribeReconnectFailed();
     };
-  }, [remoteStreams, navigate, resetCallState]);
+  }, [roomCode, user, token, localStream, preserveState, restoreState, setIsConnected, handlePermanentDisconnect]);
 
   const connectToRoom = async () => {
     if (!roomCode || !user || !preJoinCompleted) return;
@@ -3830,6 +4024,12 @@ export default function Call() {
         issueType={deviceStatus[deviceDialogType].issueType}
         errorReason={deviceStatus[deviceDialogType].errorReason}
         canRetry={deviceStatus[deviceDialogType].canRetry}
+      />
+      <ReconnectionOverlay
+        onCancel={() => {
+          reconnectionManager.cancelReconnection();
+          handlePermanentDisconnect('Reconnection cancelled by user');
+        }}
       />
     </div>
   );

@@ -911,5 +911,88 @@ export class RedisStateService {
       logger.warn(`Failed to invalidate participant count cache for room ${roomId}:`, error);
     }
   }
+
+  // Disconnect grace period tracking (for reconnection support)
+  private static readonly DISCONNECT_GRACE_PERIOD_SECONDS = 30; // 30 seconds grace period
+  private static readonly DISCONNECT_TIMESTAMP_KEY_PREFIX = `${this.KEY_PREFIX}:disconnect`;
+
+  /**
+   * Record socket disconnect timestamp for grace period tracking
+   * Accepts either socketId or userId:socketId format
+   */
+  static async recordDisconnectTimestamp(key: string): Promise<void> {
+    const redisKey = `${this.DISCONNECT_TIMESTAMP_KEY_PREFIX}:${key}`;
+    const timestamp = Date.now();
+    try {
+      // Store with TTL slightly longer than grace period to allow cleanup
+      await redis.setex(redisKey, this.DISCONNECT_GRACE_PERIOD_SECONDS + 10, timestamp.toString());
+      logger.debug(`Recorded disconnect timestamp for ${key}`);
+    } catch (error) {
+      logger.warn(`Failed to record disconnect timestamp for ${key}:`, error);
+    }
+  }
+
+  /**
+   * Check if socket disconnected and get disconnect timestamp
+   * Accepts either socketId or userId:socketId format
+   */
+  static async getDisconnectTimestamp(key: string): Promise<number | null> {
+    const redisKey = `${this.DISCONNECT_TIMESTAMP_KEY_PREFIX}:${key}`;
+    try {
+      const timestampStr = await redis.get(redisKey);
+      if (timestampStr) {
+        return parseInt(timestampStr, 10);
+      }
+      return null;
+    } catch (error) {
+      logger.warn(`Failed to get disconnect timestamp for ${key}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Clear disconnect timestamp (called when socket reconnects)
+   * Accepts either socketId or userId:socketId format
+   * Can also clear all timestamps for a userId by passing userId:*
+   */
+  static async clearDisconnectTimestamp(key: string): Promise<void> {
+    const redisKey = `${this.DISCONNECT_TIMESTAMP_KEY_PREFIX}:${key}`;
+    try {
+      await redis.del(redisKey);
+      logger.debug(`Cleared disconnect timestamp for ${key}`);
+    } catch (error) {
+      logger.warn(`Failed to clear disconnect timestamp for ${key}:`, error);
+    }
+  }
+
+  /**
+   * Clear all disconnect timestamps for a user (useful when user reconnects)
+   */
+  static async clearDisconnectTimestampsForUser(userId: string): Promise<void> {
+    try {
+      // Find all keys matching the pattern for this user
+      const pattern = `${this.DISCONNECT_TIMESTAMP_KEY_PREFIX}:${userId}:*`;
+      const keys = await redis.keys(pattern);
+      if (keys.length > 0) {
+        await redis.del(...keys);
+        logger.debug(`Cleared ${keys.length} disconnect timestamp(s) for user ${userId}`);
+      }
+    } catch (error) {
+      logger.warn(`Failed to clear disconnect timestamps for user ${userId}:`, error);
+    }
+  }
+
+  /**
+   * Check if socket is within grace period (can reconnect without cleanup)
+   * Accepts either socketId or userId:socketId format
+   */
+  static async isWithinGracePeriod(key: string): Promise<boolean> {
+    const timestamp = await this.getDisconnectTimestamp(key);
+    if (!timestamp) {
+      return false;
+    }
+    const elapsed = Date.now() - timestamp;
+    return elapsed < this.DISCONNECT_GRACE_PERIOD_SECONDS * 1000;
+  }
 }
 

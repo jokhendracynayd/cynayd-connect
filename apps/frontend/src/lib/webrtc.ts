@@ -742,6 +742,132 @@ class WebRTCManager {
     this.screenShareProducer = null;
   }
 
+  /**
+   * Check transport health
+   */
+  checkTransportHealth(): {
+    sendTransport: { healthy: boolean; state: string | null; needsRecovery: boolean };
+    recvTransport: { healthy: boolean; state: string | null; needsRecovery: boolean };
+  } {
+    const sendState = this.sendTransport?.connectionState || null;
+    const recvState = this.recvTransport?.connectionState || null;
+
+    const sendHealthy = sendState === 'connected' || sendState === 'connecting';
+    const recvHealthy = recvState === 'connected' || recvState === 'connecting';
+
+    const sendNeedsRecovery = sendState === 'failed' || sendState === 'disconnected' || sendState === 'closed';
+    const recvNeedsRecovery = recvState === 'failed' || recvState === 'disconnected' || recvState === 'closed';
+
+    return {
+      sendTransport: {
+        healthy: sendHealthy,
+        state: sendState,
+        needsRecovery: sendNeedsRecovery,
+      },
+      recvTransport: {
+        healthy: recvHealthy,
+        state: recvState,
+        needsRecovery: recvNeedsRecovery,
+      },
+    };
+  }
+
+  /**
+   * Recover transports - recreate failed transports and restore producers/consumers
+   */
+  async recoverTransports(): Promise<{ sendRecovered: boolean; recvRecovered: boolean }> {
+    const health = this.checkTransportHealth();
+    let sendRecovered = false;
+    let recvRecovered = false;
+
+    // Store existing producers before recovery
+    const existingProducers = Array.from(this.producers.values());
+    const existingScreenShareProducer = this.screenShareProducer;
+
+    try {
+      // Recover send transport if needed
+      if (health.sendTransport.needsRecovery || !this.sendTransport) {
+        console.log('Recovering send transport...');
+        
+        // Close old transport if it exists
+        if (this.sendTransport) {
+          try {
+            this.sendTransport.close();
+          } catch (error) {
+            console.warn('Error closing old send transport:', error);
+          }
+        }
+
+        // Create new send transport
+        await this.createSendTransport();
+        sendRecovered = true;
+
+        // Restore producers with existing tracks
+        for (const producer of existingProducers) {
+          try {
+            if (producer.track && producer.track.readyState === 'live') {
+              const kind = producer.kind as 'audio' | 'video';
+              if (kind === 'audio') {
+                await this.produceAudio(producer.track);
+              } else if (kind === 'video') {
+                await this.produceVideo(producer.track);
+              }
+              console.log(`Restored ${kind} producer after transport recovery`);
+            }
+          } catch (error) {
+            console.error(`Error restoring ${producer.kind} producer:`, error);
+          }
+        }
+
+        // Restore screen share producer if it exists
+        if (existingScreenShareProducer && existingScreenShareProducer.track && 
+            existingScreenShareProducer.track.readyState === 'live') {
+          try {
+            await this.produceScreenShare(existingScreenShareProducer.track);
+            console.log('Restored screen share producer after transport recovery');
+          } catch (error) {
+            console.error('Error restoring screen share producer:', error);
+          }
+        }
+      }
+
+      // Recover recv transport if needed
+      if (health.recvTransport.needsRecovery || !this.recvTransport) {
+        console.log('Recovering recv transport...');
+        
+        // Close old transport if it exists
+        if (this.recvTransport) {
+          try {
+            this.recvTransport.close();
+          } catch (error) {
+            console.warn('Error closing old recv transport:', error);
+          }
+        }
+
+        // Create new recv transport
+        await this.createRecvTransport();
+        recvRecovered = true;
+
+        // Note: Consumers will need to be recreated by the Call component
+        // after receiving the producer list from the server
+        console.log('Recv transport recovered. Consumers will be restored by Call component.');
+      }
+
+      return { sendRecovered, recvRecovered };
+    } catch (error) {
+      console.error('Error during transport recovery:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if transports need recovery
+   */
+  needsRecovery(): boolean {
+    const health = this.checkTransportHealth();
+    return health.sendTransport.needsRecovery || health.recvTransport.needsRecovery;
+  }
+
   cleanup() {
     this.closeScreenShareProducer();
     this.closeProducers();

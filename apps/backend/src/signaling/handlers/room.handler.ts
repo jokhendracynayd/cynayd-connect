@@ -416,6 +416,29 @@ export async function handleSocketLeave(
     return { success: true, alreadyLeft: true, reason };
   }
 
+  // If triggered by disconnect and within grace period, check if user has reconnected
+  if (triggeredByDisconnect) {
+    try {
+      const isWithinGracePeriod = await RedisStateService.isWithinGracePeriod(`${userId}:${socket.id}`);
+      if (isWithinGracePeriod) {
+        // Check if user has a new active socket (reconnected)
+        const allSockets = await io.fetchSockets();
+        const userHasActiveSocket = allSockets.some(s => 
+          s.data.userId === userId && s.id !== socket.id
+        );
+
+        if (userHasActiveSocket) {
+          // User reconnected, skip cleanup for this socket
+          logger.info(`Skipping cleanup for socket ${socket.id} - user ${userId} reconnected within grace period`);
+          return { success: true, skipped: true, reason: 'reconnected' };
+        }
+      }
+    } catch (error) {
+      logger.warn(`Error checking grace period for socket ${socket.id}:`, error);
+      // Continue with cleanup on error
+    }
+  }
+
   socket.data.hasLeftRoom = true;
 
   let cleanupFailed = false;
@@ -1132,6 +1155,16 @@ export function roomHandler(io: SocketIOServer, socket: Socket) {
         (isHost ? ParticipantRole.HOST : ParticipantRole.PARTICIPANT);
       const isModerator =
         isHost || RoomService.isModeratorRole(participantRole);
+
+      // Clear disconnect timestamp if user was reconnecting
+      // Clear all disconnect timestamps for this user (handles rapid reconnects)
+      try {
+        await RedisStateService.clearDisconnectTimestampsForUser(userId);
+        logger.debug(`Cleared disconnect timestamps for reconnected user ${userId}`);
+      } catch (error) {
+        logger.warn(`Failed to clear disconnect timestamp for user ${userId}:`, error);
+        // Continue - not critical
+      }
 
       // Store socket data (use normalized room code) - IMPORTANT: Set AFTER successful join
       socket.data.roomCode = normalizedRoomCode;
