@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuthStore } from '../store/authStore';
@@ -7,7 +7,6 @@ import {
   EVERYONE_CONVERSATION_ID,
   type ChatMessage,
   type ParticipantRole,
-  type RecordingState,
   type RecordingStatus,
 } from '../store/callStore';
 import { socketManager } from '../lib/socket';
@@ -47,13 +46,23 @@ import type {
   ServerParticipant,
   ParticipantTile,
 } from '../types/call';
-import { getNonSplitLayoutConfig, getGridTemplateClasses } from '../utils/callLayout';
 import CallParticipantTile from '../components/call/CallParticipantTile';
 import { useCallMedia } from '../hooks/call/useCallMedia';
 import { useCallScreenShare } from '../hooks/call/useCallScreenShare';
 import { useCallHostControls } from '../hooks/call/useCallHostControls';
+import { useCallState } from '../hooks/call/useCallState';
+import { useCallStreams } from '../hooks/call/useCallStreams';
+import { useCallDevices } from '../hooks/call/useCallDevices';
+import { useCallLayout } from '../hooks/call/useCallLayout';
+import { useCallProducerConsumption } from '../hooks/call/useCallProducerConsumption';
 import { reconnectionManager } from '../lib/reconnectionManager';
 import ReconnectionOverlay from '../components/call/ReconnectionOverlay';
+import {
+  normalizeRecordingState,
+  resolveProducerMeta,
+  runOrQueueParticipantUpdate,
+  flushPendingParticipantEvents,
+} from '../utils/callHelpers';
 
 const END_MEETING_TOAST_ID = 'ending-meeting';
 const END_MEETING_REQUEST_TIMEOUT_MS = 5000;
@@ -126,103 +135,126 @@ export default function Call() {
   } = useCallStore();
 
   const navigate = useNavigate();
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const [localVideoElement, setLocalVideoElement] = useState<HTMLVideoElement | null>(null);
 
-  const setLocalVideoRef = useCallback((element: HTMLVideoElement | null) => {
-    localVideoRef.current = element;
-    setLocalVideoElement(element);
-  }, []);
-  const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const remoteVideoRefCallbacks = useRef<Map<string, (element: HTMLVideoElement | null) => void>>(new Map());
-  // Audio element refs for remote participants (for audio playback)
-  const remoteAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
-  const hasEnabledAudioPlayback = useRef(false); // Track if user has interacted to enable audio
-  const [isConnecting, setIsConnecting] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
-  const [screenShareStreams, setScreenShareStreams] = useState<Map<string, MediaStream>>(new Map()); // Separate streams for screen shares
-  const hasConnectedRef = useRef(false); // Prevent duplicate connections in React StrictMode
-  const consumingProducersRef = useRef<Set<string>>(new Set()); // Track which producers we're consuming
-  const screenShareProducersRef = useRef<Map<string, string>>(new Map()); // userId -> producerId for screen shares
-  const producerMetadataRef = useRef<Map<string, { source?: string; userId?: string; kind?: 'audio' | 'video' }>>(new Map());
-  const activeScreenShareProducersRef = useRef<Set<string>>(new Set());
-  const isStoppingScreenShareRef = useRef(false);
-  const networkMonitorRef = useRef<NetworkMonitor | null>(null);
-  const activeSpeakerDetectorRef = useRef<ActiveSpeakerDetector | null>(null);
-  const pendingParticipantEventsRef = useRef<Map<string, Array<() => void>>>(new Map());
-  const hasHandledRoomEndedRef = useRef(false);
-  const [showPendingRequests, setShowPendingRequests] = useState(false);
-  const [showRoomSettings, setShowRoomSettings] = useState(false);
-  const [showShortcuts, setShowShortcuts] = useState(false);
-  const [showWaitingRoom, setShowWaitingRoom] = useState(false);
-  const [isLeaving, setIsLeaving] = useState(false);
-  const [isEndingMeeting, setIsEndingMeeting] = useState(false);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const previousHostControlsRef = useRef(hostControls);
-  const isLeavingRef = useRef(false); // Prevent double cleanup
-  const isEndingMeetingRef = useRef(false);
-  const isLoadingPendingRequestsRef = useRef(false); // Track API call in progress
-  const endMeetingFallbackTimerRef = useRef<number | null>(null);
-  const [showParticipantList, setShowParticipantList] = useState(false);
-  const [showChatPanel, setShowChatPanel] = useState(false);
-  const [permissionBannerDismissed, setPermissionBannerDismissed] = useState(false);
-  const [showDeviceDialog, setShowDeviceDialog] = useState(false);
-  const [deviceDialogType, setDeviceDialogType] = useState<'audio' | 'video'>('audio');
-  const audioAutoMutedRef = useRef(false); // Track if we auto-muted due to device issue
-  const videoAutoMutedRef = useRef(false); // Track if we auto-muted due to device issue
-  const [localIsSpeaking, setLocalIsSpeaking] = useState(false); // Track local user speaking state independently
-  const showChatPanelRef = useRef(showChatPanel);
-  const [localForceState, setLocalForceState] = useState<{
-    audio: boolean;
-    video: boolean;
-    audioReason: string | null;
-    videoReason: string | null;
-  }>({
-    audio: false,
-    video: false,
-    audioReason: null,
-    videoReason: null,
+  // Initialize state hooks
+  const callState = useCallState({ hostControls, recording });
+  const callStreams = useCallStreams();
+  const callDevices = useCallDevices();
+
+  // Destructure state for easier access
+  const {
+    showPendingRequests,
+    setShowPendingRequests,
+    showRoomSettings,
+    setShowRoomSettings,
+    showShortcuts,
+    setShowShortcuts,
+    showWaitingRoom,
+    setShowWaitingRoom,
+    isLeaving,
+    setIsLeaving,
+    isEndingMeeting,
+    setIsEndingMeeting,
+    isSidebarCollapsed,
+    setIsSidebarCollapsed,
+    showParticipantList,
+    setShowParticipantList,
+    showChatPanel,
+    setShowChatPanel,
+    permissionBannerDismissed,
+    setPermissionBannerDismissed,
+    showDeviceDialog,
+    setShowDeviceDialog,
+    deviceDialogType,
+    setDeviceDialogType,
+    showAudioDropdown,
+    setShowAudioDropdown,
+    showVideoDropdown,
+    setShowVideoDropdown,
+    localIsSpeaking,
+    setLocalIsSpeaking,
+    localForceState,
+    setLocalForceState,
+    isConnecting,
+    setIsConnecting,
+    error,
+    setError,
+    recordingElapsedSeconds,
+    setRecordingElapsedSeconds,
+    windowSize,
+    hasConnectedRef,
+    isLeavingRef,
+    isEndingMeetingRef,
+    isLoadingPendingRequestsRef,
+    endMeetingFallbackTimerRef,
+    hasHandledRoomEndedRef,
+    previousHostControlsRef,
+    previousRecordingStatusRef,
+    showChatPanelRef,
+    audioAutoMutedRef,
+    videoAutoMutedRef,
+    isReconnectingRef,
+    isDisconnectHandledRef,
+    preservedLocalStreamRef,
+  } = callState;
+
+  const {
+    remoteStreams,
+    setRemoteStreams,
+    screenShareStreams,
+    setScreenShareStreams,
+    localVideoRef,
+    localVideoElement,
+    setLocalVideoElement,
+    setLocalVideoRef,
+    remoteVideoRefs,
+    remoteVideoRefCallbacks,
+    getRemoteVideoRef,
+    remoteAudioRefs,
+    hasEnabledAudioPlayback,
+    getRemoteAudioRef,
+    consumingProducersRef,
+    screenShareProducersRef,
+    producerMetadataRef,
+    activeScreenShareProducersRef,
+    isStoppingScreenShareRef,
+    networkMonitorRef,
+    activeSpeakerDetectorRef,
+    pendingParticipantEventsRef,
+  } = callStreams;
+
+  const { availableDevices, setAvailableDevices } = callDevices;
+
+  // Wrapper functions for utility helpers
+  const runOrQueueParticipantUpdateWrapper = useCallback(
+    (targetUserId: string | undefined, action: () => void) => {
+      runOrQueueParticipantUpdate(targetUserId, action, useCallStore.getState, pendingParticipantEventsRef);
+    },
+    []
+  );
+
+  const flushPendingParticipantEventsWrapper = useCallback(
+    (targetUserId: string | undefined) => {
+      flushPendingParticipantEvents(targetUserId, pendingParticipantEventsRef);
+    },
+    []
+  );
+
+  // Initialize producer consumption hook
+  const { consumeProducer, consumeScreenShareProducer } = useCallProducerConsumption({
+    consumingProducersRef,
+    producerMetadataRef,
+    screenShareProducersRef,
+    activeScreenShareProducersRef,
+    activeSpeakerDetectorRef,
+    remoteAudioRefs,
+    setRemoteStreams,
+    setScreenShareStreams,
+    setActiveSpeaker,
+    updateParticipant,
+    runOrQueueParticipantUpdate: runOrQueueParticipantUpdateWrapper,
   });
-  const [showAudioDropdown, setShowAudioDropdown] = useState(false);
-  const [showVideoDropdown, setShowVideoDropdown] = useState(false);
-  const [availableDevices, setAvailableDevices] = useState<{
-    audioInput: MediaDeviceInfo[];
-    videoInput: MediaDeviceInfo[];
-  }>({ audioInput: [], videoInput: [] });
-  const previousRecordingStatusRef = useRef<RecordingStatus | null>(recording.status ?? null);
-  const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
-  const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
 
-  useEffect(() => {
-    const loadDevices = async () => {
-      try {
-        const devices = await mediaManager.getDevices();
-        setAvailableDevices({
-          audioInput: devices.audioInput,
-          videoInput: devices.videoInput,
-        });
-      } catch (error) {
-        console.error('Failed to load devices:', error);
-      }
-    };
-
-    loadDevices();
-
-    const handleDeviceChange = () => {
-      loadDevices();
-    };
-
-    if (navigator.mediaDevices?.addEventListener) {
-      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
-    }
-
-    return () => {
-      if (navigator.mediaDevices?.removeEventListener) {
-        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -388,50 +420,6 @@ export default function Call() {
     }
   }, [preJoinCompleted, roomCode, navigate, hasCheckedAuth, isLeaving]);
 
-  const normalizeRecordingState = useCallback(
-    (incoming?: RecordingStateEventPayload | null): RecordingState => {
-      if (!incoming) {
-        return {
-          active: false,
-          status: null,
-          sessionId: null,
-          hostId: null,
-          serverInstanceId: null,
-          startedAt: null,
-          endedAt: null,
-          failureReason: null,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-
-      const rawStatus =
-        typeof incoming.status === 'string'
-          ? (incoming.status.toUpperCase() as RecordingStatus)
-          : incoming.status ?? null;
-      const allowedStatuses: RecordingStatus[] = [
-        'STARTING',
-        'RECORDING',
-        'UPLOADING',
-        'COMPLETED',
-        'FAILED',
-      ];
-      const normalizedStatus =
-        rawStatus && allowedStatuses.includes(rawStatus) ? rawStatus : null;
-
-      return {
-        active: Boolean(incoming.active) || normalizedStatus === 'RECORDING',
-        status: normalizedStatus,
-        sessionId: incoming.sessionId ?? null,
-        hostId: incoming.hostId ?? null,
-        serverInstanceId: incoming.serverInstanceId ?? null,
-        startedAt: incoming.startedAt ?? null,
-        endedAt: incoming.endedAt ?? null,
-        failureReason: incoming.failureReason ?? null,
-        updatedAt: incoming.updatedAt ?? new Date().toISOString(),
-      };
-    },
-    []
-  );
 
   useEffect(() => {
     previousHostControlsRef.current = hostControls;
@@ -596,33 +584,17 @@ export default function Call() {
     showChatPanelRef.current = showChatPanel;
   }, [showChatPanel]);
 
-  const resolveProducerMeta = useCallback((producerId: string) => {
-    const metadata = producerMetadataRef.current.get(producerId);
-    if (!metadata) {
-      return undefined;
-    }
-
-    const source = metadata.source;
-    let kind: 'audio' | 'video' | 'screen';
-    if (source === 'screen') {
-      kind = 'screen';
-    } else if (source === 'microphone') {
-      kind = 'audio';
-    } else if (source === 'camera') {
-      kind = 'video';
-    } else {
-      kind = metadata.kind ?? 'video';
-    }
-
-    return {
-      userId: metadata.userId,
-      kind,
-    };
-  }, []);
 
   const handleNetworkSamples = useCallback((samples: Parameters<typeof updateNetworkQuality>[0]) => {
     updateNetworkQuality(samples);
   }, [updateNetworkQuality]);
+
+  const resolveProducerMetaForNetwork = useCallback(
+    (producerId: string) => {
+      return resolveProducerMeta(producerId, producerMetadataRef);
+    },
+    []
+  );
 
   useEffect(() => {
     if (!isConnected || !user?.id) {
@@ -634,14 +606,14 @@ export default function Call() {
       return;
     }
 
-    if (!networkMonitorRef.current) {
-      networkMonitorRef.current = new NetworkMonitor({
-        localUserId: user.id,
-        intervalMs: 4000,
-        resolveProducerMeta,
-        onSamples: handleNetworkSamples,
-      });
-    }
+      if (!networkMonitorRef.current) {
+        networkMonitorRef.current = new NetworkMonitor({
+          localUserId: user.id,
+          intervalMs: 4000,
+          resolveProducerMeta: resolveProducerMetaForNetwork,
+          onSamples: handleNetworkSamples,
+        });
+      }
 
     networkMonitorRef.current.start();
 
@@ -649,7 +621,7 @@ export default function Call() {
       networkMonitorRef.current?.stop();
       networkMonitorRef.current = null;
     };
-  }, [isConnected, user?.id, resolveProducerMeta, handleNetworkSamples, clearNetworkQuality]);
+  }, [isConnected, user?.id, resolveProducerMetaForNetwork, handleNetworkSamples, clearNetworkQuality]);
 
   useEffect(() => {
     if (hasPermissionIssue) {
@@ -663,45 +635,6 @@ export default function Call() {
     }
   }, [hasPermissionIssue]);
 
-  const runOrQueueParticipantUpdate = (targetUserId: string | undefined, action: () => void) => {
-    if (!targetUserId) {
-      return;
-    }
-
-    const { participants } = useCallStore.getState();
-    const participantExists = participants.some(p => p.userId === targetUserId);
-
-    if (participantExists) {
-      action();
-      return;
-    }
-
-    const queue = pendingParticipantEventsRef.current.get(targetUserId) ?? [];
-    queue.push(action);
-    pendingParticipantEventsRef.current.set(targetUserId, queue);
-  };
-
-  const flushPendingParticipantEvents = (targetUserId: string | undefined) => {
-    if (!targetUserId) {
-      return;
-    }
-
-    const queue = pendingParticipantEventsRef.current.get(targetUserId);
-    if (!queue?.length) {
-      pendingParticipantEventsRef.current.delete(targetUserId);
-      return;
-    }
-
-    pendingParticipantEventsRef.current.delete(targetUserId);
-
-    queue.forEach((fn) => {
-      try {
-        fn();
-      } catch (error) {
-        console.error('Error executing pending participant update', { userId: targetUserId, error });
-      }
-    });
-  };
   const {
     handleStartScreenShare,
     handleStopScreenShare,
@@ -1011,6 +944,12 @@ export default function Call() {
   // Handle permanent disconnect - cleanup and navigate home
   const handlePermanentDisconnect = useCallback((reason: string) => {
     console.log('Permanent disconnect, cleaning up frontend resources...', reason);
+    
+    // Reset all reconnection guards
+    isReconnectingRef.current = false;
+    isDisconnectHandledRef.current = false;
+    preservedLocalStreamRef.current = null;
+    
     try {
       // Clean up WebRTC resources
       webrtcManager.cleanup();
@@ -1082,19 +1021,59 @@ export default function Call() {
     const handleDisconnect = (reason?: string) => {
       console.log('Socket disconnected, attempting reconnection...', reason);
       
+      // Guard against multiple disconnect events (race condition prevention)
+      if (isDisconnectHandledRef.current) {
+        console.log('Disconnect already being handled, skipping duplicate event');
+        return;
+      }
+      
+      // Mark as handled to prevent race conditions
+      isDisconnectHandledRef.current = true;
+      
+      // Preserve localStream reference (MediaStream can't be serialized in state)
+      if (localStream) {
+        preservedLocalStreamRef.current = localStream;
+      }
+      
       // Preserve state before attempting reconnection
-      preserveState();
+      // Only preserve if not already preserved (prevents overwriting)
+      const currentState = useCallStore.getState();
+      if (!currentState.preservedState) {
+        preserveState();
+      }
       
       // ReconnectionManager will handle the reconnection logic
       // We just need to wait for it to either succeed or fail
+      
+      // Reset disconnect guard after grace period or on reconnect
+      // This allows handling new disconnects after recovery
+      setTimeout(() => {
+        if (!isReconnectingRef.current) {
+          isDisconnectHandledRef.current = false;
+        }
+      }, 5000); // Reset after 5 seconds if not reconnecting
     };
 
     const handleReconnected = async () => {
       console.log('Socket reconnected, restoring call state...');
       
+      // Guard against concurrent reconnection attempts (race condition prevention)
+      if (isReconnectingRef.current) {
+        console.warn('Reconnection already in progress, skipping duplicate reconnection');
+        return;
+      }
+      
+      isReconnectingRef.current = true;
+      isDisconnectHandledRef.current = false; // Reset disconnect guard
+      
       try {
-        // Restore preserved state
+        // Restore preserved state (merges with current state, doesn't overwrite)
         restoreState();
+        
+        // Restore localStream from ref if available
+        if (preservedLocalStreamRef.current && !localStream) {
+          setLocalStream(preservedLocalStreamRef.current);
+        }
         
         // Rejoin the room if we have a roomCode
         if (roomCode && user) {
@@ -1121,6 +1100,8 @@ export default function Call() {
                   console.log('Recovering WebRTC transports...');
                   await webrtcManager.recoverTransports();
                   console.log('WebRTC transports recovered');
+                } else {
+                  console.log('WebRTC transports do not need recovery');
                 }
 
                 // Re-establish producers if we have local tracks
@@ -1228,11 +1209,21 @@ export default function Call() {
                 }
               } catch (error) {
                 console.error('Error during WebRTC recovery:', error);
-                // Continue anyway - transports might still work
+                // WebRTC recovery is critical - if it fails, we need to reinitialize
+                // Try to continue with existing transports, but log the error
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                if (errorMessage.includes('transport') || errorMessage.includes('connection')) {
+                  console.warn('WebRTC transport recovery failed, attempting full reconnection...');
+                  // Don't throw - let it continue and see if existing transports work
+                  // If they don't, the next operation will fail and trigger permanent disconnect
+                }
               }
 
               console.log('Successfully rejoined room after reconnection');
               setIsConnected(true);
+              
+              // Clear preserved stream ref after successful reconnection
+              preservedLocalStreamRef.current = null;
             } else {
               // Room join failed, treat as permanent disconnect
               handlePermanentDisconnect('Failed to rejoin room after reconnection');
@@ -1244,11 +1235,19 @@ export default function Call() {
       } catch (error) {
         console.error('Error during reconnection recovery:', error);
         handlePermanentDisconnect('Failed to restore connection');
+      } finally {
+        // Always reset reconnection guard
+        isReconnectingRef.current = false;
+        isDisconnectHandledRef.current = false;
       }
     };
 
     const handleReconnectFailed = () => {
       console.log('Reconnection failed, cleaning up...');
+      // Reset guards
+      isReconnectingRef.current = false;
+      isDisconnectHandledRef.current = false;
+      preservedLocalStreamRef.current = null;
       handlePermanentDisconnect('Connection lost');
     };
 
@@ -1655,7 +1654,7 @@ export default function Call() {
           isSpeaking: participantInfo.isSpeaking ?? undefined,
           hasRaisedHand: participantInfo.hasRaisedHand ?? undefined,
         });
-        flushPendingParticipantEvents(participantInfo.userId);
+        flushPendingParticipantEventsWrapper(participantInfo.userId);
       });
 
       // Backwards compatibility: ensure existingParticipants (from legacy payload) still adds anyone missing
@@ -1688,7 +1687,7 @@ export default function Call() {
             isSpeaking: false,
             hasRaisedHand: participantInfo.hasRaisedHand ?? false,
           });
-          flushPendingParticipantEvents(participantInfo.userId);
+          flushPendingParticipantEventsWrapper(participantInfo.userId);
         }
       }
 
@@ -1864,7 +1863,7 @@ export default function Call() {
         isSpeaking: participant.isSpeaking ?? undefined,
         hasRaisedHand: participant.hasRaisedHand ?? undefined,
       });
-      flushPendingParticipantEvents(participant.userId);
+      flushPendingParticipantEventsWrapper(participant.userId);
     };
     socketManager.on('user-joined', handleUserJoined);
     eventListenersRef.current['user-joined'] = handleUserJoined;
@@ -1956,7 +1955,7 @@ export default function Call() {
       webrtcManager.closeConsumerByProducerId(data.producerId);
 
       if (userIdForProducer && (kindForProducer === 'audio' || kindForProducer === 'video')) {
-        runOrQueueParticipantUpdate(userIdForProducer, () => {
+        runOrQueueParticipantUpdateWrapper(userIdForProducer, () => {
           if (kindForProducer === 'audio') {
             updateParticipant(userIdForProducer, { isAudioMuted: true });
           }
@@ -2055,7 +2054,7 @@ export default function Call() {
       reason?: string | null;
       timestamp?: number;
     }) => {
-      runOrQueueParticipantUpdate(data.userId, () => {
+      runOrQueueParticipantUpdateWrapper(data.userId, () => {
         const timestampIso =
           typeof data.timestamp === 'number'
             ? new Date(data.timestamp).toISOString()
@@ -2081,7 +2080,7 @@ export default function Call() {
       reason?: string | null;
       timestamp?: number;
     }) => {
-      runOrQueueParticipantUpdate(data.userId, () => {
+      runOrQueueParticipantUpdateWrapper(data.userId, () => {
         const timestampIso =
           typeof data.timestamp === 'number'
             ? new Date(data.timestamp).toISOString()
@@ -2310,7 +2309,7 @@ export default function Call() {
           console.error('Error during forced leave:', error);
         }
       } else {
-        runOrQueueParticipantUpdate(payload.userId, () => {
+        runOrQueueParticipantUpdateWrapper(payload.userId, () => {
           removeParticipant(payload.userId);
         });
         toast(payload.reason ?? 'A participant was removed by the host.', {
@@ -2379,7 +2378,7 @@ export default function Call() {
 
       const isModerator = payload.isModerator ?? normalizedRole !== 'PARTICIPANT';
 
-      runOrQueueParticipantUpdate(payload.userId, () => {
+      runOrQueueParticipantUpdateWrapper(payload.userId, () => {
         updateParticipant(payload.userId!, {
           role: normalizedRole,
           isAdmin: isModerator,
@@ -2428,7 +2427,7 @@ export default function Call() {
     const handleActiveSpeaker = (data: { userId: string; isActiveSpeaker: boolean }) => {
       if (data.isActiveSpeaker) {
         setActiveSpeaker(data.userId);
-        runOrQueueParticipantUpdate(data.userId, () => {
+        runOrQueueParticipantUpdateWrapper(data.userId, () => {
           updateParticipant(data.userId, { isSpeaking: true });
         });
       } else {
@@ -2437,7 +2436,7 @@ export default function Call() {
         if (currentActiveSpeaker === data.userId) {
           setActiveSpeaker(null);
         }
-        runOrQueueParticipantUpdate(data.userId, () => {
+        runOrQueueParticipantUpdateWrapper(data.userId, () => {
           updateParticipant(data.userId, { isSpeaking: false });
         });
       }
@@ -2447,7 +2446,7 @@ export default function Call() {
 
     // Raised hand event
     const handleRaisedHand = (data: { userId: string; isRaised: boolean }) => {
-      runOrQueueParticipantUpdate(data.userId, () => {
+      runOrQueueParticipantUpdateWrapper(data.userId, () => {
         setRaiseHand(data.userId, data.isRaised);
       });
     };
@@ -2623,386 +2622,22 @@ export default function Call() {
     eventListenersRef.current['screen-share-stopped'] = handleScreenShareStopped;
   };
 
-  // Consume screen share producer separately
-  const consumeScreenShareProducer = async (producerId: string, userId?: string) => {
-    try {
-      // Prevent duplicate consumption
-      if (consumingProducersRef.current.has(producerId)) {
-        console.log('Already processing screen share producer:', producerId);
-        return;
-      }
-
-      consumingProducersRef.current.add(producerId);
-
-      console.log('Starting to consume screen share producer:', { producerId, userId });
-
-      const track = await webrtcManager.consumeProducer(producerId);
-
-      consumingProducersRef.current.delete(producerId);
-
-      if (!track) {
-        console.warn('No track received from screen share consumer:', producerId);
-        return;
-      }
-
-      if (track.readyState === 'ended') {
-        console.error('Screen share track already ended:', producerId);
-        return;
-      }
-
-      // Add to screen share streams (separate from participant video streams)
-      const ownerId = userId || producerMetadataRef.current.get(producerId)?.userId || producerId;
-
-      setScreenShareStreams(prev => {
-        const newStreams = new Map(prev);
-
-        if (track.readyState === 'live') {
-          const stream = new MediaStream([track]);
-          newStreams.set(ownerId, stream);
-          activeScreenShareProducersRef.current.add(producerId);
-          console.log('Created screen share stream for user:', ownerId);
-        }
-
-        return newStreams;
-      });
-    } catch (error) {
-      consumingProducersRef.current.delete(producerId);
-      console.error('Error consuming screen share producer:', error);
-    }
-  };
-
-  const consumeProducer = async (producerId: string, userId?: string, kind?: 'audio' | 'video') => {
-    try {
-      // Prevent duplicate consumption of the same producer
-      if (consumingProducersRef.current.has(producerId)) {
-        console.log('Already processing producer:', producerId, '- skipping duplicate consumption');
-        return;
-      }
-
-      // Skip if this is a screen share producer (screen shares are handled separately)
-      const metadata = producerMetadataRef.current.get(producerId);
-      const resolvedUserId = userId ?? metadata?.userId;
-
-      if (metadata?.source === 'screen') {
-        // IMPORTANT: Double-check if this is really a screen share
-        // If user has no active screen share, this might be mislabeled camera video
-        if (resolvedUserId) {
-          const hasActiveScreenShare = screenShareProducersRef.current.has(resolvedUserId);
-          if (!hasActiveScreenShare) {
-            // Update metadata to treat as camera video and continue processing
-            producerMetadataRef.current.set(producerId, {
-              ...metadata,
-              source: 'camera',
-            });
-            // Continue to process as camera video instead of returning
-          } else {
-            console.log('Skipping screen share producer in consumeProducer:', producerId);
-            return;
-          }
-        } else {
-          console.log('Skipping screen share producer in consumeProducer:', producerId);
-          return;
-        }
-      }
-
-      consumingProducersRef.current.add(producerId);
-
-      console.log('Starting to consume producer:', { producerId, userId: resolvedUserId, kind });
-
-      const track = await webrtcManager.consumeProducer(producerId);
-
-      // Remove from processing set after getting track (even if null)
-      consumingProducersRef.current.delete(producerId);
-
-      if (!track) {
-        console.warn('No track received from consumer for producer:', producerId);
-        return;
-      }
-
-      // Start active speaker detection for remote audio tracks
-      if (track.kind === 'audio' && resolvedUserId && activeSpeakerDetectorRef.current) {
-        // Get consumer from webrtcManager - use getConsumerEntries and find by producerId
-        const consumerEntries = webrtcManager.getConsumerEntries();
-        const consumerEntry = consumerEntries.find(entry => entry.producerId === producerId);
-
-        if (consumerEntry?.consumer) {
-          activeSpeakerDetectorRef.current.startMonitoringRemote(
-            resolvedUserId,
-            consumerEntry.consumer,
-            producerId,
-            (userId, isActive) => {
-              // Update local state immediately for UI responsiveness
-              if (isActive) {
-                setActiveSpeaker(userId);
-                runOrQueueParticipantUpdate(userId, () => {
-                  updateParticipant(userId, {
-                    isSpeaking: true
-                  });
-                });
-              } else {
-                const { activeSpeakerId: currentActiveSpeaker } = useCallStore.getState();
-                if (currentActiveSpeaker === userId) {
-                  setActiveSpeaker(null);
-                }
-                runOrQueueParticipantUpdate(userId, () => {
-                  updateParticipant(userId, {
-                    isSpeaking: false
-                  });
-                });
-              }
-              // Emit to other participants only for local user (not needed for remote, backend handles it)
-            }
-          );
-        }
-      }
-
-      // Add track event listeners for robustness (CRITICAL for audio reliability)
-      const handleTrackEnded = () => {
-        console.error('❌ Track ended unexpectedly for producer:', producerId, 'kind:', track.kind);
-
-        // Update participant UI if it's audio/video
-        if (resolvedUserId) {
-          runOrQueueParticipantUpdate(resolvedUserId, () => {
-            if (track.kind === 'audio') {
-              updateParticipant(resolvedUserId, { isAudioMuted: true });
-            } else if (track.kind === 'video') {
-              updateParticipant(resolvedUserId, { isVideoMuted: true });
-            }
-          });
-        }
-
-        // Remove track from stream
-        setRemoteStreams(prev => {
-          if (!resolvedUserId) return prev;
-          const newStreams = new Map(prev);
-          const stream = newStreams.get(resolvedUserId);
-          if (stream) {
-            stream.removeTrack(track);
-            if (stream.getTracks().length === 0) {
-              newStreams.delete(resolvedUserId);
-            } else {
-              newStreams.set(resolvedUserId, new MediaStream(stream.getTracks()));
-            }
-          }
-          return newStreams;
-        });
-      };
-
-      const handleTrackMuted = () => {
-        console.warn('⚠️ Track muted for producer:', producerId, 'kind:', track.kind);
-        if (!resolvedUserId) return;
-
-        runOrQueueParticipantUpdate(resolvedUserId, () => {
-          if (track.kind === 'audio') {
-            updateParticipant(resolvedUserId, { isAudioMuted: true });
-          }
-          if (track.kind === 'video') {
-            updateParticipant(resolvedUserId, { isVideoMuted: true });
-          }
-        });
-      };
-
-      const handleTrackUnmuted = () => {
-        console.log('✅ Track unmuted for producer:', producerId, 'kind:', track.kind);
-        if (!resolvedUserId) return;
-
-        runOrQueueParticipantUpdate(resolvedUserId, () => {
-          if (track.kind === 'audio') {
-            updateParticipant(resolvedUserId, { isAudioMuted: false });
-
-            // Re-attach to audio element and try to play (in case autoplay failed initially)
-            const audioEl = remoteAudioRefs.current.get(resolvedUserId);
-            if (audioEl && audioEl.paused) {
-              audioEl.play().catch(err => {
-                if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
-                  console.error('Error playing audio after unmute:', err);
-                }
-              });
-            }
-          }
-          if (track.kind === 'video') {
-            updateParticipant(resolvedUserId, { isVideoMuted: false });
-          }
-        });
-      };
-
-      // Attach event listeners
-      track.addEventListener('ended', handleTrackEnded);
-      track.addEventListener('mute', handleTrackMuted);
-      track.addEventListener('unmute', handleTrackUnmuted);
-
-      // Verify track is still live before adding to stream
-      if (track.readyState === 'ended') {
-        console.error('❌ Track already ended before adding to stream:', producerId);
-
-        // Retry consumption after a delay (race condition recovery)
-        // This handles cases where track ends briefly but producer is still active
-        const retryKey = `retry_${producerId}`;
-        const retryCount = (consumingProducersRef.current as any)[retryKey] || 0;
-
-        if (retryCount < 3) {
-          (consumingProducersRef.current as any)[retryKey] = retryCount + 1;
-          const retryDelay = 500 * Math.pow(2, retryCount); // Exponential backoff: 500ms, 1s, 2s
-
-          console.log(`Scheduling retry ${retryCount + 1}/3 for producer ${producerId} in ${retryDelay}ms`);
-          setTimeout(() => {
-            console.log(`Retrying consumption for producer ${producerId} (attempt ${retryCount + 1})`);
-            consumeProducer(producerId, userId, kind);
-          }, retryDelay);
-        } else {
-          console.error(`❌ Max retries (3) exceeded for producer ${producerId} - track permanently ended`);
-          delete (consumingProducersRef.current as any)[retryKey];
-        }
-
-        return;
-      }
-
-      console.log('Track received:', {
-        producerId,
-        userId,
-        kind,
-        trackId: track.id,
-        trackKind: track.kind,
-        trackEnabled: track.enabled,
-        trackReadyState: track.readyState,
-      });
-
-      if (resolvedUserId) {
-        // Merge tracks for the same user instead of overwriting
-        setRemoteStreams(prev => {
-          const newStreams = new Map(prev);
-          const existingStream = newStreams.get(resolvedUserId);
-
-          if (existingStream) {
-            // Check if track of same kind already exists
-            const existingTrackOfKind = existingStream.getTracks().find(
-              t => t.kind === track.kind && t.id !== track.id
-            );
-
-            if (existingTrackOfKind) {
-              // If it's the SAME track, don't do anything
-              if (existingTrackOfKind.id === track.id) {
-                console.log('Same track already in stream, skipping:', track.id);
-                return prev; // Return unchanged
-              }
-
-              // Only replace if it's a DIFFERENT track (not the same one)
-              console.log('Replacing existing track of kind:', track.kind, 'for user:', userId, {
-                oldTrackId: existingTrackOfKind.id,
-                oldTrackState: existingTrackOfKind.readyState,
-                newTrackId: track.id,
-                newTrackState: track.readyState,
-              });
-
-              // Only remove old track if it's ended or if new track is live
-              if (existingTrackOfKind.readyState === 'ended') {
-                console.log('Old track already ended, removing it');
-                existingStream.removeTrack(existingTrackOfKind);
-                // Don't need to stop - it's already ended
-              } else if (track.readyState === 'live') {
-                // Only replace if new track is live and old track is still live
-                // This typically happens when producer replaces its track (e.g., camera restarted)
-                if (existingTrackOfKind.readyState === 'live') {
-                  console.log('Replacing live track with new live track (producer track replacement)');
-                  // Remove old track from stream first
-                  existingStream.removeTrack(existingTrackOfKind);
-                  // Stop old track - this is intentional (producer replaced track)
-                  try {
-                    existingTrackOfKind.stop();
-                  } catch (e) {
-                    console.warn('Error stopping old track:', e);
-                  }
-                } else {
-                  // Old track already ended, just remove it
-                  console.log('Old track already ended, removing it');
-                  existingStream.removeTrack(existingTrackOfKind);
-                }
-              } else {
-                // New track is ended, don't replace
-                console.warn('⚠️ New track is ended, not replacing existing track');
-                return prev;
-              }
-            } else {
-              // Check if this exact track is already in the stream
-              const isTrackAlreadyInStream = existingStream.getTracks().some(t => t.id === track.id);
-              if (isTrackAlreadyInStream) {
-                console.log('Track already in stream, skipping:', track.id);
-                return prev; // Return unchanged
-              }
-            }
-
-            // Only add track if it's still live
-            if (track.readyState === 'live') {
-              existingStream.addTrack(track);
-              // Create new MediaStream reference to trigger React update
-              const updatedStream = new MediaStream(existingStream.getTracks());
-              newStreams.set(resolvedUserId, updatedStream);
-              console.log('Updated existing stream for user:', resolvedUserId, 'tracks:', updatedStream.getTracks().length, 'track states:', updatedStream.getTracks().map(t => ({ kind: t.kind, id: t.id, state: t.readyState })));
-            } else {
-              console.error('❌ Track became ended before adding to stream:', track.id, track.readyState);
-              return prev; // Don't update if track is ended
-            }
-          } else {
-            // Create new stream for this user - only if track is live
-            if (track.readyState === 'live') {
-              const stream = new MediaStream([track]);
-              newStreams.set(resolvedUserId, stream);
-              console.log('Created new stream for user:', resolvedUserId, 'track kind:', track.kind, 'track id:', track.id);
-            } else {
-              console.error('❌ Track ended before creating stream:', track.id, track.readyState);
-              return prev; // Don't create stream with ended track
-            }
-          }
-
-          return newStreams;
-        });
-        console.log('Remote stream added to state:', { producerId, userId: resolvedUserId, kind });
-      } else {
-        // Fallback if no userId (shouldn't happen with current backend)
-        console.warn('No userId provided for producer:', producerId);
-        setRemoteStreams(prev => {
-          const newStreams = new Map(prev);
-          const stream = new MediaStream([track]);
-          newStreams.set(producerId, stream);
-          return newStreams;
-        });
-        console.log('Remote stream added (no userId):', { producerId });
-      }
-
-      if (resolvedUserId) {
-        runOrQueueParticipantUpdate(resolvedUserId, () => {
-          if (track.kind === 'audio') {
-            updateParticipant(resolvedUserId, { isAudioMuted: false });
-          }
-          if (track.kind === 'video') {
-            updateParticipant(resolvedUserId, { isVideoMuted: false });
-          }
-        });
-
-        const handleTrackMuted = () => {
-          runOrQueueParticipantUpdate(resolvedUserId, () => {
-            if (track.kind === 'audio') {
-              updateParticipant(resolvedUserId, { isAudioMuted: true });
-            }
-            if (track.kind === 'video') {
-              updateParticipant(resolvedUserId, { isVideoMuted: true });
-            }
-          });
-        };
-
-        track.onended = handleTrackMuted;
-      }
-    } catch (error) {
-      consumingProducersRef.current.delete(producerId);
-      console.error('Error consuming producer:', { producerId, userId, kind, error });
-    }
-  };
+  // Producer consumption functions are now provided by useCallProducerConsumption hook
 
   const leaveRoom = async (options?: { skipSuccessToast?: boolean; skipLoadingToast?: boolean }) => {
     // Prevent double execution
     if (isLeavingRef.current) {
       console.log('Leave already in progress, ignoring duplicate call');
       return;
+    }
+    
+    // If reconnecting, cancel reconnection first
+    if (isReconnectingRef.current) {
+      console.log('Leaving room during reconnection, canceling reconnection...');
+      reconnectionManager.cancelReconnection();
+      isReconnectingRef.current = false;
+      isDisconnectHandledRef.current = false;
+      preservedLocalStreamRef.current = null;
     }
 
     hasHandledRoomEndedRef.current = true;
@@ -3090,8 +2725,6 @@ export default function Call() {
 
         // Clear screen share producers ref
         screenShareProducersRef.current.clear();
-        producerMetadataRef.current.clear();
-        activeScreenShareProducersRef.current.clear();
         producerMetadataRef.current.clear();
         activeScreenShareProducersRef.current.clear();
 
@@ -3487,212 +3120,41 @@ export default function Call() {
   const hasPinnedScreenShare = hasScreenShareStage && Boolean(pinnedScreenShareUserId);
   const showSplitLayout = hasPinnedScreenShare;
 
-  // Track window size for responsive tile limit calculation
-  useEffect(() => {
-    const handleResize = () => {
-      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // Calculate maximum tiles based on minimum tile dimensions (320x240) and available space
-  const maxVisibleTiles = useMemo(() => {
-    // Minimum tile dimensions for proper video visibility
-    const MIN_TILE_WIDTH = 320;
-    const MIN_TILE_HEIGHT = 240;
-    const GAP = 4; // gap-1 = 4px
-
-    // Estimate available space (accounting for controls, padding, and safe margins)
-    const availableHeight = windowSize.height - 80 - (isScreenSharing ? 50 : 0) - 20; // minus controls, banner, and safety margin
-    const availableWidth = windowSize.width - 40; // minus safety margins
-
-    // Calculate max columns and rows that fit with minimum dimensions
-    const maxCols = Math.floor((availableWidth + GAP) / (MIN_TILE_WIDTH + GAP));
-    const maxRows = Math.floor((availableHeight + GAP) / (MIN_TILE_HEIGHT + GAP));
-
-    // Cap at 4 columns max (for 4x4 grid)
-    const cols = Math.min(4, Math.max(1, maxCols));
-    const rows = Math.max(1, maxRows);
-
-    // Return the maximum tiles that fit, ensuring we don't exceed what can actually fit
-    const calculatedMax = cols * rows;
-
-    // For your 1521x842 screen: 
-    // Width: (1521-40+4)/(320+4) = 1485/324 = 4.58 -> 4 cols
-    // Height: (842-80-20+4)/(240+4) = 746/244 = 3.05 -> 3 rows
-    // Max = 4 * 3 = 12 tiles
-
-    return Math.min(16, calculatedMax);
-  }, [windowSize, isScreenSharing]);
+  // Use layout hook - calculate maxVisibleTiles first, then slice
+  const layout = useCallLayout({
+    windowSize,
+    isScreenSharing,
+    showSplitLayout,
+    isSidebarCollapsed,
+    participantTilesForDisplay: allParticipantTiles, // Pass all tiles, hook will calculate max
+    allParticipantTiles,
+    activeSpeakerId,
+    pinnedScreenShareUserId,
+    setIsSidebarCollapsed,
+  });
 
   // Limit tiles to grid capacity - stop adding after container is filled
-  const participantTilesForDisplay = allParticipantTiles.slice(0, maxVisibleTiles);
-  const overflowCount = Math.max(0, totalParticipants - maxVisibleTiles);
+  const participantTilesForDisplay = allParticipantTiles.slice(0, layout.maxVisibleTiles);
+  const overflowCount = Math.max(0, totalParticipants - layout.maxVisibleTiles);
 
-  const isSoloLayout = !showSplitLayout && participantTilesForDisplay.length === 1;
-  const nonSplitLayoutConfig = useMemo(() => {
-    if (showSplitLayout) {
-      return null;
-    }
-    return getNonSplitLayoutConfig(participantTilesForDisplay.length);
-  }, [showSplitLayout, participantTilesForDisplay.length]);
-  const splitGridClasses = showSplitLayout ? getGridTemplateClasses(participantTilesForDisplay.length) : '';
-  const splitGridAutoRowsClass =
-    showSplitLayout && participantTilesForDisplay.length >= 10
-      ? 'auto-rows-[minmax(240px,1fr)]'
-      : showSplitLayout && participantTilesForDisplay.length >= 7
-        ? 'auto-rows-[minmax(240px,1fr)]'
-        : showSplitLayout
-          ? 'auto-rows-[minmax(240px,1fr)]'
-          : '';
-  const bottomControlsOffset = 80; // Height of bottom controls bar (48px button + 12px top padding + 12px bottom padding + 8px buffer)
-  const screenShareBannerHeight = 50; // Height of screen share banner (py-3 = 12px top + 12px bottom + ~20px content + 1px border + buffer)
-  const topOffset = isScreenSharing ? screenShareBannerHeight : 0;
-  const splitLayoutContainerStyle = useMemo(() => {
-    if (!showSplitLayout) {
-      return undefined;
-    }
-    return {
-      maxHeight: `calc(100vh - ${topOffset}px - ${bottomControlsOffset}px - env(safe-area-inset-bottom))`,
-      paddingBottom: 0,
-      marginBottom: 0,
-    };
-  }, [showSplitLayout, bottomControlsOffset, topOffset]);
-  const sharePaneBaseClasses =
-    'flex-1 min-h-0 min-w-0 overflow-hidden rounded-[32px] border border-gray-700/50 bg-gray-900/40 shadow-[0_30px_60px_-35px_rgba(0,0,0,0.5)] backdrop-blur';
-  const sharePaneClassName = showSplitLayout
-    ? `${sharePaneBaseClasses} ${isSidebarCollapsed ? 'lg:basis-full xl:basis-full' : 'lg:basis-[78%] xl:basis-[82%]'}`
-    : sharePaneBaseClasses;
-  const activeSpeakerTile = showSplitLayout
-    ? allParticipantTiles.find(tile => tile.userId === activeSpeakerId)
-    : undefined;
-  const activeSpeakerStream = activeSpeakerTile?.stream ?? null;
-  const activeSpeakerFirstVideoTrack = activeSpeakerStream?.getVideoTracks?.()[0];
-  const activeSpeakerTileFacingMode = activeSpeakerFirstVideoTrack?.getSettings?.().facingMode;
-  const activeSpeakerTrackLabel = activeSpeakerFirstVideoTrack?.label?.toLowerCase() ?? '';
-  const activeSpeakerIsProbableScreenShare =
-    activeSpeakerTrackLabel.includes('screen') ||
-    activeSpeakerTrackLabel.includes('display') ||
-    activeSpeakerTrackLabel.includes('window');
-  const activeSpeakerHasLiveVideo = Boolean(
-    activeSpeakerStream &&
-    activeSpeakerStream.getVideoTracks().some(track => track.readyState === 'live' && track.enabled) &&
-    !activeSpeakerTile?.isVideoMuted
-  );
-  const shouldShowActiveSpeakerOverlay = Boolean(
-    showSplitLayout && activeSpeakerTile && activeSpeakerTile.userId !== pinnedScreenShareUserId
-  );
-  const mainLayoutSpacingClass = isSidebarCollapsed ? 'gap-2 pt-0 pb-0 m-0' : 'gap-4 pt-0 pb-0 m-0';
-
-  useEffect(() => {
-    if (!showSplitLayout && isSidebarCollapsed) {
-      setIsSidebarCollapsed(false);
-    }
-  }, [showSplitLayout, isSidebarCollapsed]);
-
-
-
-  const getRemoteVideoRef = useCallback((userId: string) => {
-    // Always create/update the callback to ensure it has the latest remoteStreams reference
-    remoteVideoRefCallbacks.current.set(userId, (element: HTMLVideoElement | null) => {
-      if (!element) {
-        remoteVideoRefs.current.delete(userId);
-        return;
-      }
-
-      // Only update ref if element changed (prevents unnecessary updates)
-      const existingRef = remoteVideoRefs.current.get(userId);
-      if (existingRef === element) {
-        // Element hasn't changed, check if stream needs updating
-        const existingStream = remoteStreams.get(userId);
-        if (existingStream && element.srcObject !== existingStream) {
-          element.srcObject = existingStream;
-          // Let autoPlay handle initial play, only manually play if video is paused and ready
-          // This prevents AbortError when streams are updated rapidly
-          if (element.paused && element.readyState >= 2) {
-            element.play().catch(err => {
-              // AbortError is harmless - it means a new play() was requested before the previous one completed
-              if (err.name !== 'AbortError') {
-                console.error('Error playing video on mount for user:', userId, err);
-              }
-            });
-          }
-        }
-        return;
-      }
-
-      remoteVideoRefs.current.set(userId, element);
-
-      // Immediately attach existing stream if available (fixes timing issue where stream arrives before video element)
-      const existingStream = remoteStreams.get(userId);
-      if (existingStream) {
-        // Only attach if stream is not already attached (prevents duplicate attachments and blinking)
-        if (element.srcObject !== existingStream) {
-          element.srcObject = existingStream;
-          // Let autoPlay handle initial play, only manually play if video is paused and ready
-          // This prevents AbortError when streams are attached rapidly
-          if (element.paused && element.readyState >= 2) {
-            element.play().catch(err => {
-              // AbortError is harmless - it means a new play() was requested before the previous one completed
-              if (err.name !== 'AbortError') {
-                console.error('Error playing video on mount for user:', userId, err);
-              }
-            });
-          }
-        }
-      }
-    });
-
-    return remoteVideoRefCallbacks.current.get(userId)!;
-  }, [remoteStreams]);
-
-  // Audio ref callback - similar to video but for audio elements
-  const getRemoteAudioRef = useCallback((userId: string) => {
-    return (element: HTMLAudioElement | null) => {
-      if (!element) {
-        remoteAudioRefs.current.delete(userId);
-        return;
-      }
-
-      const existingRef = remoteAudioRefs.current.get(userId);
-      if (existingRef === element) {
-        // Element hasn't changed, check if stream needs updating
-        const existingStream = remoteStreams.get(userId);
-        if (existingStream && element.srcObject !== existingStream) {
-          element.srcObject = existingStream;
-          element.volume = 1.0;
-          if (element.paused) {
-            element.play().catch(err => {
-              if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
-                console.error('Error playing audio for user:', userId, err);
-              }
-            });
-          }
-        }
-        return;
-      }
-
-      remoteAudioRefs.current.set(userId, element);
-
-      // Immediately attach existing stream if available
-      const existingStream = remoteStreams.get(userId);
-      if (existingStream) {
-        if (element.srcObject !== existingStream) {
-          element.srcObject = existingStream;
-          element.volume = 1.0;
-          if (element.paused) {
-            element.play().catch(err => {
-              if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
-                console.error('Error playing audio on mount for user:', userId, err);
-              }
-            });
-          }
-        }
-      }
-    };
-  }, [remoteStreams]);
+  // Destructure layout values
+  const {
+    isSoloLayout,
+    nonSplitLayoutConfig,
+    splitGridClasses,
+    splitGridAutoRowsClass,
+    bottomControlsOffset,
+    topOffset,
+    splitLayoutContainerStyle,
+    sharePaneClassName,
+    activeSpeakerTile,
+    activeSpeakerStream,
+    activeSpeakerTileFacingMode,
+    activeSpeakerIsProbableScreenShare,
+    activeSpeakerHasLiveVideo,
+    shouldShowActiveSpeakerOverlay,
+    mainLayoutSpacingClass,
+  } = layout;
 
   const renderParticipantTile = (tile: ParticipantTile, index: number) => {
     return (
@@ -4027,8 +3489,15 @@ export default function Call() {
       />
       <ReconnectionOverlay
         onCancel={() => {
-          reconnectionManager.cancelReconnection();
-          handlePermanentDisconnect('Reconnection cancelled by user');
+          // Only cancel if actually reconnecting (prevent canceling after successful reconnect)
+          if (isReconnectingRef.current || reconnectionManager.isReconnecting()) {
+            reconnectionManager.cancelReconnection();
+            // Reset guards
+            isReconnectingRef.current = false;
+            isDisconnectHandledRef.current = false;
+            preservedLocalStreamRef.current = null;
+            handlePermanentDisconnect('Reconnection cancelled by user');
+          }
         }}
       />
     </div>

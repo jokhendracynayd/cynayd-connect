@@ -1068,7 +1068,14 @@ export const useCallStore = create<CallState>((set) => ({
   }),
   setReconnectionState: (state) => set({ reconnectionState: state }),
   preserveState: () => set((currentState) => {
+    // Don't overwrite if already preserved (prevents race conditions)
+    if (currentState.preservedState) {
+      console.log('State already preserved, skipping duplicate preserveState call');
+      return {};
+    }
+    
     // Preserve critical state that should be restored after reconnection
+    // Note: localStream is preserved separately via ref (MediaStream can't be serialized)
     const preserved: Partial<CallState> = {
       roomCode: currentState.roomCode,
       participants: currentState.participants,
@@ -1078,26 +1085,64 @@ export const useCallStore = create<CallState>((set) => ({
       roomIsPublic: currentState.roomIsPublic,
       pendingRequests: currentState.pendingRequests,
       activeSpeakerId: currentState.activeSpeakerId,
-      raisedHands: currentState.raisedHands,
-      screenShares: currentState.screenShares,
+      raisedHands: new Set(currentState.raisedHands), // Create new Set to preserve
+      screenShares: new Map(currentState.screenShares), // Create new Map to preserve
       pinnedScreenShareUserId: currentState.pinnedScreenShareUserId,
       isScreenSharing: currentState.isScreenSharing,
       selectedDevices: currentState.selectedDevices,
       settings: currentState.settings,
-      chat: currentState.chat,
+      chat: {
+        activeConversationId: currentState.chat.activeConversationId,
+        conversations: new Map(currentState.chat.conversations),
+        messages: new Map(currentState.chat.messages),
+      },
       hostControls: currentState.hostControls,
       recording: currentState.recording,
+      // Preserve mute states
+      isAudioMuted: currentState.isAudioMuted,
+      isVideoMuted: currentState.isVideoMuted,
     };
     return { preservedState: preserved };
   }),
   restoreState: () => set((currentState) => {
     if (!currentState.preservedState) {
+      console.log('No preserved state to restore');
       return {};
     }
-    // Restore preserved state
-    const restored = { ...currentState.preservedState };
+    
+    // Merge preserved state with current state (don't overwrite everything)
+    // This preserves any state updates that happened during reconnection
+    const preserved = currentState.preservedState;
+    
     return {
-      ...restored,
+      // Restore preserved values, but keep current values for critical runtime state
+      roomCode: preserved.roomCode ?? currentState.roomCode,
+      participants: preserved.participants ?? currentState.participants,
+      isAdmin: preserved.isAdmin ?? currentState.isAdmin,
+      participantRole: preserved.participantRole ?? currentState.participantRole,
+      isHost: preserved.isHost ?? currentState.isHost,
+      roomIsPublic: preserved.roomIsPublic ?? currentState.roomIsPublic,
+      pendingRequests: preserved.pendingRequests ?? currentState.pendingRequests,
+      activeSpeakerId: preserved.activeSpeakerId ?? currentState.activeSpeakerId,
+      raisedHands: preserved.raisedHands ? new Set(preserved.raisedHands) : currentState.raisedHands,
+      screenShares: preserved.screenShares ? new Map(preserved.screenShares) : currentState.screenShares,
+      pinnedScreenShareUserId: preserved.pinnedScreenShareUserId ?? currentState.pinnedScreenShareUserId,
+      isScreenSharing: preserved.isScreenSharing ?? currentState.isScreenSharing,
+      selectedDevices: preserved.selectedDevices ?? currentState.selectedDevices,
+      settings: preserved.settings ?? currentState.settings,
+      chat: preserved.chat ? {
+        activeConversationId: preserved.chat.activeConversationId ?? currentState.chat.activeConversationId,
+        conversations: preserved.chat.conversations ? new Map(preserved.chat.conversations) : currentState.chat.conversations,
+        messages: preserved.chat.messages ? new Map(preserved.chat.messages) : currentState.chat.messages,
+      } : currentState.chat,
+      hostControls: preserved.hostControls ?? currentState.hostControls,
+      recording: preserved.recording ?? currentState.recording,
+      // Restore mute states if preserved
+      isAudioMuted: preserved.isAudioMuted ?? currentState.isAudioMuted,
+      isVideoMuted: preserved.isVideoMuted ?? currentState.isVideoMuted,
+      // Keep current runtime state (don't overwrite)
+      isConnected: currentState.isConnected, // Keep current connection state
+      localStream: currentState.localStream, // Keep current stream (restored via ref)
       preservedState: null, // Clear preserved state after restoration
     };
   }),
