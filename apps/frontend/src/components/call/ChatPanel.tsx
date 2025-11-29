@@ -387,7 +387,7 @@ export default function ChatPanel({ currentUser, className, onClose }: ChatPanel
 
   return (
     <div
-      className={`flex h-full min-h-[480px] flex-col border-l border-slate-200 bg-white ${className ?? ''}`}
+      className={`flex h-full min-h-[480px] flex-col border-l border-slate-200 bg-white/90 backdrop-blur-xl shadow-[0_28px_60px_-32px_rgba(14,165,233,0.35)] ${className ?? ''}`}
     >
       <div className="border-b border-slate-200 px-5 py-4">
         <div className="flex items-center justify-between">

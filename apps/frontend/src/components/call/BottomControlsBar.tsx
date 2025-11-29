@@ -5,6 +5,7 @@ import ScreenShareButton from './ScreenShareButton';
 import ChatButton from './ChatButton';
 import ParticipantsButton from './ParticipantsButton';
 import AdminBottomButtons from './AdminBottomButtons';
+import MoreOptionsButton from './MoreOptionsButton';
 import LeaveButton from './LeaveButton';
 import { MicMutedIcon, VideoMutedIcon } from './icons';
 
@@ -180,6 +181,14 @@ export default function BottomControlsBar({
             onClick={onShowParticipantList}
           />
 
+          {/* More Options Button - Available to Everyone */}
+          <MoreOptionsButton
+            roomCode={roomCode}
+            currentIsPublic={currentIsPublic}
+            participantCount={participantCount}
+            isAdmin={isAdmin}
+          />
+
           {/* Admin Quick Actions - Integrated in main bar on mobile, separate on desktop */}
           {isAdmin && (
             <>
@@ -233,9 +242,6 @@ export default function BottomControlsBar({
               <AdminBottomButtons
                 onShowPendingRequests={onShowPendingRequests}
                 pendingRequestsCount={pendingRequestsCount}
-                roomCode={roomCode}
-                currentIsPublic={currentIsPublic}
-                participantCount={participantCount}
               />
             </>
           )}

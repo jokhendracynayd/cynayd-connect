@@ -10,6 +10,7 @@ interface MoreOptionsDialogProps {
   roomCode?: string | undefined;
   currentIsPublic?: boolean | undefined;
   participantCount?: number | undefined;
+  isAdmin?: boolean;
 }
 
 type MenuOption = 'shortcuts' | 'settings';
@@ -20,6 +21,7 @@ export default function MoreOptionsDialog({
   roomCode,
   currentIsPublic,
   participantCount,
+  isAdmin = false,
 }: MoreOptionsDialogProps) {
   const [selectedOption, setSelectedOption] = useState<MenuOption>('settings');
   const [isPublic, setIsPublic] = useState(currentIsPublic ?? false);
@@ -205,53 +207,57 @@ export default function MoreOptionsDialog({
                 </div>
               )}
 
-              {/* Privacy Setting */}
-              <div className="rounded-xl border border-slate-200 bg-gradient-to-r from-white to-slate-50/50 p-5">
-                <label className="block text-sm font-medium text-slate-700 mb-3">Room Privacy</label>
-                <div className="space-y-3">
-                  <label className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition cursor-pointer ${
-                    isPublic ? 'border-cyan-200 bg-cyan-50/60 shadow-[0_18px_40px_-30px_rgba(14,165,233,0.6)]' : 'border-slate-200 bg-white hover:border-cyan-200 hover:bg-cyan-50/40'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="privacy"
-                      checked={isPublic}
-                      onChange={() => setIsPublic(true)}
-                      className="w-4 h-4 text-cyan-500 focus:ring-cyan-300"
-                    />
-                    <div>
-                      <div className="font-semibold text-slate-900">Public</div>
-                      <div className="text-xs text-slate-500">Anyone with the room code can join immediately.</div>
+              {/* Privacy Setting - Admin Only */}
+              {isAdmin && (
+                <>
+                  <div className="rounded-xl border border-slate-200 bg-gradient-to-r from-white to-slate-50/50 p-5">
+                    <label className="block text-sm font-medium text-slate-700 mb-3">Room Privacy</label>
+                    <div className="space-y-3">
+                      <label className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition cursor-pointer ${
+                        isPublic ? 'border-cyan-200 bg-cyan-50/60 shadow-[0_18px_40px_-30px_rgba(14,165,233,0.6)]' : 'border-slate-200 bg-white hover:border-cyan-200 hover:bg-cyan-50/40'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="privacy"
+                          checked={isPublic}
+                          onChange={() => setIsPublic(true)}
+                          className="w-4 h-4 text-cyan-500 focus:ring-cyan-300"
+                        />
+                        <div>
+                          <div className="font-semibold text-slate-900">Public</div>
+                          <div className="text-xs text-slate-500">Anyone with the room code can join immediately.</div>
+                        </div>
+                      </label>
+                      <label className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition cursor-pointer ${
+                        !isPublic ? 'border-emerald-200 bg-emerald-50/60 shadow-[0_18px_40px_-30px_rgba(16,185,129,0.55)]' : 'border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/40'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="privacy"
+                          checked={!isPublic}
+                          onChange={() => setIsPublic(false)}
+                          className="w-4 h-4 text-emerald-500 focus:ring-emerald-300"
+                        />
+                        <div>
+                          <div className="font-semibold text-slate-900">Private</div>
+                          <div className="text-xs text-slate-500">Approve each attendee before they enter the room.</div>
+                        </div>
+                      </label>
                     </div>
-                  </label>
-                  <label className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition cursor-pointer ${
-                    !isPublic ? 'border-emerald-200 bg-emerald-50/60 shadow-[0_18px_40px_-30px_rgba(16,185,129,0.55)]' : 'border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/40'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="privacy"
-                      checked={!isPublic}
-                      onChange={() => setIsPublic(false)}
-                      className="w-4 h-4 text-emerald-500 focus:ring-emerald-300"
-                    />
-                    <div>
-                      <div className="font-semibold text-slate-900">Private</div>
-                      <div className="text-xs text-slate-500">Approve each attendee before they enter the room.</div>
-                    </div>
-                  </label>
-                </div>
-              </div>
+                  </div>
 
-              {/* Save Button */}
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  onClick={handleSaveSettings}
-                  disabled={isSaving || isPublic === currentIsPublic}
-                  className="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 rounded-xl shadow-[0_18px_40px_-24px_rgba(14,165,233,0.7)] hover:from-cyan-500 hover:via-sky-600 hover:to-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
-                >
-                  {isSaving ? 'Saving...' : 'Save changes'}
-                </button>
-              </div>
+                  {/* Save Button */}
+                  <div className="flex items-center justify-end gap-3 pt-2">
+                    <button
+                      onClick={handleSaveSettings}
+                      disabled={isSaving || isPublic === currentIsPublic}
+                      className="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 rounded-xl shadow-[0_18px_40px_-24px_rgba(14,165,233,0.7)] hover:from-cyan-500 hover:via-sky-600 hover:to-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                    >
+                      {isSaving ? 'Saving...' : 'Save changes'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         );
