@@ -1,7 +1,6 @@
 import { useCallback } from 'react';
 import { webrtcManager } from '../../lib/webrtc';
 import { useCallStore } from '../../store/callStore';
-import type { NetworkMonitor } from '../../lib/networkMonitor';
 import type { ActiveSpeakerDetector } from '../../lib/activeSpeaker';
 
 interface UseCallProducerConsumptionProps {

@@ -112,7 +112,7 @@ export function useCallLayout({
 
   const activeSpeakerHasLiveVideo = Boolean(
     activeSpeakerStream &&
-    activeSpeakerStream.getVideoTracks().some(track => track.readyState === 'live' && track.enabled) &&
+    activeSpeakerStream.getVideoTracks().some((track: MediaStreamTrack) => track.readyState === 'live' && track.enabled) &&
     !activeSpeakerTile?.isVideoMuted
   );
 

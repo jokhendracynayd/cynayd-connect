@@ -7,7 +7,6 @@ import {
   EVERYONE_CONVERSATION_ID,
   type ChatMessage,
   type ParticipantRole,
-  type RecordingStatus,
 } from '../store/callStore';
 import { socketManager } from '../lib/socket';
 import { mediaManager } from '../lib/media';
@@ -205,10 +204,8 @@ export default function Call() {
     setScreenShareStreams,
     localVideoRef,
     localVideoElement,
-    setLocalVideoElement,
     setLocalVideoRef,
     remoteVideoRefs,
-    remoteVideoRefCallbacks,
     getRemoteVideoRef,
     remoteAudioRefs,
     hasEnabledAudioPlayback,
@@ -223,7 +220,7 @@ export default function Call() {
     pendingParticipantEventsRef,
   } = callStreams;
 
-  const { availableDevices, setAvailableDevices } = callDevices;
+  const { availableDevices } = callDevices;
 
   // Wrapper functions for utility helpers
   const runOrQueueParticipantUpdateWrapper = useCallback(

@@ -262,7 +262,7 @@ type ParticipantInput = {
   forceMuteReason?: string | null | undefined;
 };
 
-interface CallState {
+export interface CallState {
   isConnected: boolean;
   roomCode: string | null;
   participants: Participant[];

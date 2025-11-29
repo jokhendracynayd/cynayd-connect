@@ -80,7 +80,7 @@ export function resolveProducerMeta(
   }
 
   return {
-    userId: metadata.userId,
+    ...(metadata.userId !== undefined && { userId: metadata.userId }),
     kind,
   };
 }
@@ -104,7 +104,7 @@ export function runOrQueueParticipantUpdate(
   }
 
   const { participants } = getCallStoreState();
-  const participantExists = participants.some(p => p.userId === targetUserId);
+  const participantExists = participants.some((p: { userId: string }) => p.userId === targetUserId);
 
   if (participantExists) {
     action();
