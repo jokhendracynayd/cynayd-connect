@@ -89,7 +89,7 @@ export class NetworkMonitor {
     ]);
 
     if (samples.length > 0) {
-      console.log('[NetworkMonitor] Samples collected', samples);
+      // console.log('[NetworkMonitor] Samples collected', samples);
       this.onSamples(samples);
     } else {
       console.log('[NetworkMonitor] No stats collected this cycle');

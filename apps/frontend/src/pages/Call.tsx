@@ -348,6 +348,16 @@ export default function Call() {
     };
   }, [localStream, setDeviceStatus, isAudioMuted, isVideoMuted, setLocalAudioMuted, setLocalVideoMuted]);
 
+  // Sync audio processing preferences to MediaManager when they change
+  useEffect(() => {
+    if (settings.audioProcessing) {
+      mediaManager.setAudioProcessingPreferences(settings.audioProcessing);
+    } else {
+      // Clear preferences if not set (use config defaults)
+      mediaManager.setAudioProcessingPreferences(null);
+    }
+  }, [settings.audioProcessing]);
+
   // Monitor track mute state changes
   useEffect(() => {
     const audioTrack = localStream?.getAudioTracks()[0];
@@ -1402,6 +1412,11 @@ export default function Call() {
 
       // Initialize Mediasoup device
       await webrtcManager.initialize(response.rtpCapabilities);
+
+      // Sync audio processing preferences to MediaManager
+      if (settings.audioProcessing) {
+        mediaManager.setAudioProcessingPreferences(settings.audioProcessing);
+      }
 
       // Stop any existing media from PreJoin page (may have stopped tracks)
       mediaManager.stopLocalMedia();

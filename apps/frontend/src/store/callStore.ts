@@ -3,6 +3,7 @@ import type { ScreenShare } from '../types/screenShare';
 import type { NetworkQualityLevel, NetworkSample } from '../lib/networkMonitor';
 import type { DeviceStatus } from '../lib/deviceStatus';
 import type { ReconnectionState } from '../lib/reconnectionManager';
+import { storage } from '../lib/storage';
 
 export type ChatMessageType = 'BROADCAST' | 'DIRECT' | 'SYSTEM';
 
@@ -296,6 +297,11 @@ export interface CallState {
   settings: {
     joinWithAudio: boolean;
     joinWithVideo: boolean;
+    audioProcessing?: {
+      noiseSuppression: boolean;
+      echoCancellation: boolean;
+      autoGainControl: boolean;
+    };
   };
   chat: {
     activeConversationId: string;
@@ -513,10 +519,15 @@ export const useCallStore = create<CallState>((set) => ({
     videoInput: '',
     audioOutput: '',
   },
-  settings: {
-    joinWithAudio: true,
-    joinWithVideo: true,
-  },
+  settings: (() => {
+    // Load audio processing preferences from localStorage
+    const audioProcessingPrefs = storage.getAudioProcessingPreferences();
+    return {
+      joinWithAudio: true,
+      joinWithVideo: true,
+      ...(audioProcessingPrefs ? { audioProcessing: audioProcessingPrefs } : {}),
+    };
+  })(),
   chat: {
     activeConversationId: EVERYONE_CONVERSATION_ID,
     conversations: new Map<string, ChatConversation>([
@@ -658,9 +669,16 @@ export const useCallStore = create<CallState>((set) => ({
   setSelectedDevices: (devices) => set((state) => ({
     selectedDevices: { ...state.selectedDevices, ...devices },
   })),
-  setSettings: (settings) => set((state) => ({
-    settings: { ...state.settings, ...settings },
-  })),
+  setSettings: (settings) => set((state) => {
+    const newSettings = { ...state.settings, ...settings };
+    
+    // Persist audioProcessing preferences to localStorage
+    if (settings.audioProcessing) {
+      storage.setAudioProcessingPreferences(settings.audioProcessing);
+    }
+    
+    return { settings: newSettings };
+  }),
   setChatActiveConversation: (conversationId) => set((state) => {
     const conversations = new Map(state.chat.conversations);
     const messages = new Map(state.chat.messages);

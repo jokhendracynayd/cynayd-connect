@@ -1,11 +1,161 @@
 import { Device } from 'mediasoup-client';
+import { config } from '../config';
 
 type RouterRtpCapabilities = Parameters<Device['load']>[0]['routerRtpCapabilities'];
+
+interface AudioProcessingPreferences {
+  noiseSuppression?: boolean;
+  echoCancellation?: boolean;
+  autoGainControl?: boolean;
+}
 
 export class MediaManager {
   private device: Device | null = null;
   private localStream: MediaStream | null = null;
   private screenShareStream: MediaStream | null = null;
+  private audioProcessingPreferences: AudioProcessingPreferences | null = null;
+
+  /**
+   * Set user preferences for audio processing (overrides config defaults)
+   */
+  setAudioProcessingPreferences(preferences: AudioProcessingPreferences | null) {
+    this.audioProcessingPreferences = preferences;
+  }
+
+  /**
+   * Get effective audio processing settings (user preferences override config)
+   */
+  private getEffectiveAudioProcessingSettings() {
+    const configSettings = config.features.audioProcessing;
+    const userPrefs = this.audioProcessingPreferences;
+
+    return {
+      noiseSuppression: userPrefs?.noiseSuppression ?? configSettings.noiseSuppression,
+      echoCancellation: userPrefs?.echoCancellation ?? configSettings.echoCancellation,
+      autoGainControl: userPrefs?.autoGainControl ?? configSettings.autoGainControl,
+      sampleRate: configSettings.sampleRate,
+      channelCount: configSettings.channelCount,
+    };
+  }
+
+  /**
+   * Detect browser support for audio constraints
+   */
+  private detectBrowserSupport(): {
+    supportsStandard: boolean;
+    supportsChromeSpecific: boolean;
+    browserName: string;
+  } {
+    const userAgent = navigator.userAgent.toLowerCase();
+    let browserName = 'unknown';
+    let supportsChromeSpecific = false;
+
+    if (userAgent.includes('chrome') && !userAgent.includes('edg')) {
+      browserName = 'chrome';
+      supportsChromeSpecific = true;
+    } else if (userAgent.includes('firefox')) {
+      browserName = 'firefox';
+    } else if (userAgent.includes('safari') && !userAgent.includes('chrome')) {
+      browserName = 'safari';
+    } else if (userAgent.includes('edg')) {
+      browserName = 'edge';
+      supportsChromeSpecific = true; // Edge is Chromium-based
+    }
+
+    // Check if getUserMedia supports constraints
+    const supportsStandard = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+    return {
+      supportsStandard,
+      supportsChromeSpecific,
+      browserName,
+    };
+  }
+
+  /**
+   * Build audio constraints with noise cancellation settings
+   * Includes fallback handling for unsupported browsers
+   */
+  private buildAudioConstraints(
+    audioDeviceId?: string,
+    attempt: number = 0
+  ): MediaTrackConstraints | boolean {
+    if (attempt === 0) {
+      // First attempt: try with full constraints
+      const settings = this.getEffectiveAudioProcessingSettings();
+      const browserSupport = this.detectBrowserSupport();
+
+      const constraints: MediaTrackConstraints = {
+        ...(audioDeviceId ? { deviceId: { exact: audioDeviceId } } : {}),
+        echoCancellation: settings.echoCancellation,
+        noiseSuppression: settings.noiseSuppression,
+        autoGainControl: settings.autoGainControl,
+        sampleRate: settings.sampleRate,
+        channelCount: settings.channelCount,
+        // Note: latency is not a standard constraint, removed for compatibility
+      };
+
+      // Add Chrome-specific constraints if supported
+      if (browserSupport.supportsChromeSpecific) {
+        (constraints as any).googEchoCancellation = settings.echoCancellation;
+        (constraints as any).googNoiseSuppression = settings.noiseSuppression;
+        (constraints as any).googAutoGainControl = settings.autoGainControl;
+      }
+
+      return constraints;
+    } else if (attempt === 1) {
+      // Second attempt: try without Chrome-specific constraints
+      const settings = this.getEffectiveAudioProcessingSettings();
+      return {
+        ...(audioDeviceId ? { deviceId: { exact: audioDeviceId } } : {}),
+        echoCancellation: settings.echoCancellation,
+        noiseSuppression: settings.noiseSuppression,
+        autoGainControl: settings.autoGainControl,
+        sampleRate: settings.sampleRate,
+        channelCount: settings.channelCount,
+      };
+    } else {
+      // Final fallback: basic constraints (deviceId only)
+      return audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true;
+    }
+  }
+
+  /**
+   * Validate that audio constraints were applied correctly
+   */
+  private validateAudioConstraints(track: MediaStreamTrack): void {
+    try {
+      const settings = track.getSettings();
+      const effectiveSettings = this.getEffectiveAudioProcessingSettings();
+
+      const applied = {
+        echoCancellation: settings.echoCancellation,
+        noiseSuppression: settings.noiseSuppression,
+        autoGainControl: settings.autoGainControl,
+        sampleRate: settings.sampleRate,
+        channelCount: settings.channelCount,
+      };
+
+      // Log actual applied settings for debugging
+      if (import.meta.env.DEV) {
+        console.log('🎤 Audio constraints applied:', {
+          requested: effectiveSettings,
+          applied: applied,
+          deviceId: settings.deviceId,
+        });
+      }
+
+      // Warn if critical settings weren't applied
+      if (effectiveSettings.echoCancellation && applied.echoCancellation === false) {
+        console.warn('⚠️ Echo cancellation requested but not applied by browser');
+      }
+      if (effectiveSettings.noiseSuppression && applied.noiseSuppression === false) {
+        console.warn('⚠️ Noise suppression requested but not applied by browser');
+      }
+    } catch (error) {
+      console.warn('Could not validate audio constraints:', error);
+    }
+  }
 
   async initialize(rtpCapabilities: RouterRtpCapabilities) {
     try {
@@ -30,12 +180,55 @@ export class MediaManager {
         throw new Error(errorMessage);
       }
 
+      // Build audio constraints with noise cancellation (with fallback)
+      let audioConstraints: MediaTrackConstraints | boolean = false;
+      if (audio) {
+        // Try with full constraints first, fallback if needed
+        audioConstraints = this.buildAudioConstraints(audioDeviceId, 0);
+      }
+
+      const videoConstraint: boolean | MediaTrackConstraints = video 
+        ? (videoDeviceId ? { deviceId: { exact: videoDeviceId } } : true)
+        : false;
+
       const constraints: MediaStreamConstraints = {
-        audio: audio ? (audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true) : false,
-        video: video ? (videoDeviceId ? { deviceId: { exact: videoDeviceId } } : true) : false,
+        audio: audioConstraints,
+        video: videoConstraint,
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (error) {
+        // If constraints fail, try with simpler constraints
+        if (audio && typeof audioConstraints === 'object') {
+          console.warn('Audio constraints failed, trying fallback...', error);
+          try {
+            const fallbackConstraints = this.buildAudioConstraints(audioDeviceId, 1);
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: fallbackConstraints,
+              video: videoConstraint,
+            });
+          } catch (fallbackError) {
+            // Final fallback: basic constraints
+            console.warn('Fallback constraints failed, using basic constraints', fallbackError);
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true,
+              video: videoConstraint,
+            });
+          }
+        } else {
+          throw error;
+        }
+      }
+      
+      // Validate audio constraints were applied
+      if (audio) {
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) {
+          this.validateAudioConstraints(audioTrack);
+        }
+      }
       
       // Merge with existing stream if it exists (and doesn't have ended tracks)
       if (this.localStream) {
@@ -81,17 +274,56 @@ export class MediaManager {
         throw new Error(errorMessage);
       }
 
+      // Build constraints with noise cancellation for audio
+      let audioConstraints: MediaTrackConstraints | boolean = false;
+      let videoConstraints: MediaTrackConstraints | boolean = false;
+
+      if (kind === 'audio') {
+        audioConstraints = this.buildAudioConstraints(deviceId, 0);
+      } else {
+        videoConstraints = deviceId ? { deviceId: { exact: deviceId } } : true;
+      }
+
       const constraints: MediaStreamConstraints = {
-        audio: kind === 'audio' ? (deviceId ? { deviceId: { exact: deviceId } } : true) : false,
-        video: kind === 'video' ? (deviceId ? { deviceId: { exact: deviceId } } : true) : false,
+        audio: audioConstraints,
+        video: videoConstraints,
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (error) {
+        // If audio constraints fail, try with simpler constraints
+        if (kind === 'audio' && typeof audioConstraints === 'object') {
+          console.warn('Audio constraints failed, trying fallback...', error);
+          try {
+            const fallbackConstraints = this.buildAudioConstraints(deviceId, 1);
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: fallbackConstraints,
+              video: false,
+            });
+          } catch (fallbackError) {
+            // Final fallback: basic constraints
+            console.warn('Fallback constraints failed, using basic constraints', fallbackError);
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+              video: false,
+            });
+          }
+        } else {
+          throw error;
+        }
+      }
       const track = stream.getTracks().find(t => t.kind === kind);
       
       if (!track) {
         stream.getTracks().forEach(t => t.stop());
         throw new Error(`Failed to get ${kind} track`);
+      }
+
+      // Validate audio constraints were applied
+      if (kind === 'audio') {
+        this.validateAudioConstraints(track);
       }
 
       // Stop other tracks from the stream

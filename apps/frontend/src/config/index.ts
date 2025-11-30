@@ -114,6 +114,13 @@ export const config = {
       audioThreshold: parseFloat(import.meta.env.VITE_VOICE_THRESHOLD || '-50'),
       silenceThreshold: parseFloat(import.meta.env.VITE_VOICE_SILENCE_THRESHOLD || '-60'),
     },
+    audioProcessing: {
+      noiseSuppression: import.meta.env.VITE_ENABLE_NOISE_SUPPRESSION !== 'false',
+      echoCancellation: import.meta.env.VITE_ENABLE_ECHO_CANCELLATION !== 'false',
+      autoGainControl: import.meta.env.VITE_ENABLE_AUTO_GAIN !== 'false',
+      sampleRate: parseInt(import.meta.env.VITE_AUDIO_SAMPLE_RATE || '48000', 10),
+      channelCount: parseInt(import.meta.env.VITE_AUDIO_CHANNEL_COUNT || '1', 10),
+    },
   },
 };
 
