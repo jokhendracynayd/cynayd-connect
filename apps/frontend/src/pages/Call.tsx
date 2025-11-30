@@ -3296,7 +3296,7 @@ export default function Call() {
         >
           {showSplitLayout ? (
             <div
-              className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:items-stretch lg:gap-6"
+              className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden lg:flex-row lg:items-stretch lg:gap-0"
               style={splitLayoutContainerStyle}
             >
               <div className={`${sharePaneClassName} relative`} style={{ maxHeight: `calc(100vh - ${topOffset}px - ${bottomControlsOffset}px - env(safe-area-inset-bottom))` }}>
