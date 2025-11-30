@@ -258,21 +258,80 @@ export function useCallMedia({
     const audioProducer = webrtcManager.getProducer('audio');
     const audioTrack = localStream?.getAudioTracks()[0];
     
-    if (audioTrack) {
-      if (!wasMuted) {
-        // Turning OFF - mute track and pause producer
+    if (!wasMuted) {
+      // Turning OFF - mute track and pause producer
+      if (audioTrack) {
         audioTrack.enabled = false;
-        if (audioProducer) {
-          try {
-            await webrtcManager.pauseProducer('audio');
-          } catch (error) {
-            console.error('Error pausing audio producer:', error);
+      }
+      if (audioProducer) {
+        try {
+          await webrtcManager.pauseProducer('audio');
+        } catch (error) {
+          console.error('Error pausing audio producer:', error);
+        }
+      }
+    } else {
+      // Turning ON - unmute track and resume producer
+      // CRITICAL FIX: Handle all cases - track missing, producer missing, or both missing
+      
+      if (!audioTrack) {
+        // Case 1: No track exists - need to create one
+        try {
+          const newAudioTrack = await mediaManager.getSingleTrack('audio', selectedDevices.audioInput);
+          
+          // Add track to stream
+          if (localStream) {
+            localStream.addTrack(newAudioTrack);
+            setLocalStream(new MediaStream(localStream.getTracks()));
+          } else {
+            const newStream = new MediaStream([newAudioTrack]);
+            setLocalStream(newStream);
           }
+          
+          newAudioTrack.enabled = true;
+          
+          // Create producer if it doesn't exist
+          if (!audioProducer) {
+            await webrtcManager.produceAudio(newAudioTrack);
+            console.log('Created audio track and producer when unmuting');
+          } else {
+            // Producer exists but track was missing - replace track
+            await webrtcManager.replaceAudioTrack(newAudioTrack);
+            await webrtcManager.resumeProducer('audio');
+            console.log('Created audio track and replaced in existing producer when unmuting');
+          }
+        } catch (error: any) {
+          console.error('Failed to create audio track when unmuting:', error);
+          // Revert the toggle since we failed
+          toggleAudio();
+          
+          if (error.name === 'NotAllowedError') {
+            toast.error('Microphone permission denied');
+          } else if (error.name === 'NotFoundError') {
+            toast.error('No microphone found');
+          } else {
+            toast.error('Failed to enable microphone');
+          }
+          return;
         }
       } else {
-        // Turning ON - unmute track and resume producer
+        // Case 2: Track exists
         audioTrack.enabled = true;
-        if (audioProducer) {
+        
+        if (!audioProducer) {
+          // Track exists but producer doesn't - create producer
+          try {
+            await webrtcManager.produceAudio(audioTrack);
+            console.log('Created audio producer when unmuting (track already existed)');
+          } catch (error) {
+            console.error('Error creating audio producer when unmuting:', error);
+            // Revert the toggle
+            toggleAudio();
+            toast.error('Failed to enable microphone');
+            return;
+          }
+        } else {
+          // Case 3: Both track and producer exist - just resume
           try {
             await webrtcManager.resumeProducer('audio');
           } catch (error) {

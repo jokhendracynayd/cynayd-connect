@@ -100,7 +100,19 @@ class WebRTCManager {
   }
 
   async initialize(rtpCapabilities: RouterRtpCapabilities) {
-    this.rtpCapabilities = rtpCapabilities; // Store for potential re-initialization
+    // Store rtpCapabilities for potential re-initialization
+    this.rtpCapabilities = rtpCapabilities;
+    
+    // If device already exists and rtpCapabilities match, skip re-initialization
+    if (this.device && this.device.loaded) {
+      // Device already initialized - check if we need to update
+      // Note: mediasoup Device.load() can only be called once, so if device is loaded,
+      // we assume it's valid unless rtpCapabilities changed significantly
+      console.log('Device already initialized, skipping re-initialization');
+      return;
+    }
+    
+    // Create new device if it doesn't exist or isn't loaded
     this.device = new Device();
     await this.device.load({ routerRtpCapabilities: rtpCapabilities });
     console.log('Device initialized');

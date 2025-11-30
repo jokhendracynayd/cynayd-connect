@@ -1090,6 +1090,15 @@ export default function Call() {
                 handlePermanentDisconnect('Room ended during reconnection');
                 return;
               }
+
+              // CRITICAL FIX: Initialize device with rtpCapabilities BEFORE consuming producers
+              if (response.rtpCapabilities) {
+                await webrtcManager.initialize(response.rtpCapabilities);
+                console.log('Device initialized with rtpCapabilities after reconnection');
+              } else {
+                console.warn('No rtpCapabilities in joinRoom response, device may not be initialized');
+              }
+
               // Restore WebRTC transports if needed
               try {
                 const needsRecovery = webrtcManager.needsRecovery();
