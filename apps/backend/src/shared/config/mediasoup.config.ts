@@ -10,10 +10,12 @@ export const mediasoupConfig = {
     rtcMaxPort: config.mediasoup.rtcMaxPort,
     logLevel: config.mediasoup.logLevel,
     logTags: config.mediasoup.logTags,
+    workerCount: config.mediasoup.workerCount,
     // Additional worker optimizations:
-    // - Workers are created per CPU core (handled in WorkerManager)
+    // - Workers are created based on MEDIASOUP_WORKER_COUNT env var (if set) or CPU core count (default)
     // - Each worker gets equal port range allocation
     // - Port range per worker = (rtcMaxPort - rtcMinPort + 1) / numWorkers
+    // - Limit worker count to avoid resource conflicts with other services on shared servers
   },
 
   // Router settings

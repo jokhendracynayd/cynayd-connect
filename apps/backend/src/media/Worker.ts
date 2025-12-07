@@ -18,8 +18,18 @@ export class WorkerManager {
   private static restarting = false;
 
   static async createWorkers() {
-    const numWorkers = os.cpus().length;
-    logger.info(`Creating ${numWorkers} Mediasoup workers...`);
+    // Use configured worker count if set, otherwise use CPU core count
+    const cpuCount = os.cpus().length;
+    const configuredCount = mediasoupConfig.worker.workerCount;
+    const numWorkers = configuredCount 
+      ? Math.min(configuredCount, cpuCount) // Don't exceed CPU count
+      : cpuCount;
+    
+    if (configuredCount && configuredCount < cpuCount) {
+      logger.info(`Creating ${numWorkers} Mediasoup workers (limited from ${cpuCount} CPU cores to avoid resource conflicts)...`);
+    } else {
+      logger.info(`Creating ${numWorkers} Mediasoup workers (one per CPU core)...`);
+    }
 
     for (let i = 0; i < numWorkers; i++) {
       await this.createSingleWorker(i);

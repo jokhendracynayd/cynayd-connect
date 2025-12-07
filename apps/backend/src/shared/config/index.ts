@@ -80,6 +80,11 @@ const baseConfig = {
     // Each WebRTC connection needs 2 ports (RTP + RTCP), so 421 ports = ~210 concurrent connections per worker
     rtcMinPort: parseInt(process.env.MEDIASOUP_RTC_MIN_PORT || '2000', 10),
     rtcMaxPort: parseInt(process.env.MEDIASOUP_RTC_MAX_PORT || '2420', 10),
+    // Worker count: Limit number of workers to avoid resource conflicts with other services
+    // If not set, defaults to CPU core count. Set to a lower number (e.g., 2-4) to leave resources for other services
+    workerCount: process.env.MEDIASOUP_WORKER_COUNT
+      ? parseInt(process.env.MEDIASOUP_WORKER_COUNT, 10)
+      : undefined,
     logLevel: (process.env.MEDIASOUP_LOG_LEVEL || 'warn') as 'debug' | 'warn' | 'error' | 'none',
     logTags: (process.env.MEDIASOUP_LOG_TAGS
       ? process.env.MEDIASOUP_LOG_TAGS.split(',')
