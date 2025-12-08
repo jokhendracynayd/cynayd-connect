@@ -1,4 +1,4 @@
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import prisma from '../database/prisma';
 import { config } from '../config';
 import { ConflictError, UnauthorizedError, ValidationError } from '../utils/errors';

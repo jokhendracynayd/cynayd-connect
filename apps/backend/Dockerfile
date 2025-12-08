@@ -3,7 +3,7 @@
 ###
 # Builder stage – installs deps, compiles TypeScript, and prepares a production bundle.
 ###
-FROM node:22-bookworm AS builder
+FROM node:24.11.1-bookworm AS builder
 
 WORKDIR /workspace
 
@@ -38,7 +38,7 @@ RUN pnpm install --filter @connect-sdk/backend --frozen-lockfile --prefer-offlin
 ###
 # Runtime stage – minimal image containing only the production build.
 ###
-FROM node:22-bookworm-slim AS runtime
+FROM node:24.11.1-bookworm-slim AS runtime
 
 WORKDIR /app
 

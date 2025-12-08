@@ -58,3 +58,7 @@ certs/*
 apps/backend/deploy-backend.sh
 apps/frontend/deploy-frontend.sh
 apps/backend/tmp/recordings/*
+
+apps/backend/ecosystem.config.js
+SAML.md
+API_TOKEN_GUIDE.md
