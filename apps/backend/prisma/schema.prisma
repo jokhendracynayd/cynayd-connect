@@ -69,6 +69,7 @@ model Participant {
   @@unique([roomId, userId, joinedAt])
   @@index([roomId])
   @@index([userId])
+  @@index([roomId, leftAt]) // Composite index for efficient queries filtering by roomId and leftAt
 }
 
 model CallMetrics {

@@ -1760,35 +1760,41 @@ export class RoomService {
 
     const endedAt = new Date();
 
-    const transactionResult = await prisma.$transaction(async tx => {
-      const [updatedRoom, participantsUpdate] = await Promise.all([
-        tx.room.update({
-          where: { id: room.id },
-          data: {
-            isActive: false,
-            endedAt,
-          },
-          select: {
-            id: true,
-            endedAt: true,
-          },
-        }),
-        tx.participant.updateMany({
-          where: {
-            roomId: room.id,
-            leftAt: null,
-          },
-          data: {
-            leftAt: endedAt,
-          },
-        }),
-      ]);
+    // Increase timeout to 15 seconds to handle rooms with many participants
+    const transactionResult = await prisma.$transaction(
+      async tx => {
+        const [updatedRoom, participantsUpdate] = await Promise.all([
+          tx.room.update({
+            where: { id: room.id },
+            data: {
+              isActive: false,
+              endedAt,
+            },
+            select: {
+              id: true,
+              endedAt: true,
+            },
+          }),
+          tx.participant.updateMany({
+            where: {
+              roomId: room.id,
+              leftAt: null,
+            },
+            data: {
+              leftAt: endedAt,
+            },
+          }),
+        ]);
 
-      return {
-        updatedRoom,
-        participantsUpdated: participantsUpdate.count ?? 0,
-      };
-    });
+        return {
+          updatedRoom,
+          participantsUpdated: participantsUpdate.count ?? 0,
+        };
+      },
+      {
+        timeout: 15000, // 15 seconds timeout
+      }
+    );
 
     logger.info('Room ended', {
       roomId: room.id,
